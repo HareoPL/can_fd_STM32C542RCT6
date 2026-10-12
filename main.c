@@ -1,6 +1,6 @@
 /**
   ******************************************************************************
-  * file           : main.c
+ * @file main.c
   * brief          : Main program body
   *                  Calls target system initialization then loop in main.
   ******************************************************************************
@@ -23,10 +23,16 @@
 #include "task.h"
 #include "mx_freertos_app.h"
 
+#include "can_manager.h"
+#include "stm32c5_can_adapter.h"
+
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+/* Alokacja instancji dla CAN1 */
+can_instance_t can1_inst;
+
 /* Private functions prototype -----------------------------------------------*/
 
 /**
@@ -41,6 +47,22 @@ int main(void)
     * It also contains the HAL initialization and the initial clock configuration.
     */
   if (mx_system_init() != SYSTEM_OK)
+  {
+    return (-1);
+  }
+
+  /* 2. Inicjalizacja instancji CAN1 (domyślna konfiguracja 500k lub z can1_inst.can_config) */
+ // CAN NORMAL
+  can1_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN; // CAN_MSG_FRAME_FORMAT_FD_CAN
+  can1_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
+
+  // todo przetestowac CANFD
+  // trzeba tez w main_task zmienic testowa ramke test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
+  // can1_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_FD_CAN; // CAN_MSG_FRAME_FORMAT_CAN
+  // can1_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
+  // can1_inst.can_config.baudrate_FD = CAN_BAUDRATE_500K;
+
+  if (!can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1"))
   {
     return (-1);
   }

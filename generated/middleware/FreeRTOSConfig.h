@@ -90,7 +90,7 @@ PRIORITY THAN THIS! (higher priorities are lower numeric values). */
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION               0U
 #define configSUPPORT_DYNAMIC_ALLOCATION              1U
-#define configTOTAL_HEAP_SIZE                         (size_t)8192U
+#define configTOTAL_HEAP_SIZE                         (size_t)16384U
 #define configAPPLICATION_ALLOCATED_HEAP              0U
 #define configSTACK_ALLOCATION_FROM_SEPARATE_HEAP     0U
 #define configHEAP_CLEAR_MEMORY_ON_FREE               0U

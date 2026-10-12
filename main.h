@@ -21,6 +21,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "mx_hal_def.h"
 #include "mx_system.h"
+#include "can_manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,9 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
 /* Exported macros -----------------------------------------------------------*/
+/* Exported variables --------------------------------------------------------*/
+extern can_instance_t can1_inst;
+
 /* Exported functions ------------------------------------------------------- */
 
 #ifdef __cplusplus

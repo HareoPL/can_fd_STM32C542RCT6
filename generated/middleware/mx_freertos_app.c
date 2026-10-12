@@ -1,6 +1,6 @@
 /**
   ******************************************************************************
-  * @file           : mx_freertos_app.c
+ * @file mx_freertos_app.c
   * @brief          : FreeRTOS initialization
   ******************************************************************************
   * @attention
@@ -17,14 +17,23 @@
 /* Includes ------------------------------------------------------------------*/
 #include "mx_freertos_app.h"
 #include "safe_printf.h"
+#include "can_msg_types.h"
+#include "can_manager.h"
+#include "main.h"
+#include "queue.h"
+
+#include "tasks_config.h"
 
 /* Private define ------------------------------------------------------------*/
 #define TAG "MAIN"
 
-#define main_task_stack_size  512U        // * 4 = 2048 bajtów
-#define heartbeat_task_stack_size  128U   // * 4 = 512 bajtów
-#define can1_tx_task_stack_size  128U
-#define can1_rx_task_stack_size  128U
+#ifndef FDCAN_CLASSIC_CAN
+#define FDCAN_CLASSIC_CAN 0U
+#endif
+#ifndef FDCAN_FD_CAN
+#define FDCAN_FD_CAN 1U
+#endif
+
 /* Private typedef -----------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
@@ -33,20 +42,19 @@
 static TaskHandle_t main_task_Handle;
 /* Definitions for heartbeat_task */
 static TaskHandle_t heartbeat_task_Handle;
-/* Definitions for can1_tx_task */
-static TaskHandle_t can1_tx_task_Handle;
-/* Definitions for can1_rx_task */
-static TaskHandle_t can1_rx_task_Handle;
 
 /* Global mutex for thread-safe printf */
 SemaphoreHandle_t printf_mutex = NULL;
+
+/* Queue for CAN1 TX messages (mapped to can1_inst.tx_queue) */
+QueueHandle_t CAN_1_queue = NULL;
 
 /* Private functions prototype -----------------------------------------------*/
 /* Tasks entry function ------------------------------------------------------*/
 static void main_task(void *pvParameters);
 static void heartbeat_task(void *pvParameters);
-static void can1_tx_task(void *pvParameters);
-static void can1_rx_task(void *pvParameters);
+static void can1_tx_task(void *pvParameters) __attribute__((unused));
+static void can1_rx_task(void *pvParameters) __attribute__((unused));
 
 /**
   * @brief  Verifies if there is enough free heap for the scheduler to start.
@@ -87,25 +95,18 @@ int32_t app_synctasks_init (void)
       return -1;
   }
 
+  /* Alias CAN1 TX queue from can1_inst */
+  CAN_1_queue = can1_inst.tx_queue;
+
   /* main_task creation-------------------------------------*/
-  ret = xTaskCreate(main_task, "main_task", main_task_stack_size,
-                    (void*) NULL, 2, &main_task_Handle);
+  ret = xTaskCreate(main_task, "main_task", TASK_STACK_MAIN,
+                    (void*) NULL, TASK_PRIO_MAIN, &main_task_Handle);
   if (ret != pdPASS){return -1;}
 
   /* heartbeat_task creation-------------------------------------*/
-  ret = xTaskCreate(heartbeat_task, "heartbeat_task", heartbeat_task_stack_size,
-                    (void*) NULL, 2, &heartbeat_task_Handle);
+  ret = xTaskCreate(heartbeat_task, "heartbeat_task", TASK_STACK_HEARTBEAT,
+                    (void*) NULL, TASK_PRIO_HEARTBEAT, &heartbeat_task_Handle);
  if (ret != pdPASS){return -1;}
-
-  /* can1_tx_task creation-------------------------------------*/
-  ret = xTaskCreate(can1_tx_task, "can1_tx_task", can1_tx_task_stack_size,
-                    (void*) NULL, 2, &can1_tx_task_Handle);
-  if (ret != pdPASS){return -1;}
-
-  /* can1_rx_task creation-------------------------------------*/
-  ret = xTaskCreate(can1_rx_task, "can1_rx_task", can1_rx_task_stack_size,
-                    (void*) NULL, 2, &can1_rx_task_Handle);
-  if (ret != pdPASS){return -1;}
 
   /* Verify if enough heap remains to start the scheduler */
   if (verify_remaining_heap() != 0)
@@ -123,13 +124,41 @@ int32_t app_synctasks_init (void)
   * @param pvParameters: A pointer to the parameters passed to the task.
   * @retval None
   */
+  CAN_msg_t test_msg = {0};
 static void main_task(void *pvParameters)
 {
   (void)pvParameters;
+  uint32_t counter = 0;
 
   for(;;)
   {
     safe_printf(TAG, "main task \r\n");
+    
+    /* Create a test CAN message */
+    
+    // test_msg.format = CAN_MSG_FRAME_FORMAT_CAN; // todo aktualnie nie bierze tego pod uwage podczas wysylki. 
+    // test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
+    
+    // test_msg.ident = CAN_msg_set_standard_id(0x1AA); /* Standard ID = 0x1AA */
+    test_msg.ident = CAN_msg_set_extended_id(0x1FFFFFFF); /* extended ID */
+    test_msg.len = 8;
+    test_msg.data[0] = 0xDE;
+    test_msg.data[1] = 0xAD;
+    test_msg.data[2] = 0xBE;
+    test_msg.data[3] = 0xEF;
+    test_msg.data[4] = (uint8_t)(counter >> 24);
+    test_msg.data[5] = (uint8_t)(counter >> 16);
+    test_msg.data[6] = (uint8_t)(counter >> 8);
+    test_msg.data[7] = (uint8_t)(counter & 0xFF);
+    
+    /* Send it to the CAN1 manager */
+    if (!can_manager_send(&can1_inst, &test_msg))
+    {
+        safe_printf(TAG, "Failed to enqueue CAN message! Queue full?\r\n");
+    }
+    
+    counter++;
+
     vTaskDelay(pdMS_TO_TICKS(1200));
   }
 }
@@ -152,7 +181,7 @@ static void heartbeat_task(void *pvParameters)
 }
 
 /**
-  * @brief Function implementing the can1_tx_task thread.
+  * @brief Function implementing the can1_tx_task thread (migrated to can_manager).
   * @param pvParameters: A pointer to the parameters passed to the task.
   * @retval None
   */
@@ -162,12 +191,12 @@ static void can1_tx_task(void *pvParameters)
 
   for(;;)
   {
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
 /**
-  * @brief Function implementing the can1_rx_task thread.
+  * @brief Function implementing the can1_rx_task thread (migrated to can_manager).
   * @param pvParameters: A pointer to the parameters passed to the task.
   * @retval None
   */
@@ -177,7 +206,7 @@ static void can1_rx_task(void *pvParameters)
 
   for(;;)
   {
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 

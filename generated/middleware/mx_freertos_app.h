@@ -34,6 +34,7 @@ extern "C" {
 /* Exported macros -----------------------------------------------------------*/
 /* Exported variables --------------------------------------------------------*/
 extern SemaphoreHandle_t printf_mutex;
+extern QueueHandle_t CAN_1_queue;
 
 /* Exported functions --------------------------------------------------------*/
 int32_t app_synctasks_init(void);

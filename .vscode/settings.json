@@ -12,5 +12,58 @@
         "starm-clangd",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-gcc*",
         "--query-driver=${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/14.3.1+st.2/bin/arm-none-eabi-g++*"
-    ]
+    ],
+
+    // --- Ustawienia C/C++ Include Guard ---
+    // Automatyczne wstawianie guardow przy tworzeniu nowego pliku naglowkowego
+    "C/C++ Include Guard.Auto Include Guard Insertion For New File": true,
+    "C/C++ Include Guard.Auto Update Include Guard": true,
+    // Generowanie makra wylacznie na podstawie nazwy pliku (np. CAN_MANAGER_H, SAFE_PRINTF_H)
+    "C/C++ Include Guard.Macro Type": "Filename",
+    "C/C++ Include Guard.Remove Extension": false,
+    "C/C++ Include Guard.Comment Style": "Block",
+    // Pomijanie bloku komentarza naglowkowego (Doxygen) i wstawianie guardow pod nim
+    "C/C++ Include Guard.Skip Comment Blocks": true,
+    "C/C++ Include Guard.Insert Blank Line": true,
+    "C/C++ Include Guard.Shorten Underscores": true,
+
+    // --- Ustawienia koroFileHeader (OBKoro1.korofileheader) ---
+    // Definicja zawartosci naglowka pliku
+    "fileheader.customMade": {
+        "FilePath": "only file name",
+        "Description": "",
+        "Author": "Jan Lukaszewicz <brak@email.com>",
+        "Date": "Do not edit",
+        "LastEditors": "Jan Lukaszewicz",
+        "LastEditTime": "Do not edit"
+    },
+    // Konfiguracja zachowania i formatowania Doxygen
+    "fileheader.configObj": {
+        "createHeader": true,            // Automatyczne wstawianie naglowka przy tworzeniu nowego pliku
+        "autoAdd": true,                 // Automatyczne wstawianie przy zapisie nowego pliku
+        "autoAlready": true,             // Dodawanie tylko dla obslugiwanych jezykow
+        "wideSame": false,               // Nie wyrownuj sztucznie spacji po znacznikach
+        "colon": [" ", " "],             // Spacja zamiast dwukropka po znacznikach Doxygen (@file nazwa.h zamiast @file: nazwa.h)
+        "dateFormat": "YYYY-MM-DD",
+        // Mapowanie pol koroFileHeader na standardowe znaczniki Doxygen
+        "specialOptions": {
+            "FilePath": "file",
+            "Description": "brief",
+            "Author": "author",
+            "Date": "date"
+        },
+        // Szablon blokowy Doxygen dla plikow C/C++
+        "language": {
+            "h/c/cpp": {
+                "head": "/**",
+                "middle": " * @",
+                "end": " */"
+            }
+        },
+        "prohibitAutoAdd": [
+            "json",
+            "md",
+            "txt"
+        ]
+    }
 }
