@@ -4,7 +4,7 @@
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
  * @LastEditors Jan Lukaszewicz
- * @LastEditTime 2026-10-12
+ * @LastEditTime 2026-10-13
  */
 #ifndef TASKS_CONFIG_H
 #define TASKS_CONFIG_H
@@ -24,6 +24,9 @@
 #define TASK_PRIO_HEARTBEAT     (tskIDLE_PRIORITY + 1)
 #define TASK_STACK_HEARTBEAT    128U   // * 4 = 512 bytes
 
+// 
+#define TASK_PRIO_IO_MANAGER    (tskIDLE_PRIORITY + 2U)
+#define TASK_STACK_IO_MANAGER   512U
 
 
 #endif /* TASKS_CONFIG_H */

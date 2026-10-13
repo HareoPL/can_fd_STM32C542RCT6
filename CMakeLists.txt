@@ -19,7 +19,11 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   # Add additional source files here
   app/logging/safe_printf.c
   app/can_bus/can_manager.c
+  app/io/io_manager.c
+  app/port/stm32c5/bsp_adc.c
+  app/port/stm32c5/bsp_io.c
   app/port/stm32c5/stm32c5_can_adapter.c
+  stm32c5xx_drivers/hal/stm32c5xx_hal_adc.c
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
@@ -29,6 +33,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
   app/can_bus
   app/port
   app/port/stm32c5
+  app/io
 )
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC

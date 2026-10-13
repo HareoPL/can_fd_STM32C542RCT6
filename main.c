@@ -25,6 +25,7 @@
 
 #include "can_manager.h"
 #include "stm32c5_can_adapter.h"
+#include "io_manager.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -67,6 +68,11 @@ int main(void)
     return (-1);
   }
 
+  if(!io_manager_init())
+  {
+    return (-1);
+  }
+  
   /* Initialize FreeRTOS tasks */
   if (app_synctasks_init() != 0)
   {

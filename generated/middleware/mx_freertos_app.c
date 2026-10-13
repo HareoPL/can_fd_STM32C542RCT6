@@ -128,7 +128,7 @@ int32_t app_synctasks_init (void)
 static void main_task(void *pvParameters)
 {
   (void)pvParameters;
-  uint32_t counter = 0;
+  // uint32_t counter = 0;
 
   for(;;)
   {
@@ -137,27 +137,27 @@ static void main_task(void *pvParameters)
     /* Create a test CAN message */
     
     // test_msg.format = CAN_MSG_FRAME_FORMAT_CAN; // todo aktualnie nie bierze tego pod uwage podczas wysylki. 
-    // test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
+    // // test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
     
-    // test_msg.ident = CAN_msg_set_standard_id(0x1AA); /* Standard ID = 0x1AA */
-    test_msg.ident = CAN_msg_set_extended_id(0x1FFFFFFF); /* extended ID */
-    test_msg.len = 8;
-    test_msg.data[0] = 0xDE;
-    test_msg.data[1] = 0xAD;
-    test_msg.data[2] = 0xBE;
-    test_msg.data[3] = 0xEF;
-    test_msg.data[4] = (uint8_t)(counter >> 24);
-    test_msg.data[5] = (uint8_t)(counter >> 16);
-    test_msg.data[6] = (uint8_t)(counter >> 8);
-    test_msg.data[7] = (uint8_t)(counter & 0xFF);
+    // // test_msg.ident = CAN_msg_set_standard_id(0x1AA); /* Standard ID = 0x1AA */
+    // test_msg.ident = CAN_msg_set_extended_id(0x1FFFFFFF); /* extended ID */
+    // test_msg.len = 8;
+    // test_msg.data[0] = 0xDE;
+    // test_msg.data[1] = 0xAD;
+    // test_msg.data[2] = 0xBE;
+    // test_msg.data[3] = 0xEF;
+    // test_msg.data[4] = (uint8_t)(counter >> 24);
+    // test_msg.data[5] = (uint8_t)(counter >> 16);
+    // test_msg.data[6] = (uint8_t)(counter >> 8);
+    // test_msg.data[7] = (uint8_t)(counter & 0xFF);
     
-    /* Send it to the CAN1 manager */
-    if (!can_manager_send(&can1_inst, &test_msg))
-    {
-        safe_printf(TAG, "Failed to enqueue CAN message! Queue full?\r\n");
-    }
+    // /* Send it to the CAN1 manager */
+    // if (!can_manager_send(&can1_inst, &test_msg))
+    // {
+    //     safe_printf(TAG, "Failed to enqueue CAN message! Queue full?\r\n");
+    // }
     
-    counter++;
+    // counter++;
 
     vTaskDelay(pdMS_TO_TICKS(1200));
   }
