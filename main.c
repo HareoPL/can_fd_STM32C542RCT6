@@ -24,6 +24,7 @@
 #include "mx_freertos_app.h"
 
 #include "can_manager.h"
+#include "can_parser.h"
 #include "stm32c5_can_adapter.h"
 #include "io_manager.h"
 
@@ -64,6 +65,11 @@ int main(void)
   // can1_inst.can_config.baudrate_FD = CAN_BAUDRATE_500K;
 
   if (!can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1"))
+  {
+    return (-1);
+  }
+
+  if (!can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX))
   {
     return (-1);
   }

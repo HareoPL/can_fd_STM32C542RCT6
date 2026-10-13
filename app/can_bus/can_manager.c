@@ -71,6 +71,46 @@ static void can_tx_task(void *pvParameters)
 }
 
 /**
+ * @brief Matches an incoming CAN message against registered filters and executes its callback.
+ * @param[in] inst Pointer to the CAN instance.
+ * @param[in] msg Pointer to the received CAN message.
+ */
+static void can_manager_dispatch_rx(can_instance_t *inst, const CAN_msg_t *msg)
+{
+    if (inst == NULL || msg == NULL || inst->num_filters == 0U)
+    {
+        return;
+    }
+
+    uint32_t msg_id = msg->ident;
+    bool is_ext = (msg->ident > CAN_SFF_MASK);
+
+    for (uint32_t i = 0U; i < inst->num_filters; i++)
+    {
+        const can_filter_t *f = &inst->filters[i];
+        bool filter_is_ext = (f->arb > CAN_SFF_MASK);
+
+        /* Standard filter matches standard frame; Extended filter matches extended frame */
+        if (is_ext != filter_is_ext)
+        {
+            continue;
+        }
+
+        uint32_t filter_id = f->arb;
+
+        /* Check bitwise mask match */
+        if ((msg_id & f->mask) == (filter_id & f->mask))
+        {
+            if (f->cb != NULL)
+            {
+                f->cb(msg);
+            }
+            break;
+        }
+    }
+}
+
+/**
  * @brief Dedicated event-driven reception worker task for a CAN instance.
  * @param[in] pvParameters Pointer to the can_instance_t instance structure.
  */
@@ -103,6 +143,16 @@ static void can_rx_task(void *pvParameters)
                     safe_printf(inst->name, "rx msg ID=0x%03lX len=%u\r\n",
                                 (unsigned long)rx_id,
                                 (unsigned int)rx_len);
+
+                    CAN_msg_t rx_msg = {0};
+                    rx_msg.ident = rx_id;
+                    rx_msg.len = rx_len;
+                    rx_msg.format = inst->can_config.frame_format;
+                    uint8_t copy_len = (rx_len > sizeof(rx_msg.data)) ? (uint8_t)sizeof(rx_msg.data) : rx_len;
+                    memcpy(rx_msg.data, rx_data, copy_len);
+
+                    /* Dispatch received frame to matching filter callback */
+                    can_manager_dispatch_rx(inst, &rx_msg);
                 }
             }
         }
@@ -227,4 +277,47 @@ bool can_manager_send(can_instance_t* inst, const CAN_msg_t* msg)
     }
 
     return (xQueueSend(inst->tx_queue, msg, 0) == pdPASS);
+}
+
+/**
+ * @brief Configures acceptance filters and dispatch callbacks for the CAN instance.
+ * @param[in,out] inst Pointer to CAN instance.
+ * @param[in] filters Array of filter configurations.
+ * @param[in] num_filters Number of elements (0 to accept all frames without filtering).
+ * @return true on success, false on error.
+ */
+bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, uint32_t num_filters)
+{
+    if (inst == NULL || inst->hw_interface == NULL)
+    {
+        return false;
+    }
+
+    if (num_filters > CAN_MAX_FILTERS)
+    {
+        return false;
+    }
+
+    /* 1. Configure hardware filters via interface adapter */
+    if (inst->hw_interface->set_filter != NULL)
+    {
+        if (!inst->hw_interface->set_filter(filters, num_filters))
+        {
+            return false;
+        }
+    }
+
+    /* 2. Cache filter table and callbacks for RX task dispatching */
+    if (filters != NULL && num_filters > 0U)
+    {
+        memcpy(inst->filters, filters, num_filters * sizeof(can_filter_t));
+        inst->num_filters = num_filters;
+    }
+    else
+    {
+        memset(inst->filters, 0, sizeof(inst->filters));
+        inst->num_filters = 0U;
+    }
+
+    return true;
 }

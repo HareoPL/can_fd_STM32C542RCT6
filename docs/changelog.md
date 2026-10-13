@@ -12,9 +12,31 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Liniowe mapowanie surowego odczytu 12-bit ADC (0..4095) na wartości procentowe 0..100%.
   - Okresowa wysyłka ramki CAN co 100 ms z rozszerzonym identyfikatorem `0x01F2F3F4` z aktualnym stanem przycisków, wartością ADC oraz licznikiem transmisji.
   - Czytelne raportowanie statusu na UART przez `safe_printf` co 500 ms oraz natychmiastowo przy każdej zmianie stanu przycisków (znacznik `*`).
+- **Filtry sprzętowe CAN oraz callbacki odbiorcze (`app/port/can_port.h`, `app/port/stm32c5/stm32c5_can_adapter.c`):**
+  - Dodanie kontraktu struktury filtrów `can_filter_t` (ID `arb`, maska `mask`, wskaźnik callbacku `cb`) oraz wskaźnika `set_filter` w `can_interface_t`.
+  - Sprzętowa implementacja filtrowania klasycznego (`HAL_FDCAN_FILTER_TYPE_CLASSIC`) w adapterze STM32C5 dla identyfikatorów 11-bit Standard i 29-bit Extended z konfiguracją rejestru `FDCAN_RXGFC` oraz odrzucaniem niepasujących ramek (`HAL_FDCAN_NO_MATCH_REJECT`).
+- **Dyspozytor odbiorczy CAN (`app/can_bus/can_manager.c`, `app/can_bus/can_manager.h`):**
+  - Dodanie funkcji `can_manager_setFilter()` przekazującej filtry do adaptera sprzętowego i zapamiętującej je w instancji `can_instance_t`.
+  - Wdrożenie automatycznego dopasowywania odebranych ramek do filtrów i wywoływania dedykowanego callbacku `cb(&rx_msg)` w kontekście zadania FreeRTOS `can_rx_task`.
+- **Moduł parsera CAN (`app/can_bus/can_parser/can_parser.c`, `app/can_bus/can_parser/can_parser.h`):**
+  - Utworzenie dedykowanego modułu parsera w podkatalogu `app/can_bus/can_parser/`.
+  - Wprowadzenie architektury profili parserów opartej na czystych identyfikatorach numerycznych (`can_parser_id_t`) bez narzutu pamięciowego ciągów znaków (Flash/RAM: 8 bajtów na profil).
+  - Zdefiniowanie tablicy profili `s_parsers` z osobnymi regułami: `CAN_PARSER_ID_0` (przekaźnik `0x7FF` i telemetria I/O `0x01F2F3F4`) oraz `CAN_PARSER_ID_1` (diagnostyka `0x7E0` i kalibracja `0x18DAF110`).
+  - Implementacja funkcji dynamicznego przełączania w locie `can_parser_select(&can1_inst, id)` oraz inicjalizacji profilu domyślnego w `main.c`.
+- **Modularne parsery CAN (`app/can_bus/can_parser/parsers/cp_v_box.c`, `cp_v_box.h`, `cp_example.c`, `cp_example.h`):**
+  - Wydzielenie logiki i callbacków poszczególnych profili do dedykowanych plików w podkatalogu `parsers/` według konwencji nazewnictwa `cp_*.c` / `cp_*.h`.
+  - Wdrożenie wzorca profilu z getterem (`cp_v_box_profile_get()`, `cp_example_profile_get()`) eliminującego słowo kluczowe `extern` – filtry oraz deskryptor `can_parser_profile_t` są hermetyzowane jako `static const` wewnątrz pliku implementacji danego parsera.
+  - Automatyczne zliczanie reguł filtrów w kompilacji (`sizeof(s_filters) / sizeof(s_filters[0])`) bez potrzeby ręcznego utrzymywania stałych `#define CP_*_COUNT`.
+  - Profil V-Box (`cp_v_box`): obsługa komend przekaźnika (`0x7FF`) oraz telemetrii I/O (`0x01F2F3F4`).
+  - Profil Example (`cp_example`): demonstracyjna obsługa żądań diagnostycznych OBD2/UDS (`0x7E0`) oraz kalibracji (`0x18DAF110`).
+- **Przewodnik tworzenia parserów CAN (`docs/can_bus/can_parser_guide.md`):**
+  - Kompletna instrukcja krok po kroku opisująca tworzenie nowych parserów w `app/can_bus/can_parser/parsers/` według wzorca profilu z getterem, strukturę plików `cp_*.c`/`cp_*.h`, hermetyzację `static const`, rejestrację w `can_parser.h` / `can_parser.c` oraz dynamiczną aktywację przez `can_parser_select()`.
+  - Aktualizacja pliku indeksującego `docs/can_bus/README.md`.
 - **Konfiguracja zadań (`app/tasks_config.h`):** Dodano definicje priorytetu `TASK_PRIO_IO_MANAGER` oraz rozmiaru stosu `TASK_STACK_IO_MANAGER` (512 słów).
+- **Wytyczne architektoniczne:** Dodano regułę 12 definiującą standard tworzenia i rejestracji parserów CAN oraz wzorzec profilu z getterem bez `extern`.
 
 ### Zmienione
+- **Refaktoryzacja dyspozytora parsera (`app/can_bus/can_parser/can_parser.c`):** Tablica `s_parsers` przechowuje teraz bezpośrednio wskaźniki na funkcje-gettery profili (`can_profile_getter_fn`), co obniża zużycie pamięci Flash do 4 bajtów na profil i uniezależnia dyspozytor od globalnych zmiennych poszczególnych modułów.
 - **Logika testowa w `main_task` (`generated/middleware/mx_freertos_app.c`):** Usunięto/zakomentowano testowe wysyłanie sztucznych ramek CAN – ruch na magistrali CAN1 jest teraz generowany bezpośrednio przez moduł `io_manager`.
 
 ## [2026-10-12]

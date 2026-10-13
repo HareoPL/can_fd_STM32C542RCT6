@@ -16,9 +16,11 @@ include(cmake/components.cmake)
 
 # Stubs to be able to add compiler flag overrides, e.g. -Os
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-  # Add additional source files here
   app/logging/safe_printf.c
   app/can_bus/can_manager.c
+  app/can_bus/can_parser/can_parser.c
+  app/can_bus/can_parser/parsers/cp_v_box.c
+  app/can_bus/can_parser/parsers/cp_example.c
   app/io/io_manager.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
@@ -31,6 +33,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
   app
   app/logging
   app/can_bus
+  app/can_bus/can_parser
+  app/can_bus/can_parser/parsers
   app/port
   app/port/stm32c5
   app/io

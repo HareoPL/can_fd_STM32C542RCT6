@@ -16,6 +16,7 @@
 #include "can_msg_types.h"
 
 #define CAN_QUEUE_DEFAULT_LENGTH 16
+#define CAN_MAX_FILTERS          16U
 
 /**
  * @brief Structure representing a CAN bus instance (object-oriented model).
@@ -28,6 +29,8 @@ typedef struct {
     const can_interface_t* hw_interface; /**< Hardware port interface adapter */
     char name[16];                       /**< Instance name identifier (e.g. "CAN1") */
     can_config_t can_config;             /**< Bus configuration (defaults applied if uninitialized) */
+    can_filter_t filters[CAN_MAX_FILTERS]; /**< Registered filters with dispatch callbacks */
+    uint32_t num_filters;                /**< Number of active filters */
 } can_instance_t;
 
 /**
@@ -48,5 +51,14 @@ bool can_manager_init(can_instance_t* inst,
  * @return true if queued successfully, false if queue is full.
  */
 bool can_manager_send(can_instance_t* inst, const CAN_msg_t* msg);
+
+/**
+ * @brief Configures acceptance filters and dispatch callbacks for the CAN instance.
+ * @param[in,out] inst Pointer to CAN instance.
+ * @param[in] filters Array of filter configurations.
+ * @param[in] num_filters Number of elements (0 to accept all frames without filtering).
+ * @return true on success, false on error.
+ */
+bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, uint32_t num_filters);
 
 #endif /* CAN_MANAGER_H */

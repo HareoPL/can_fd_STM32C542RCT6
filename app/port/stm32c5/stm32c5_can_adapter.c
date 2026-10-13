@@ -405,13 +405,141 @@ void HAL_FDCAN_RxFifo0Callback(hal_fdcan_handle_t *hfdcan, uint32_t rx_fifo0_int
 }
 
 /**
+ * @brief Configures acceptance filters in STM32C5 FDCAN Message RAM.
+ * @param[in] filters Array of filter configurations.
+ * @param[in] num_filters Number of filters in the array (0 to accept all frames).
+ * @return true on success, false on error.
+ */
+static bool stm32c5_can1_set_filter(const can_filter_t *filters, uint32_t num_filters)
+{
+    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
+    if (hfdcan == NULL)
+    {
+        return false;
+    }
+
+    bool was_active = (HAL_FDCAN_GetState(hfdcan) == HAL_FDCAN_STATE_ACTIVE);
+    if (was_active)
+    {
+        if (HAL_FDCAN_Stop(hfdcan) != HAL_OK)
+        {
+            return false;
+        }
+    }
+
+    FDCAN_GlobalTypeDef *p_fdcanx = (FDCAN_GlobalTypeDef *)((uint32_t)hfdcan->instance);
+
+    if (filters == NULL || num_filters == 0U)
+    {
+        /* Accept all frames (pass-all open filter) */
+        STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSS, (0U << FDCAN_RXGFC_LSS_Pos));
+        STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSE, (0U << FDCAN_RXGFC_LSE_Pos));
+
+        hal_fdcan_global_filter_config_t g_filter = {
+            .acceptance_non_matching_std = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+            .acceptance_non_matching_ext = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+            .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
+            .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
+        };
+        HAL_FDCAN_SetGlobalFilter(hfdcan, &g_filter);
+
+        if (was_active)
+        {
+            return (HAL_FDCAN_Start(hfdcan) == HAL_OK);
+        }
+        return true;
+    }
+
+    /* 1. Count standard and extended filters */
+    uint32_t std_count = 0U;
+    uint32_t ext_count = 0U;
+    for (uint32_t i = 0U; i < num_filters; i++)
+    {
+        if (filters[i].arb > CAN_SFF_MASK)
+        {
+            ext_count++;
+        }
+        else
+        {
+            std_count++;
+        }
+    }
+
+    /* Hardware limits for M_CAN: max 28 standard, max 8 extended */
+    if (std_count > 28U || ext_count > 8U)
+    {
+        if (was_active)
+        {
+            (void)HAL_FDCAN_Start(hfdcan);
+        }
+        return false;
+    }
+
+    /* 2. Configure list sizes in RXGFC */
+    STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSS, (std_count << FDCAN_RXGFC_LSS_Pos));
+    STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSE, (ext_count << FDCAN_RXGFC_LSE_Pos));
+
+    /* 3. Write each filter element to Message RAM */
+    uint32_t std_idx = 0U;
+    uint32_t ext_idx = 0U;
+
+    for (uint32_t i = 0U; i < num_filters; i++)
+    {
+        hal_fdcan_filter_t f_cfg = {0};
+        f_cfg.filter_type = HAL_FDCAN_FILTER_TYPE_CLASSIC;
+        f_cfg.filter_config = HAL_FDCAN_FILTER_TO_RX_FIFO_0;
+
+        if (CAN_msg_is_extended_id(filters[i].arb) || (filters[i].arb > CAN_SFF_MASK))
+        {
+            f_cfg.id_type = HAL_FDCAN_ID_EXTENDED;
+            f_cfg.filter_index = ext_idx++;
+            f_cfg.filter_id1 = filters[i].arb;
+            f_cfg.filter_id2 = filters[i].mask & CAN_EFF_MASK;
+        }
+        else
+        {
+            f_cfg.id_type = HAL_FDCAN_ID_STANDARD;
+            f_cfg.filter_index = std_idx++;
+            f_cfg.filter_id1 = filters[i].arb;
+            f_cfg.filter_id2 = filters[i].mask & CAN_SFF_MASK;
+        }
+
+        if (HAL_FDCAN_SetFilter(hfdcan, &f_cfg) != HAL_OK)
+        {
+            if (was_active)
+            {
+                (void)HAL_FDCAN_Start(hfdcan);
+            }
+            return false;
+        }
+    }
+
+    /* 4. Configure global filter rejection for non-matching frames */
+    hal_fdcan_global_filter_config_t g_filter = {
+        .acceptance_non_matching_std = (std_count > 0U) ? HAL_FDCAN_NO_MATCH_REJECT : HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_non_matching_ext = (ext_count > 0U) ? HAL_FDCAN_NO_MATCH_REJECT : HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
+        .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
+    };
+    HAL_FDCAN_SetGlobalFilter(hfdcan, &g_filter);
+
+    if (was_active)
+    {
+        return (HAL_FDCAN_Start(hfdcan) == HAL_OK);
+    }
+
+    return true;
+}
+
+/**
  * @brief Hardware interface constant for CAN1.
  */
 static const can_interface_t s_stm32c5_can1_interface = {
     .init = stm32c5_can1_init,
     .transmit = stm32c5_can1_transmit,
     .receive = stm32c5_can1_receive,
-    .attach_rx_callback = stm32c5_can1_attach_rx_callback
+    .attach_rx_callback = stm32c5_can1_attach_rx_callback,
+    .set_filter = stm32c5_can1_set_filter
 };
 
 const can_interface_t *stm32c5_can1_interfaceGet(void)
