@@ -13,7 +13,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-uint8_t bsp_io_buttons_read(void);
+/**
+ * @brief Reads the atomic state of 9 test buttons (SW0..SW8) from GPIOB and GPIOC registers.
+ * @return 16-bit packed button state mask.
+ */
+uint16_t bsp_io_buttons_read(void);
 
 void bsp_io_output_setPin(bool state);
 bool bsp_io_output_get_state(void);

@@ -2,13 +2,14 @@
  * @file io_manager.c
  * @brief I/O Manager module implementing button debouncing, ADC mapping, and UART status logging.
  *         ACC stacyjka    - SW0 -> bit 0 -> PB4  (CN10 pin 27)
- *         Drzwi KIER      - SW1 -> bit 1 -> PB5  (CN10 pin 6)  
- *         Drzwi INNE      - SW2 -> bit 2 -> PB6  (CN10 pin 3)
+ *         Drzwi KIER      - SW1 -> bit 1 -> PC8  (CN10 pin 31)
+ *         Drzwi INNE      - SW2 -> bit 2 -> PC7  (CN10 pin 19)
  *         Światła         - SW3 -> bit 3 -> PB7  (CN10 pin 5)
  *         Zamki ZAMKNIĘTE - SW4 -> bit 4 -> PB12 (CN10 pin 16)
  *         Maska           - SW5 -> bit 5 -> PB13 (CN10 pin 30)
  *         Awaryjne        - SW6 -> bit 6 -> PB14 (CN10 pin 28)
  *         Hamulec RĘCZNY  - SW7 -> bit 7 -> PB15 (CN10 pin 26)
+ *         Dodatkowy wej.  - SW8 -> bit 8 -> PB2  (CN10 pin 22)
  *
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
@@ -84,19 +85,19 @@ static TaskHandle_t io_manager_task_handle = NULL;
 /** @brief Can message*/
 static CAN_msg_t can_msg = {0};
 
-static uint8_t btn = 0;
+static uint16_t btn = 0;
 /**
- * @brief Debouncer state structure for 8 parallel button inputs.
+ * @brief Debouncer state structure for 9 parallel button inputs.
  */
 typedef struct
 {
-    uint8_t history[IO_DEBOUNCE_SAMPLES]; /**< Circular buffer of recent raw button samples. */
-    uint8_t index;                        /**< Current write index in the history buffer. */
-    uint8_t stable_state;                 /**< Current debounced 8-bit button state. */
+    uint16_t history[IO_DEBOUNCE_SAMPLES]; /**< Circular buffer of recent raw button samples. */
+    uint8_t index;                         /**< Current write index in the history buffer. */
+    uint16_t stable_state;                 /**< Current debounced 16-bit button state. */
 } io_debounce_t;
 
 // getters
-uint8_t io_manager_getAllBtnState(void)
+uint16_t io_manager_getAllBtnState(void)
 {
     return btn;
 }
@@ -281,7 +282,7 @@ static void relay_worker_task(void *pvParameters)
  * @param[out] db Pointer to the debouncer structure.
  * @param[in] init_raw Initial raw button state read from hardware.
  */
-static void io_debounce_init(io_debounce_t *db, uint8_t init_raw)
+static void io_debounce_init(io_debounce_t *db, uint16_t init_raw)
 {
     for (uint8_t i = 0U; i < IO_DEBOUNCE_SAMPLES; i++)
     {
@@ -292,20 +293,20 @@ static void io_debounce_init(io_debounce_t *db, uint8_t init_raw)
 }
 
 /**
- * @brief Updates the parallel 8-bit button debouncer with a new raw sample.
+ * @brief Updates the parallel 16-bit button debouncer with a new raw sample.
  *        A bit transitions to 1 only if it is 1 across all history samples,
  *        and transitions to 0 only if it is 0 across all history samples.
  * @param[in,out] db Pointer to the debouncer structure.
- * @param[in] raw_sample New raw 8-bit button state.
- * @return Updated debounced 8-bit button state.
+ * @param[in] raw_sample New raw 16-bit button state.
+ * @return Updated debounced 16-bit button state.
  */
-static uint8_t io_debounce_update(io_debounce_t *db, uint8_t raw_sample)
+static uint16_t io_debounce_update(io_debounce_t *db, uint16_t raw_sample)
 {
     db->history[db->index] = raw_sample;
     db->index = (uint8_t)((db->index + 1U) % IO_DEBOUNCE_SAMPLES);
 
-    uint8_t all_ones = 0xFFU;
-    uint8_t any_ones = 0x00U;
+    uint16_t all_ones = 0xFFFFU;
+    uint16_t any_ones = 0x0000U;
 
     for (uint8_t i = 0U; i < IO_DEBOUNCE_SAMPLES; i++)
     {
@@ -313,10 +314,10 @@ static uint8_t io_debounce_update(io_debounce_t *db, uint8_t raw_sample)
         any_ones |= db->history[i];
     }
 
-    uint8_t all_zeros = (uint8_t)(~any_ones);
+    uint16_t all_zeros = (uint16_t)(~any_ones);
 
     /* Set bits that have been stably HIGH, clear bits that have been stably LOW */
-    db->stable_state = (uint8_t)((db->stable_state & (~all_zeros)) | all_ones);
+    db->stable_state = (uint16_t)((db->stable_state & (~all_zeros)) | all_ones);
 
     return db->stable_state;
 }
@@ -337,7 +338,7 @@ static uint8_t io_manager_adc_read_mapped(void)
 }
 
 
-static CAN_msg_t *io_manager_canCreateFrame(uint8_t btnState, uint8_t adcState)
+static CAN_msg_t *io_manager_canCreateFrame(uint16_t btnState, uint8_t adcState)
 {
     static uint32_t canCnt = 0;
 
@@ -347,10 +348,10 @@ static CAN_msg_t *io_manager_canCreateFrame(uint8_t btnState, uint8_t adcState)
     can_msg.ident = CAN_msg_set_extended_id(IO_CAN_ID); // extended ID
     can_msg.len = 8;
 
-    can_msg.data[0] = btnState;
+    can_msg.data[0] = (uint8_t)(btnState & 0xFFU);
     can_msg.data[1] = adcState;
-    // can_msg.data[2] = 0;
-    // can_msg.data[3] = 0;    
+    can_msg.data[2] = (uint8_t)((btnState >> 8U) & 0xFFU) ? (0xFAU) : 0;
+    can_msg.data[3] = 0U;    
     can_msg.data[4] = (uint8_t)(canCnt >> 24);
     can_msg.data[5] = (uint8_t)(canCnt >> 16);
     can_msg.data[6] = (uint8_t)(canCnt >> 8);
@@ -369,17 +370,17 @@ static void io_manager_task(void *pvParameters)
     (void)pvParameters;
 
     io_debounce_t btn_db;
-    uint8_t initial_btn = bsp_io_buttons_read();
+    uint16_t initial_btn = bsp_io_buttons_read();
     io_debounce_init(&btn_db, initial_btn);
 
-    uint8_t prev_btn_state = initial_btn;
+    uint16_t prev_btn_state = initial_btn;
     uint32_t elapsed_ms = 0U;
     uint32_t elapsed_can_ms = 0U;
 
     for (;;)
     {
-        /* Sample and debounce 8 button inputs */
-        uint8_t raw_btn = bsp_io_buttons_read();
+        /* Sample and debounce 9 button inputs */
+        uint16_t raw_btn = bsp_io_buttons_read();
         btn = io_debounce_update(&btn_db, raw_btn);
 
         elapsed_ms += IO_SAMPLE_PERIOD_MS;
@@ -407,15 +408,14 @@ static void io_manager_task(void *pvParameters)
             uint32_t adc_raw = bsp_adc_read_raw();
             uint8_t adc_mapped = io_manager_adc_read_mapped();
 
-            
-
             safe_printf(TAG,
-                        "BTN: 0x%02X [SW7..0: %d%d%d%d %d%d%d%d]%s | PA8: %-4s | ADC: %4lu (%3lu%%)\r\n",
-                        btn,
-                        (btn >> 7) & 1U, (btn >> 6) & 1U,
-                        (btn >> 5) & 1U, (btn >> 4) & 1U,
-                        (btn >> 3) & 1U, (btn >> 2) & 1U,
-                        (btn >> 1) & 1U, (btn & 1U),
+                        "BTN: 0x%03X [SW8..0: %d %d%d%d%d %d%d%d%d]%s | PA8: %-4s | ADC: %4lu (%3lu%%)\r\n",
+                        (unsigned int)btn,
+                        (int)((btn >> 8) & 1U),
+                        (int)((btn >> 7) & 1U), (int)((btn >> 6) & 1U),
+                        (int)((btn >> 5) & 1U), (int)((btn >> 4) & 1U),
+                        (int)((btn >> 3) & 1U), (int)((btn >> 2) & 1U),
+                        (int)((btn >> 1) & 1U), (int)(btn & 1U),
                         btn_changed ? " *" : "  ",
                         out_state ? "HIGH" : "LOW",
                         (unsigned long)adc_raw,

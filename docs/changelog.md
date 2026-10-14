@@ -8,6 +8,21 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Wprowadzenie dedykowanego zadania `relay_worker_task` (priorytet `tskIDLE_PRIORITY + 2`, stos 256 słów) oraz kolejki zleceń FreeRTOS `s_relay_cmd_queue`.
   - Dodanie nieblokującej funkcji `io_manager_setRelayStateAsync()` o czasie wykonania < 1 µs, dzięki czemu callback CAN `on_v_box_relay_cmd_rx` nie wstrzymuje zadania `can_rx_task` ani na milisekundę.
   - Całkowita eliminacja ryzyka przepełnienia bufora sprzętowego FDCAN (Rx FIFO 0 Overflow) podczas generowania zboczy i oczekiwania na sprzężenie zwrotne przekaźnika.
+
+### Zmienione
+- **Reallokacja wejść cyfrowych i rozszerzenie do 9 pinów (`app/port/bsp_io.h`, `app/port/stm32c5/bsp_io.c`):**
+  - Przeniesienie wejść krańcówek ze względu na konflikt z FDCAN2: Drzwi KIER na pin **PC8** (CN10 pin 31), Drzwi INNE na pin **PC7** (CN10 pin 19), a dodatkowego 9. wejścia na pin **PB2** (CN10 pin 22).
+  - Piny **PB5** (`FDCAN2_RX` / CN10 pin 6) oraz **PB6** (`FDCAN2_TX` / CN10 pin 3) zostały całkowicie zwolnione w konfiguracji GPIO i zabezpieczone na potrzeby przyszłej magistrali FDCAN2.
+  - Zmiana typu zwracanego przez `bsp_io_buttons_read()` z `uint8_t` na `uint16_t` oraz implementacja odczytu rejestrów `GPIOB->IDR` i `GPIOC->IDR` z mapowaniem 9 bitów (SW0..SW8).
+- **Rozszerzenie debouncingu i telemetrii I/O do 16 bitów (`app/io/io_manager.c`, `app/io/io_manager.h`):**
+  - Aktualizacja struktury `io_debounce_t` i funkcji `io_debounce_update()` do 16-bitowych masek bitowych, zapewniając pełną odporność na drgania styków dla wszystkich 9 wejść równolegle.
+  - Aktualizacja publicznego API `io_manager_getAllBtnState()` do zwracania `uint16_t`.
+  - Rozszerzenie ramki CAN telemetrii `0x01F2F3F4`: młodsze bity wejść (SW0..SW7) w `data[0]`, starsze bity (SW8 w bit 0) w `data[2]`, zachowując pełną kompatybilność wsteczną.
+  - Aktualizacja formatu logowania UART w `io_manager_task` do postaci `BTN: 0x000 [SW8..0: 0 0000 0000]`.
+- **Porządki w pliku głównym (`main.c`):**
+  - Usunięcie tymczasowego zadania testowego `gpio_test_task` i przywrócenie minimalistycznej struktury pliku.
+- **Aktualizacja raportu GPIO mikrokontrolera (`docs/GPIO_Report.md`):**
+  - Odnotowanie nowej alokacji pinów (PC8, PC7, PB2), zwolnienia pinów PA9 i PA10 do puli wolnych oraz rezerwacji PB5 i PB6 dla FDCAN2.
 - **Sterowanie przekaźnikiem bistabilnym sterowanym zboczami (`app/io/io_manager.c`, `app/io/io_manager.h`):**
   - Implementacja funkcji `io_manager_setRelayState()` realizującej deterministyczne generowanie zboczy (LOW->HIGH dla załączenia, HIGH->LOW dla wyłączenia z impulsem przygotowawczym 40 ms), pętlę aktywnego oczekiwania na potwierdzenie z pinu sprzężenia zwrotnego (timeout 200 ms) oraz do 2 prób przełączenia.
   - Wdrożenie automatu stanów odpornego na awarie zasilania przekaźnika (`s_relay_last_attempt_failed`, `s_relay_confirmed`, `s_relay_last_target`): w przypadku nieudanego przełączenia (np. odcięte zasilanie główne przekaźnika) logika oznacza stan jako niepotwierdzony i po przywróceniu zasilania oraz ponownym nadesłaniu komendy bezwzględnie ponawia sekwencję sterowania od zera (wymuszenie stanu przeciwnego, odczekanie, zbocze właściwe), ignorując fałszywie pasujący stan na wejściu sprzężenia.

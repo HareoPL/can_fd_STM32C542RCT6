@@ -15,10 +15,10 @@
 #include <stdint.h>
 
 /**
- * @brief Gets the debounced state of all 8 inputs.
- * @return 8-bit packed input state.
+ * @brief Gets the debounced state of all 9 inputs (SW0..SW8).
+ * @return 16-bit packed input state.
  */
-uint8_t io_manager_getAllBtnState(void);
+uint16_t io_manager_getAllBtnState(void);
 
 /**
  * @brief Gets the current physical relay state (debounced PB12 / SW4).
