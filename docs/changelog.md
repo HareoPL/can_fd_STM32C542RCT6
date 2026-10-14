@@ -2,6 +2,35 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-14]
+### Dodane
+- **Asynchroniczny model sterowania przekaźnikiem z kolejką zdarzeń (`app/io/io_manager.c`, `app/io/io_manager.h`, `app/tasks_config.h`, `app/can_bus/can_parser/parsers/cp_v_box.c`):**
+  - Wprowadzenie dedykowanego zadania `relay_worker_task` (priorytet `tskIDLE_PRIORITY + 2`, stos 256 słów) oraz kolejki zleceń FreeRTOS `s_relay_cmd_queue`.
+  - Dodanie nieblokującej funkcji `io_manager_setRelayStateAsync()` o czasie wykonania < 1 µs, dzięki czemu callback CAN `on_v_box_relay_cmd_rx` nie wstrzymuje zadania `can_rx_task` ani na milisekundę.
+  - Całkowita eliminacja ryzyka przepełnienia bufora sprzętowego FDCAN (Rx FIFO 0 Overflow) podczas generowania zboczy i oczekiwania na sprzężenie zwrotne przekaźnika.
+- **Sterowanie przekaźnikiem bistabilnym sterowanym zboczami (`app/io/io_manager.c`, `app/io/io_manager.h`):**
+  - Implementacja funkcji `io_manager_setRelayState()` realizującej deterministyczne generowanie zboczy (LOW->HIGH dla załączenia, HIGH->LOW dla wyłączenia z impulsem przygotowawczym 40 ms), pętlę aktywnego oczekiwania na potwierdzenie z pinu sprzężenia zwrotnego (timeout 200 ms) oraz do 2 prób przełączenia.
+  - Wdrożenie automatu stanów odpornego na awarie zasilania przekaźnika (`s_relay_last_attempt_failed`, `s_relay_confirmed`, `s_relay_last_target`): w przypadku nieudanego przełączenia (np. odcięte zasilanie główne przekaźnika) logika oznacza stan jako niepotwierdzony i po przywróceniu zasilania oraz ponownym nadesłaniu komendy bezwzględnie ponawia sekwencję sterowania od zera (wymuszenie stanu przeciwnego, odczekanie, zbocze właściwe), ignorując fałszywie pasujący stan na wejściu sprzężenia.
+  - Bezpieczny powrót pinu sterującego PA8 do stanu spoczynkowego zgodnego z rzeczywistym odczytem w przypadku niepowodzenia (zapobieganie ciągłemu wystawianiu 3.3V na niezasilonym module).
+  - Zabezpieczenie procedury przełączania przekaźnika dedykowanym mutexem FreeRTOS `s_relay_mutex`.
+  - Natychmiastowa inicjalizacja zmiennej `btn` w `io_manager_init()` za pomocą `bsp_io_buttons_read()`, co pozwala odczytać zapamiętany stan przekaźnika zaraz po resecie procesora.
+
+### Naprawione
+- **Eliminacja niepotrzebnego cyklu załączenia/wyłączenia przy rozruchu (`app/io/io_manager.c`):**
+  - Rozwiązano problem niepotrzebnego załączania i natychmiastowego wyłączania przekaźnika przy pierwszej komendzie „otwórz”, gdy przekaźnik po resecie znajdował się już w stanie otwartym (0).
+  - W `io_manager_init()` stan `s_relay_last_target`, `s_relay_confirmed = true` oraz poziom wyjścia PA8 są natychmiast synchronizowane z zapamiętaną pozycją odczytaną z pinów.
+  - W `io_manager_setRelayState()` wprowadzono regułę: jeśli fizyczny stan styków odpowiada stanowi zadanemu (`current_fb == target_state`), funkcja natychmiast wyrównuje pin bez generowania zbocza przeciwnego, zapobiegając niepotrzebnemu zużyciu styków i klikaniu przekaźnika.
+- **Błędna wartość zwracana przez `io_manager_getRelayState()` (`app/io/io_manager.c`):**
+  - Zmiana zwracania maski bitowej `btn & (1 << 4U)` (wartość `16` / `0x10`) na znormalizowane `0` lub `1` (`(btn & (1U << 4U)) != 0U`). Poprzednio warunek `relay_fb != relay_state` zawsze ewaluował się do prawdy przy stanie załączonym (`16 != 1`).
+- **Sterowanie przekaźnikiem i zgodność z Regułą 13 w parserze V-Box (`app/can_bus/can_parser/parsers/cp_v_box.c`):**
+  - Rozwiązanie problemu desynchronizacji pinu PA8 (stan LOW po resecie) z bistabilnym przekaźnikiem pamiętającym stan załączenia po zaniku zasilania.
+  - Usunięcie wywołania `CAN_msg_get_can_id()` w procedurze odbiorczej RX (zastąpione przez `msg->ident & CAN_EFF_MASK` zgodnie z Regułą 13 wytycznych).
+  - Dodanie kontroli długości ramki CAN (`msg->len >= 3U`) przed odczytem bajtu `msg->data[2]`.
+
+- **Optymalizacja synchronizacji bitowej FDCAN i stromości zboczy TX (`app/port/stm32c5/stm32c5_can_adapter.c`, `generated/hal/mx_fdcan1.c`):**
+  - Zwiększono parametr `nominal_jump_width` (SJW) z minimalnej wartości 1 (6.94 ns) do wartości równej `nominal_time_seg2` (36 tq = 250 ns dla 500 kbps), co umożliwia pełną resynchronizację fazy zegara i zapobiega błędom braku potwierdzenia (ACK Error / `TEC 120`) zgłaszanym przez zewnętrzne analizatory magistrali (np. Vehicle Spy).
+  - Przestawiono prędkość wyprowadzeń GPIO FDCAN1 (PB8/PB9) z domyślnego `HAL_GPIO_SPEED_FREQ_LOW` na `HAL_GPIO_SPEED_FREQ_VERY_HIGH` w celu eliminacji opóźnień zboczy na wąskim impulsie bitu ACK.
+
 ## [2026-10-13]
 ### Dodane
 - **Warstwa BSP dla I/O oraz ADC (`app/port/bsp_io.h`, `app/port/stm32c5/bsp_io.c`, `app/port/bsp_adc.h`, `app/port/stm32c5/bsp_adc.c`):**
@@ -32,8 +61,14 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 - **Przewodnik tworzenia parserów CAN (`docs/can_bus/can_parser_guide.md`):**
   - Kompletna instrukcja krok po kroku opisująca tworzenie nowych parserów w `app/can_bus/can_parser/parsers/` według wzorca profilu z getterem, strukturę plików `cp_*.c`/`cp_*.h`, hermetyzację `static const`, rejestrację w `can_parser.h` / `can_parser.c` oraz dynamiczną aktywację przez `can_parser_select()`.
   - Aktualizacja pliku indeksującego `docs/can_bus/README.md`.
+- **Automatyczny generator parserów CAN (`tools/create_parser.py`):**
+  - Narzędzie w języku Python automatyzujące generowanie szkieletu nowego parsera (`cp_<nazwa>.h`, `cp_<nazwa>.c`) z szablonem filtrów, callbacków i instrukcjami TODO.
+  - Automatyczna rejestracja identyfikatora `CAN_PARSER_ID_<NAZWA>` w `can_parser.h` (bez aliasów), rejestracja wskaźnika gettera w `s_parsers` w `can_parser.c` oraz dopisanie pliku źródłowego do `CMakeLists.txt`.
+  - Wbudowana walidacja kolizji nazw, istniejących plików i enumów oraz obsługa trybu `--dry-run`.
 - **Konfiguracja zadań (`app/tasks_config.h`):** Dodano definicje priorytetu `TASK_PRIO_IO_MANAGER` oraz rozmiaru stosu `TASK_STACK_IO_MANAGER` (512 słów).
-- **Wytyczne architektoniczne:** Dodano regułę 12 definiującą standard tworzenia i rejestracji parserów CAN oraz wzorzec profilu z getterem bez `extern`.
+- **Wytyczne architektoniczne :**
+  - Dodano regułę 12 definiującą standard tworzenia i rejestracji parserów CAN oraz wzorzec profilu z getterem bez `extern`.
+  - Dodano regułę 13: ścisły nakaz używania funkcji pomocniczych `CAN_msg_get_can_id`, `CAN_msg_is_extended_id`, `CAN_msg_set_extended_id`, `CAN_msg_set_standard_id` wyłącznie podczas tworzenia struktury `CAN_msg_t` do wysłania (TX) oraz zakaz ich stosowania przy odbiorze (RX).
 
 ### Zmienione
 - **Refaktoryzacja dyspozytora parsera (`app/can_bus/can_parser/can_parser.c`):** Tablica `s_parsers` przechowuje teraz bezpośrednio wskaźniki na funkcje-gettery profili (`can_profile_getter_fn`), co obniża zużycie pamięci Flash do 4 bajtów na profil i uniezależnia dyspozytor od globalnych zmiennych poszczególnych modułów.

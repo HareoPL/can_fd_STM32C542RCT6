@@ -1,10 +1,11 @@
 /**
  * @file bsp_io.c
  * @brief 
+ *      Przyciski (SW0..SW7) – stan spoczynkowy 0 not connect, naciśnięcie podaje +3.3 V:
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
  * @LastEditors Jan Lukaszewicz
- * @LastEditTime 2026-10-13
+ * @LastEditTime 2026-10-14
  */
 #include "bsp_io.h"
 #include "mx_hal_def.h"
@@ -39,14 +40,14 @@ static bool bsp_io_buttons_init(void)
 /**
  * @brief Reads the atomic state of 8 test buttons from GPIOB IDR register.
  * @return 8-bit packed state:
- *         bit 0 -> PB4  (CN10 pin 27)
- *         bit 1 -> PB5  (CN10 pin 6) 
- *         bit 2 -> PB6  (CN10 pin 3)
- *         bit 3 -> PB7  (CN10 pin 5)
- *         bit 4 -> PB12 (CN10 pin 16)
- *         bit 5 -> PB13 (CN10 pin 30)
- *         bit 6 -> PB14 (CN10 pin 28)
- *         bit 7 -> PB15 (CN10 pin 26)
+ *         ACC stacyjka    - SW0 -> bit 0 -> PB4  (CN10 pin 27)
+ *         Drzwi KIER      - SW1 -> bit 1 -> PB5  (CN10 pin 6)  
+ *         Drzwi INNE      - SW2 -> bit 2 -> PB6  (CN10 pin 3)
+ *         Światła         - SW3 -> bit 3 -> PB7  (CN10 pin 5)
+ *         Zamki ZAMKNIĘTE - SW4 -> bit 4 -> PB12 (CN10 pin 16)
+ *         Maska           - SW5 -> bit 5 -> PB13 (CN10 pin 30)
+ *         Awaryjne        - SW6 -> bit 6 -> PB14 (CN10 pin 28)
+ *         Hamulec RĘCZNY  - SW7 -> bit 7 -> PB15 (CN10 pin 26)
  */
 uint8_t bsp_io_buttons_read(void)
 {
@@ -78,7 +79,7 @@ static bool bsp_io_output_init(void)
 }
 
 /**
- * @brief Set the test output pin PA8.
+ * @brief Set the test output pin PA8. pin 23
  * @arg state true if HIGH, false if LOW.
  */
 void bsp_io_output_setPin(bool state)

@@ -57,7 +57,7 @@ hal_fdcan_handle_t *mx_fdcan1_init(void)
   fdcan_nominal_bit_timing.nominal_prescaler  = 1;
   fdcan_nominal_bit_timing.nominal_time_seg1  = 251;
   fdcan_nominal_bit_timing.nominal_time_seg2  = 36;
-  fdcan_nominal_bit_timing.nominal_jump_width = 1;
+  fdcan_nominal_bit_timing.nominal_jump_width = 36;
 
   /* Data bit timing parameters are not used in Classic CAN or non-BRS modes */
   /* hal_fdcan_data_bit_timing_t fdcan_data_bit_timing;                      */
@@ -117,7 +117,7 @@ hal_fdcan_handle_t *mx_fdcan1_init(void)
   gpio_config.mode        = HAL_GPIO_MODE_ALTERNATE;
   gpio_config.output_type = HAL_GPIO_OUTPUT_PUSHPULL;
   gpio_config.pull        = HAL_GPIO_PULL_NO;
-  gpio_config.speed       = HAL_GPIO_SPEED_FREQ_LOW;
+  gpio_config.speed       = HAL_GPIO_SPEED_FREQ_VERY_HIGH;
   gpio_config.alternate   = HAL_GPIO_AF_9;
   HAL_GPIO_Init(HAL_GPIOB, PB9_PIN | PB8_PIN, &gpio_config);
 

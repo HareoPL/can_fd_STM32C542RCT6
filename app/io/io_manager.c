@@ -1,10 +1,19 @@
 /**
  * @file io_manager.c
  * @brief I/O Manager module implementing button debouncing, ADC mapping, and UART status logging.
+ *         ACC stacyjka    - SW0 -> bit 0 -> PB4  (CN10 pin 27)
+ *         Drzwi KIER      - SW1 -> bit 1 -> PB5  (CN10 pin 6)  
+ *         Drzwi INNE      - SW2 -> bit 2 -> PB6  (CN10 pin 3)
+ *         Światła         - SW3 -> bit 3 -> PB7  (CN10 pin 5)
+ *         Zamki ZAMKNIĘTE - SW4 -> bit 4 -> PB12 (CN10 pin 16)
+ *         Maska           - SW5 -> bit 5 -> PB13 (CN10 pin 30)
+ *         Awaryjne        - SW6 -> bit 6 -> PB14 (CN10 pin 28)
+ *         Hamulec RĘCZNY  - SW7 -> bit 7 -> PB15 (CN10 pin 26)
+ *
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
  * @LastEditors Jan Lukaszewicz
- * @LastEditTime 2026-10-13
+ * @LastEditTime 2026-10-14
  */
 
 #include "io_manager.h"
@@ -16,13 +25,43 @@
 #include "safe_printf.h"
 #include "main.h"
 
+#include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
+#include "queue.h"
 
 #include <stdint.h>
 #include <string.h>
 
 /** @brief Logging tag for the I/O Manager module. */
 #define TAG "IO_MGR"
+
+/** @brief Duration of preparatory pulse in milliseconds before the active edge transition. */
+#define RELAY_PULSE_DURATION_MS 40U
+
+/** @brief Maximum timeout in milliseconds to wait for debounced relay feedback. */
+#define RELAY_FB_TIMEOUT_MS     200U
+
+/** @brief Maximum number of retry attempts to switch the relay per command. */
+#define RELAY_MAX_ATTEMPTS      2U
+
+/** @brief Mutex protecting concurrent relay switching operations. */
+static SemaphoreHandle_t s_relay_mutex = NULL;
+
+/** @brief Queue for incoming asynchronous relay commands. */
+static QueueHandle_t s_relay_cmd_queue = NULL;
+
+/** @brief FreeRTOS task handle for the background relay worker task. */
+static TaskHandle_t s_relay_worker_task_handle = NULL;
+
+/** @brief Last commanded target state (0xFF = uninitialized, 0 = open, 1 = closed). */
+static uint8_t s_relay_last_target = 0xFFU;
+
+/** @brief Flag indicating if the last relay actuation attempt failed. */
+static bool s_relay_last_attempt_failed = false;
+
+/** @brief Flag indicating if the relay state has been successfully confirmed at least once. */
+static bool s_relay_confirmed = false;
 
 /** @brief Button and I/O sampling period in milliseconds. */
 #define IO_SAMPLE_PERIOD_MS     10U
@@ -45,7 +84,7 @@ static TaskHandle_t io_manager_task_handle = NULL;
 /** @brief Can message*/
 static CAN_msg_t can_msg = {0};
 
-
+static uint8_t btn = 0;
 /**
  * @brief Debouncer state structure for 8 parallel button inputs.
  */
@@ -55,6 +94,187 @@ typedef struct
     uint8_t index;                        /**< Current write index in the history buffer. */
     uint8_t stable_state;                 /**< Current debounced 8-bit button state. */
 } io_debounce_t;
+
+// getters
+uint8_t io_manager_getAllBtnState(void)
+{
+    return btn;
+}
+
+uint8_t io_manager_getRelayState(void)
+{
+    return (uint8_t)((btn & (1U << 4U)) != 0U);
+}
+
+/**
+ * @brief Polls the debounced relay state until it matches expected state or timeout expires.
+ * @param[in] expected_state Target state (0 or 1).
+ * @param[in] timeout_ms Maximum time to wait in milliseconds.
+ * @return true if feedback matches expected state within timeout, false otherwise.
+ */
+static bool io_manager_wait_for_relay_feedback(uint8_t expected_state, uint32_t timeout_ms)
+{
+    uint32_t elapsed_ms = 0U;
+    const uint32_t step_ms = 10U;
+
+    while (elapsed_ms < timeout_ms)
+    {
+        vTaskDelay(pdMS_TO_TICKS(step_ms));
+        elapsed_ms += step_ms;
+
+        if (io_manager_getRelayState() == expected_state)
+        {
+            return true;
+        }
+    }
+
+    return (io_manager_getRelayState() == expected_state);
+}
+
+bool io_manager_setRelayState(uint8_t target_state)
+{
+    target_state = (target_state != 0U) ? 1U : 0U;
+
+    if (s_relay_mutex != NULL)
+    {
+        (void)xSemaphoreTake(s_relay_mutex, portMAX_DELAY);
+    }
+
+    uint8_t current_fb = io_manager_getRelayState();
+
+    /* If the relay is already physically in the target state, do not cycle it!
+     * Toggling the pin to the opposite state when already in the desired state
+     * causes an unnecessary edge that momentarily turns the relay ON then OFF (or OFF then ON). */
+    if (current_fb == target_state)
+    {
+        /* Ensure PA8 matches desired level without generating opposing edges */
+        bsp_io_output_setPin(target_state != 0U);
+        s_relay_last_target = target_state;
+        s_relay_confirmed = true;
+        s_relay_last_attempt_failed = false;
+
+        if (s_relay_mutex != NULL)
+        {
+            (void)xSemaphoreGive(s_relay_mutex);
+        }
+        return true;
+    }
+
+    s_relay_last_target = target_state;
+    bool success = false;
+
+    for (uint8_t attempt = 1U; attempt <= RELAY_MAX_ATTEMPTS; attempt++)
+    {
+        if (target_state == 1U)
+        {
+            /* ZAMKNIJ (1 / ON):
+             * Edge: LOW -> HIGH.
+             * Force LOW state first, wait, then drive HIGH (rising edge). */
+            bsp_io_output_setPin(false);
+            vTaskDelay(pdMS_TO_TICKS(RELAY_PULSE_DURATION_MS));
+            bsp_io_output_setPin(true);
+        }
+        else
+        {
+            /* OTWÓRZ (0 / OFF):
+             * Edge: HIGH -> LOW.
+             * Force HIGH state first, wait, then drive LOW (falling edge). */
+            bsp_io_output_setPin(true);
+            vTaskDelay(pdMS_TO_TICKS(RELAY_PULSE_DURATION_MS));
+            bsp_io_output_setPin(false);
+        }
+
+        /* Wait for physical movement and debounced input feedback */
+        if (io_manager_wait_for_relay_feedback(target_state, RELAY_FB_TIMEOUT_MS))
+        {
+            success = true;
+            safe_printf(TAG, "Relay switched to %u (attempt %u)\r\n",
+                        (unsigned int)target_state, (unsigned int)attempt);
+            break;
+        }
+
+        safe_printf(TAG, "Relay attempt %u failed (target %u, fb %u), retrying...\r\n",
+                    (unsigned int)attempt, (unsigned int)target_state,
+                    (unsigned int)io_manager_getRelayState());
+    }
+
+    if (success)
+    {
+        s_relay_confirmed = true;
+        s_relay_last_attempt_failed = false;
+    }
+    else
+    {
+        s_relay_confirmed = false;
+        s_relay_last_attempt_failed = true;
+
+        /* Reset output pin to match current confirmed feedback to avoid
+         * leaving the control line continuously asserted on an unpowered circuit */
+        bsp_io_output_setPin(io_manager_getRelayState() != 0U);
+
+        safe_printf(TAG, "Relay ERROR: failed to reach target %u after %u attempts! fb=%u\r\n",
+                    (unsigned int)target_state, (unsigned int)RELAY_MAX_ATTEMPTS,
+                    (unsigned int)io_manager_getRelayState());
+    }
+
+    if (s_relay_mutex != NULL)
+    {
+        (void)xSemaphoreGive(s_relay_mutex);
+    }
+
+    return success;
+}
+
+bool io_manager_setRelayStateAsync(uint8_t target_state)
+{
+    target_state = (target_state != 0U) ? 1U : 0U;
+
+    if (s_relay_cmd_queue == NULL)
+    {
+        return false;
+    }
+
+    uint8_t current_fb = io_manager_getRelayState();
+
+    /* If relay is already confirmed and physically in the target state,
+     * drop redundant cyclic frames immediately without waking up the worker task */
+    if ((target_state == s_relay_last_target) &&
+        (s_relay_confirmed) &&
+        (!s_relay_last_attempt_failed) &&
+        (current_fb == target_state))
+    {
+        return true;
+    }
+
+    /* Send command to relay worker queue without blocking (timeout 0) */
+    if (xQueueSend(s_relay_cmd_queue, &target_state, 0) == pdPASS)
+    {
+        return true;
+    }
+
+    safe_printf(TAG, "RELAY QUEUE FULL: failed to enqueue target %u\r\n", (unsigned int)target_state);
+    return false;
+}
+
+/**
+ * @brief FreeRTOS worker task for asynchronous relay actuation and feedback verification.
+ * @param[in] pvParameters Unused task parameter.
+ */
+static void relay_worker_task(void *pvParameters)
+{
+    (void)pvParameters;
+    uint8_t target_cmd = 0U;
+
+    for (;;)
+    {
+        /* Block indefinitely until a relay command is enqueued */
+        if (xQueueReceive(s_relay_cmd_queue, &target_cmd, portMAX_DELAY) == pdTRUE)
+        {
+            /* Execute the physical edge-pulsing and feedback verification sequence */
+            (void)io_manager_setRelayState(target_cmd);
+        }
+    }
+}
 
 /**
  * @brief Initializes the button debouncer structure with a given initial state.
@@ -160,7 +380,7 @@ static void io_manager_task(void *pvParameters)
     {
         /* Sample and debounce 8 button inputs */
         uint8_t raw_btn = bsp_io_buttons_read();
-        uint8_t btn = io_debounce_update(&btn_db, raw_btn);
+        btn = io_debounce_update(&btn_db, raw_btn);
 
         elapsed_ms += IO_SAMPLE_PERIOD_MS;
         elapsed_can_ms += IO_SAMPLE_PERIOD_MS;
@@ -222,12 +442,54 @@ bool io_manager_init(void)
         return false;
     }
 
+    /* Initialize button cache with initial hardware state */
+    btn = bsp_io_buttons_read();
+
+    uint8_t boot_fb = io_manager_getRelayState();
+
+    /* Initialize relay tracking state with boot physical state */
+    s_relay_last_target = boot_fb;
+    s_relay_last_attempt_failed = false;
+    s_relay_confirmed = true;
+
+    /* Ensure output pin matches current physical state on boot */
+    bsp_io_output_setPin(boot_fb != 0U);
+
+    if (s_relay_mutex == NULL)
+    {
+        s_relay_mutex = xSemaphoreCreateMutex();
+        if (s_relay_mutex == NULL)
+        {
+            return false;
+        }
+    }
+
+    if (s_relay_cmd_queue == NULL)
+    {
+        s_relay_cmd_queue = xQueueCreate(4U, sizeof(uint8_t));
+        if (s_relay_cmd_queue == NULL)
+        {
+            return false;
+        }
+    }
+
     BaseType_t ret = xTaskCreate(io_manager_task,
                                  "io_manager",
                                  TASK_STACK_IO_MANAGER,
                                  NULL,
                                  TASK_PRIO_IO_MANAGER,
                                  &io_manager_task_handle);
+    if (ret != pdPASS)
+    {
+        return false;
+    }
+
+    ret = xTaskCreate(relay_worker_task,
+                      "relay_worker",
+                      TASK_STACK_RELAY_WORKER,
+                      NULL,
+                      TASK_PRIO_RELAY_WORKER,
+                      &s_relay_worker_task_handle);
     if (ret != pdPASS)
     {
         return false;

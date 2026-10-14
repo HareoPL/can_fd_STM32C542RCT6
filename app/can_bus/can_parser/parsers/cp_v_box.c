@@ -8,51 +8,41 @@
 #include "cp_v_box.h"
 #include "safe_printf.h"
 #include "can_msg_types.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "bsp_io.h"
+#include "io_manager.h"
 
 /** @brief Logging tag for the v-box parser profile. */
 #define TAG "CP_V_BOX"
 
-/** @brief Standard 11-bit CAN ID for external relay commands. */
-#define CAN_ID_RELAY_CMD    0x01F2F3F4
-// #define CAN_ID_RELAY_CMD    0x7FFU
+/** @brief Extended 29-bit CAN ID for external relay commands. */
+#define CAN_ID_RELAY_CMD    0x01F2F3F0
 
 
 /* --- Private Callbacks -----------------------------------------------------*/
 
 /**
- * @brief Handler callback for incoming relay commands (Standard ID: 0x7FF).
+ * @brief Handler callback for incoming relay commands (Extended ID: 0x01F2F3F0).
  * @param[in] msg Pointer to received CAN message.
  */
 static void on_v_box_relay_cmd_rx(const CAN_msg_t *msg)
 {
-    if (msg == NULL)
+    if (msg == NULL || msg->len < 3U)
     {
         return;
     }
-    static uint8_t relay_prevState = 0xFFU;
-    static uint8_t relay_state = 0xFFU;
 
-    if (msg->len > 0U)
-    {
-        relay_state = ((msg->data[2] & (1 << 0)) != 0);
+    uint8_t target_state = ((msg->data[2] & (1U << 0U)) != 0U) ? 1U : 0U;
 
-        if(relay_state != relay_prevState)
-        {
-            relay_prevState = relay_state;
-            bsp_io_output_setPin(relay_state);
-            
-            safe_printf(TAG, "RELAY CMD OK\r\n");
-        }
+    bool ok = io_manager_setRelayStateAsync(target_state);
 
-        safe_printf(TAG, "RELAY CMD (ID=0x%03lX, len=%u): state=%u\r\n",
-                (unsigned long)CAN_msg_get_can_id(msg->ident),
+    safe_printf(TAG, "RELAY CMD (ID=0x%08lX, len=%u): target=%u, %s\r\n",
+                (unsigned long)(msg->ident & CAN_EFF_MASK),
                 (unsigned int)msg->len,
-                (unsigned int)relay_state);
-    }
-   
+                (unsigned int)target_state,
+                ok ? "QUEUED" : "QUEUE FULL");
 }
 
 static void on_v_box_test(const CAN_msg_t *msg)

@@ -120,6 +120,9 @@ static bool stm32c5_set_nominal_baudrate(hal_fdcan_handle_t *hfdcan, can_baudrat
             return false;
     }
 
+    /* Set Synchronization Jump Width equal to Phase_Seg2 for robust bit resynchronization */
+    timing.nominal_jump_width = timing.nominal_time_seg2;
+
     return (HAL_FDCAN_SetNominalBitTiming(hfdcan, &timing) == HAL_OK);
 }
 

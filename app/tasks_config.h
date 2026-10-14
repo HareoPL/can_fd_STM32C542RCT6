@@ -4,7 +4,7 @@
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
  * @LastEditors Jan Lukaszewicz
- * @LastEditTime 2026-10-13
+ * @LastEditTime 2026-10-14
  */
 #ifndef TASKS_CONFIG_H
 #define TASKS_CONFIG_H
@@ -24,9 +24,12 @@
 #define TASK_PRIO_HEARTBEAT     (tskIDLE_PRIORITY + 1)
 #define TASK_STACK_HEARTBEAT    128U   // * 4 = 512 bytes
 
-// 
+// IO MANAGER TASK
 #define TASK_PRIO_IO_MANAGER    (tskIDLE_PRIORITY + 2U)
 #define TASK_STACK_IO_MANAGER   512U
 
+// RELAY ASYNC WORKER TASK
+#define TASK_PRIO_RELAY_WORKER  (tskIDLE_PRIORITY + 2U)
+#define TASK_STACK_RELAY_WORKER 256U   // * 4 = 1024 bytes
 
 #endif /* TASKS_CONFIG_H */
