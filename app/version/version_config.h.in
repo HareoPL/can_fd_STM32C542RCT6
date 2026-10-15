@@ -1,0 +1,24 @@
+/**
+ * @file version_config.h
+ * @brief Auto-generated version and build metadata from CMake.
+ * @note Automatically generated file by CMake - DO NOT EDIT MANUALLY.
+ */
+#ifndef VERSION_CONFIG_H
+#define VERSION_CONFIG_H
+
+#define FW_VERSION_MAJOR        @FW_VERSION_MAJOR@U
+#define FW_VERSION_MINOR        @FW_VERSION_MINOR@U
+#define FW_VERSION_PATCH        @FW_VERSION_PATCH@U
+#define FW_VERSION_STRING       "@FW_VERSION_STRING@"
+#define FW_GIT_COMMIT           "@GIT_COMMIT_HASH@"
+#define FW_GIT_DESCRIBE         "@GIT_DESCRIBE_STR@"
+#define FW_BUILD_TIMESTAMP      "@BUILD_TIMESTAMP_STR@"
+#define FW_BUILD_TYPE           "@CMAKE_BUILD_TYPE@"
+
+#define HW_TARGET_NAME          "@HW_TARGET_NAME@"
+#define HW_TARGET_MCU           "@HW_TARGET_MCU@"
+#define HW_VERSION_MAJOR        @HW_VERSION_MAJOR@U
+#define HW_VERSION_MINOR        @HW_VERSION_MINOR@U
+
+#endif /* VERSION_CONFIG_H */
+

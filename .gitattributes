@@ -16,6 +16,7 @@ Dockerfile text eol=lf
 .clangd text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
+*.in text eol=lf
 
 # Windows batch files (must have CRLF for cmd.exe)
 *.bat text eol=crlf

@@ -15,6 +15,7 @@
 5. [CAN Bus Subsystem: Architecture, Profiles, and Parsers](#5-can-bus-subsystem-architecture-profiles-and-parsers)
 6. [Bistable Edge-Triggered Relay Control Engine](#6-bistable-edge-triggered-relay-control-engine)
 7. [FreeRTOS Concurrency & Real-Time Task Model](#7-freertos-concurrency--real-time-task-model)
+8. [Firmware & Hardware Versioning Subsystem](#8-firmware--hardware-versioning-subsystem)
 
 ---
 
@@ -358,4 +359,53 @@ To adhere strictly to ARM Cortex-M and FreeRTOS kernel rules:
   ```c
   HAL_CORTEX_NVIC_SetPriority(FDCAN1_IT0_IRQn, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, 0);
   ```
+
+---
+
+## 8. Firmware & Hardware Versioning Subsystem
+
+The project employs an automated versioning architecture adhering to **Semantic Versioning 2.0 (SemVer)** and automated Git build metadata injection.
+
+### 8.1. Versioning Architecture & Data Structure
+The public API in [app/version/version.h](file:///c:/WORK/5_v-box/app/version/version.h) exposes immutable build descriptors:
+
+```c
+typedef struct {
+    uint8_t     fw_major;           /**< Firmware Semantic Version Major */
+    uint8_t     fw_minor;           /**< Firmware Semantic Version Minor */
+    uint8_t     fw_patch;           /**< Firmware Semantic Version Patch */
+    const char *fw_version_str;     /**< Full semantic version string (e.g. "v1.0.0") */
+    const char *git_commit;         /**< Git short commit hash (e.g. "d258caa") */
+    const char *git_describe;       /**< Git describe tag or commit string */
+    const char *build_timestamp;    /**< Build timestamp string (UTC) */
+    const char *build_type;         /**< Build type (e.g. "Debug", "Release") */
+    const char *hw_target_name;     /**< Target hardware board name */
+    const char *hw_target_mcu;      /**< Target MCU part number */
+    uint8_t     hw_major;           /**< Hardware Revision Major */
+    uint8_t     hw_minor;           /**< Hardware Revision Minor */
+} app_version_info_t;
+```
+
+### 8.2. CMake Build Automation
+During CMake configuration, `CMakeLists.txt` executes Git queries and dynamically generates `version_config.h` in the binary build directory:
+* `git describe --tags --always --dirty` $\rightarrow$ full tag or commit hash with dirty state.
+* `git rev-parse --short HEAD` $\rightarrow$ short commit hash.
+* `string(TIMESTAMP BUILD_TIMESTAMP_STR "%Y-%m-%d %H:%M:%S UTC")` $\rightarrow$ reproducible build timestamp.
+* Template substitution via `configure_file()` ensures only [app/version/version.c](file:///c:/WORK/5_v-box/app/version/version.c) is recompiled when commit metadata changes, preserving fast incremental build times.
+
+### 8.3. Diagnostic Boot Banner (UART)
+During early boot (before FreeRTOS scheduler initialization), `main()` invokes `version_printBootBanner()`. The output is transmitted over USART2 at 115200 baud:
+
+```text
+======================================================================
+  V-BOX TESTER - Automotive Telematics Test Bench & Signal Converter  
+======================================================================
+  Firmware   : v1.0.0 (d258caa) [debug_GCC_NUCLEO-C542RC]
+  Commit     : d258caa
+  Target MCU : STM32C542RCT6 (ARM Cortex-M33 @ 144 MHz)
+  Hardware   : NUCLEO-C542RC (Rev 1.0)
+  Build Time : 2026-10-15 12:28:34 UTC
+======================================================================
+```
+
 

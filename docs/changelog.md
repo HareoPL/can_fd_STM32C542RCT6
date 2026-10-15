@@ -13,7 +13,11 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Wprowadzenie dedykowanych skryptów oraz zadań w VS Code: `[Docker] Export Image to Archive` (zapis całego zamrożonego środowiska do pliku `vbox-builder_stm32c542.tar`) oraz `[Docker] Import Image from Archive` (natychmiastowe odtworzenie obrazu na dowolnym nowym komputerze bez dostępu do internetu).
   - Opracowano dedykowany skrypt strumieniujący `.devcontainer/docker_transfer.py`, który wzbogaca `docker save` i `docker load` o **dynamiczny, procentowy pasek postępu (0.0% – 100.0%)**, wskaźnik przepustowości dyskowej w MB/s, szacowany czas zakończenia (ETA), bezpieczną obsługę przerwania `Ctrl+C` oraz atomowy zapis pliku wyjściowego (z automatycznym fallbackiem do natywnego Dockera przy braku Pythona).
   - Integracja bezpośredniego łącza do firmowego archiwum SharePoint (`vbox-builder_stm32c542.tar`) oraz 4-krokowej procedury uruchomienia w `README.md` i `docs/build_and_development_guide.md`.
-- **Normalizacja znaków końca linii i ochrona przed fałszywymi modyfikacjami (`.gitattributes`):**
+- **Zautomatyzowany moduł wersjonowania Firmware i Hardware (`app/version/`, `CMakeLists.txt`):**
+  - Implementacja modułu `app/version/version.c` oraz `version.h` zgodnego z Semantic Versioning (SemVer 2.0).
+  - Automatyczna generacja metadanych w CMake (`version_config.h`): wstrzykiwanie taga i hasha commita Git (`git describe`, `git rev-parse`), znacznika czasu kompilacji (UTC), typu buildu oraz identyfikatora i rewizji sprzętu (`NUCLEO-C542RC`).
+  - Dodanie czytelnego banera diagnostycznego UART (`version_printBootBanner()`) wyświetlanego w `main()` natychmiast po resecie procesora.
+  - Rozszerzenie `safe_printf.c` o bezpieczne nadawanie przez UART również w fazie wczesnego rozruchu (przed wystartowaniem schedulera FreeRTOS).
   - Wdrożono regułę `* text=auto` oraz wymuszenie `LF` dla całego kodu źródłowego (`*.c`, `*.h`, `*.py`, `*.json`, `*.md`, `CMakeLists.txt`, `.clangd`), przy jednoczesnym zachowaniu `CRLF` dla skryptów wsadowych Windows (`*.bat`, `*.cmd`) oraz flag binarnych dla archiwów i wsadów (`*.bin`, `*.tar`, `*.elf`, `*.hex`).
   - Wyeliminowano problem oznaczania plików jako zmodyfikowanych w Git po operacjach `rebase` na systemie Windows.
 - **Kompleksowy podręcznik budowania i rozwoju projektu (`docs/build_and_development_guide.md`, `README.md`, `.vscode/extensions.json`):**

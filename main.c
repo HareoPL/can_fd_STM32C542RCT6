@@ -27,6 +27,7 @@
 #include "can_parser.h"
 #include "stm32c5_can_adapter.h"
 #include "io_manager.h"
+#include "version.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -52,6 +53,9 @@ int main(void)
   {
     return (-1);
   }
+
+  /* Print system boot banner with FW/HW version and build metadata */
+  version_printBootBanner();
 
   /* 2. Inicjalizacja instancji CAN1 (domyślna konfiguracja 500k lub z can1_inst.can_config) */
  // CAN NORMAL
