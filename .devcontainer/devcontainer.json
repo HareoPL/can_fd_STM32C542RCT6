@@ -1,0 +1,107 @@
+{
+    "name": "STM32C542 (NUCLEO-C542RC) - V-Box Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "remoteUser": "root",
+    "runArgs": [
+        "--privileged",
+        "--net=host",
+        "--device=/dev/bus/usb",
+        "-v", "/dev/bus/usb:/dev/bus/usb"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "stmicroelectronics.stm32-vscode-extension",
+                "stmicroelectronics.stm32cube-ide-build-analyzer",
+                "stmicroelectronics.stm32cube-ide-build-cmake",
+                "stmicroelectronics.stm32cube-ide-bundles-manager",
+                "stmicroelectronics.stm32cube-ide-clangd",
+                "stmicroelectronics.stm32cube-ide-core",
+                "stmicroelectronics.stm32cube-ide-debug-core",
+                "stmicroelectronics.stm32cube-ide-debug-generic-gdbserver",
+                "stmicroelectronics.stm32cube-ide-debug-jlink-gdbserver",
+                "stmicroelectronics.stm32cube-ide-debug-stlink-gdbserver",
+                "stmicroelectronics.stm32cube-ide-project-manager",
+                "stmicroelectronics.stm32cube-ide-registers",
+                "stmicroelectronics.stm32cube-ide-rtos",
+                "ms-vscode.cmake-tools",
+                "ms-vscode.cpptools",
+                "ms-vscode.cpptools-extension-pack",
+                "llvm-vs-code-extensions.vscode-clangd",
+                "akiramiyakoda.cppincludeguard",
+                "obkoro1.korofileheader",
+                "eclipse-cdt.memory-inspector",
+                "eclipse-cdt.serial-monitor",
+                "mhutchie.git-graph",
+                "eamodio.gitlens",
+                "marus25.cortex-debug"
+            ],
+            "settings": {
+                "cmake.sourceDirectory": "${workspaceFolder}",
+                "cmake.preferredGenerators": [
+                    "Ninja"
+                ],
+                "cmake.configureOnOpen": true,
+                "cmake.exportCompileCommandsFile": true,
+                "C_Cpp.intelliSenseEngine": "disabled",
+                "clangd.arguments": [
+                    "--compile-commands-dir=${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC",
+                    "--query-driver=/usr/local/bin/arm-none-eabi-gcc*,/usr/bin/arm-none-eabi-gcc*,${env:CUBE_BUNDLE_PATH}/gnu-tools-for-stm32/*/bin/arm-none-eabi-gcc*",
+                    "--header-insertion=never",
+                    "--background-index"
+                ],
+                "C/C++ Include Guard.Auto Include Guard Insertion For New File": true,
+                "C/C++ Include Guard.Auto Update Include Guard": true,
+                "C/C++ Include Guard.Macro Type": "Filename",
+                "C/C++ Include Guard.Remove Extension": false,
+                "C/C++ Include Guard.Comment Style": "Block",
+                "C/C++ Include Guard.Skip Comment Blocks": true,
+                "C/C++ Include Guard.Insert Blank Line": true,
+                "C/C++ Include Guard.Shorten Underscores": true,
+                "fileheader.customMade": {
+                    "FilePath": "only file name",
+                    "Description": "",
+                    "Author": "Jan Lukaszewicz <brak@email.com>",
+                    "Date": "Do not edit",
+                    "LastEditors": "Jan Lukaszewicz",
+                    "LastEditTime": "Do not edit"
+                },
+                "fileheader.configObj": {
+                    "createHeader": true,
+                    "autoAdd": true,
+                    "autoAlready": true,
+                    "wideSame": false,
+                    "colon": [" ", " "],
+                    "dateFormat": "YYYY-MM-DD",
+                    "specialOptions": {
+                        "FilePath": "file",
+                        "Description": "brief",
+                        "Author": "author",
+                        "Date": "date"
+                    },
+                    "language": {
+                        "h/c/cpp": {
+                            "head": "/**",
+                            "middle": " * @",
+                            "end": " */"
+                        }
+                    },
+                    "prohibitAutoAdd": [
+                        "json",
+                        "md",
+                        "txt"
+                    ]
+                },
+                "git.terminalAuthentication": false,
+                "git.autofetch": false
+            }
+        }
+    },
+    "containerEnv": {
+        "GIT_TERMINAL_PROMPT": "1",
+        "GIT_ASKPASS": ""
+    },
+    "postCreateCommand": "git config --global user.name 'Jan Łukaszewicz' && git config --global user.email 'pldevluk@gmail.com' && git config --global credential.helper ''"
+}

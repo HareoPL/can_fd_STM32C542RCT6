@@ -2,8 +2,56 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-15]
+### Dodane
+- **Kompletny ekosystem narzędziowy w kontenerze Docker (`.devcontainer/Dockerfile`):**
+  - Rozbudowa obrazu `vbox-builder` o narzędzia jakości kodu i QA: `cppcheck` (analiza statyczna / reguły MISRA-C), `doxygen` + `graphviz` (automatyczna dokumentacja HTML i grafy relacji), `srecord` (`srec_cat` - sumy kontrolne CRC32, scalanie bootloadera), `lcov` (analiza pokrycia kodu).
+  - Wsparcie dla magistrali CAN: `can-utils` (SocketCAN: `cansend`, `candump`, `canplayer`, `cangen`).
+  - Pełny stos Pythona pod aplikacje okienkowe GUI i telemetrię laboratoryjną (kompatybilny z WSLg): `python3-pyqt6`, `python3-pyqt5`, `pyqtgraph` (wykresy czasu rzeczywistego), `python-can`, `gs-usb` (adaptery CANable/Candlelight), `cantools` (bazy sygnałów `.dbc`), `pyserial`, `pyusb`, `pandas`, `numpy`, `openpyxl` (raporty Excel) oraz `pytest`.
+  - Narzędzia bezpiecznego rozruchu i kryptografii: `imgtool` (standard podpisywania obrazów MCUboot / ARM TF-M z wersjonowaniem i anti-rollback) oraz `python3-cryptography` / OpenSSL.
+- **Narzędzia długoterminowej archiwizacji i odtwarzania obrazu (`.devcontainer/export_image.bat`, `.devcontainer/import_image.bat`, `.devcontainer/docker_transfer.py`, `.vscode/tasks.json`):**
+  - Wprowadzenie dedykowanych skryptów oraz zadań w VS Code: `[Docker] Export Image to Archive` (zapis całego zamrożonego środowiska do pliku `vbox-builder_stm32c542.tar`) oraz `[Docker] Import Image from Archive` (natychmiastowe odtworzenie obrazu na dowolnym nowym komputerze bez dostępu do internetu).
+  - Opracowano dedykowany skrypt strumieniujący `.devcontainer/docker_transfer.py`, który wzbogaca `docker save` i `docker load` o **dynamiczny, procentowy pasek postępu (0.0% – 100.0%)**, wskaźnik przepustowości dyskowej w MB/s, szacowany czas zakończenia (ETA), bezpieczną obsługę przerwania `Ctrl+C` oraz atomowy zapis pliku wyjściowego (z automatycznym fallbackiem do natywnego Dockera przy braku Pythona).
+  - Integracja bezpośredniego łącza do firmowego archiwum SharePoint (`vbox-builder_stm32c542.tar`) oraz 4-krokowej procedury uruchomienia w `README.md` i `docs/build_and_development_guide.md`.
+- **Kompleksowy podręcznik budowania i rozwoju projektu (`docs/build_and_development_guide.md`, `README.md`, `.vscode/extensions.json`):**
+  - Opracowanie wyczerpującego przewodnika inżynierskiego opisującego architekturę kompilacji, budowanie natywne w Windows, budowanie w kontenerze Docker, procedurę programowania i debugowania ST-Link V3, archiwizację obrazów oraz rozwiązywanie problemów (FAQ).
+  - Przebudowa głównego pliku `README.md` z sekcją szybkiego startu, tabelą wszystkich zadań VS Code, opisem ujednoliconej ścieżki pliku binarnego oraz kompletnym indeksem linków do dokumentacji szczegółowej w katalogu `docs/`.
+  - Wprowadzenie pliku rekomendacji rozszerzeń `.vscode/extensions.json` oraz wyodrębnienie w `README.md` listy wtyczek niezbędnych (`stmicroelectronics.stm32-vscode-extension`, `ms-vscode.cmake-tools`, `llvm-vs-code-extensions.vscode-clangd`) i zalecanych (`cppincludeguard`, `korofileheader`, `serial-monitor`, `memory-inspector`).
+- **Automatyczny raport zajętości pamięci FLASH/RAM (`tools/print_memory.py`, `CMakeLists.txt`):**
+  - Opracowano dedykowany skrypt analityczny `tools/print_memory.py` uruchamiany po linkowaniu (`POST_BUILD`) zarówno pod Windows, jak i w kontenerze Docker.
+  - Generowanie czytelnej tabeli pamięci z podziałem na FLASH i RAM, procentowym zużyciem, wolną przestrzenią oraz wizualnym paskiem postępu.
+  - Dynamiczna detekcja zaalokowanej sterty FreeRTOS (`.bss.ucHeap` z `FreeRTOSConfig.h`), stosu głównego (`STACK_SIZE` / MSP), sterty libc (`HEAP_SIZE`) oraz sekcji autorskich (np. DMA, konfiguracja).
+  - Dodanie stopki podsumowującej z informacją o platformie (STM32C542RCT6 Cortex-M33 @ 144 MHz), pliku binarnym oraz statusie zdrowia pamięci (`OK` / `WARNING` / `CRITICAL`).
+
+- **Wytyczne zarządzania dokumentacją markdown (Docs-as-Code) w `.md`:**
+  - Wprowadzenie Sekcji 15 definiującej regułę *Single Source of Truth* i atomowej aktualizacji dokumentacji.
+  - Określenie ścisłej matrycy odpowiedzialności plików (`README.md`, `docs/project_documentation.md`, `docs/build_and_development_guide.md`, `docs/can_bus/can_parser_guide.md`, `docs/changelog.md`), zobowiązującej AI do równoległej synchronizacji właściwych dokumentów `.md` przy każdej zmianie kodu i architektury.
+
+### Zmienione
+- **Modernizacja konfiguracji kontenera deweloperskiego pod środowisko STM32C542 (`.devcontainer/`):**
+  - **Dopasowanie wtyczek VS Code (`.devcontainer/devcontainer.json`):** Synchronizacja 1:1 z działającym środowiskiem deweloperskim: dodano oficjalny pakiet STM32 VS Code Extension (`stmicroelectronics.stm32-vscode-extension` oraz moduły zależne: build-analyzer, build-cmake, bundles-manager, clangd, debug-core, debug-stlink-gdbserver, project-manager, registers, rtos), wtyczki inspekcyjne `eclipse-cdt.memory-inspector` i `eclipse-cdt.serial-monitor`, a także narzędzia formatowania `akiramiyakoda.cppincludeguard` i `obkoro1.korofileheader`.
+  - **Przeniesienie konfiguracji formatowania i Intellisense (`.devcontainer/devcontainer.json`):** Wstrzyknięto reguły generatora include guardów oraz szablonów Doxygen zgodne z `.vscode/settings.json`, a także skorygowano ścieżkę bazodanową clangd na `build/debug_GCC_NUCLEO-C542RC`.
+  - **Kompilacja i narzędzia bazowe (`.devcontainer/Dockerfile`):**
+    - Zainstalowano wersję CMake 3.31.5 (oficjalny pakiet binarny Kitware), eliminując krytyczny błąd blokujący konfigurację projektu wynikający z wymogu `cmake_minimum_required(VERSION 3.30)` (domyślny pakiet Ubuntu 24.04 zawierał zbyt starą wersję 3.28.3).
+    - Zaktualizowano toolchain ARM GNU do wersji 14.2.rel1, zgodnej z konfiguracją `cmake/GCC.14.3.1.cmake` oraz architekturą ARM Cortex-M33 (DSP, FPU).
+  - **Wsparcie dla programowania i debugowania ST-LINK V3 (`.devcontainer/Dockerfile`, `.devcontainer/stlink_manager.py`):**
+    - Rozszerzono reguły udev w kontenerze o pełną rodzinę identyfikatorów ST-LINK V2/V3 (PIDs: 3744, 3748, 374a, 374b, 374d, 374e, 374f, 3752, 3753, 3754, 3755, 3757).
+    - Dodano automatyczne wykrywanie programatorów ST-Link po masce VID:PID oraz obsłużono flagę `--force` w `stlink_manager.py`, co zapobiega błędom kolizji filtrów USB (np. USBPcap/Wireshark) podczas przekazywania urządzenia przez `usbipd-win`.
+  - **Aktualizacja dokumentacji kontenera (`.devcontainer/info.md`):** Zastąpiono przestarzałe instrukcje dla STM32H5 wyczerpującym poradnikiem dla mikrokontrolera STM32C542RCT6, procedurą podłączania ST-Link V3, kompilacją przez CMake Presets/Ninja oraz profilami debugera GDB Server.
+  - **Uporządkowanie i unifikacja zadań w VS Code (`.vscode/tasks.json`, `.devcontainer/docker_build.bat`):**
+    - Wprowadzono ujednoliconą ścieżkę dla gotowego pliku binarnego (`build/debug_GCC_NUCLEO-C542RC/v_box.elf`), do której kompiluje bezpośrednio Windows oraz do której kopiuje wynik Docker (z odizolowanego `build/docker/`).
+    - Zredukowano listę zadań do 6 czytelnych poleceń z prefiksami `[Windows]`, `[Docker]` oraz `[USB]`.
+    - Wdrożono jedno uniwersalne zadanie programowania mikrokontrolera `Flash Device` (`STM32_Programmer_CLI`), współdzielone przez kompozycje `[Windows] Build & Flash` oraz `[Docker] Build & Flash`.
+    - Usunięto nadmiarowe wywołanie `arm-none-eabi-size` ze skryptu `docker_build.bat`, eliminując powielony wydruk sekcji pamięci (CMakeLists.txt natywnie realizuje raport pamięci po zakończeniu linkowania).
+
 ## [2026-10-14]
 ### Dodane
+- **Kompleksowa dokumentacja techniczna projektu (`docs/project_documentation.md`, `README.md`):**
+  - Opracowanie wyczerpującej, technicznej dokumentacji projektu w języku angielskim opisującej wszystkie peryferia sprzętowe (FDCAN1, ADC1, USART2, GPIO, NVIC, SysTick), szczegółową tabelę GPIO (wejścia, wyjścia, ADC, piny złącza ST-Morpho CN7/CN10, aliasy Arduino), tekstowo-graficzny diagram wyprowadzeń Nucleo-64.
+  - Szczegółowy opis architektury podsystemu CAN (pipeline odbiorczy oparty na przerwaniach i semaforach, profile parserów, zero-extern getter, specyfikacja ramek `0x01F2F3F0` i `0x01F2F3F4`).
+  - Dokumentacja sterowania przekaźnikiem bistabilnym (generowanie zboczy, impuls przygotowawczy 40 ms, sprzężenie zwrotne PB12 z timeoutem 200 ms, obsługa zaniku zasilania, synchronizacja rozruchowa bez klikania, asynchroniczny worker).
+  - Architektura warstwy abstrakcji sprzętowej (kontrakty portów w czystym C, adaptery sprzętowe STM32C5, wzorzec gettera interfejsu).
+  - Pełny model współbieżności FreeRTOS (tabela zadań z priorytetami i stosem, diagram komunikacji międzyzadaniowej IPC, kolejki, mutexy oraz bezwzględna reguła priorytetów przerwań NVIC >= 5).
 - **Asynchroniczny model sterowania przekaźnikiem z kolejką zdarzeń (`app/io/io_manager.c`, `app/io/io_manager.h`, `app/tasks_config.h`, `app/can_bus/can_parser/parsers/cp_v_box.c`):**
   - Wprowadzenie dedykowanego zadania `relay_worker_task` (priorytet `tskIDLE_PRIORITY + 2`, stos 256 słów) oraz kolejki zleceń FreeRTOS `s_relay_cmd_queue`.
   - Dodanie nieblokującej funkcji `io_manager_setRelayStateAsync()` o czasie wykonania < 1 µs, dzięki czemu callback CAN `on_v_box_relay_cmd_rx` nie wstrzymuje zadania `can_rx_task` ani na milisekundę.

@@ -1,3 +1,11 @@
-build
+build/
+build_docker/
+/build_*/
 mx.scratch
 !.settings
+__pycache__/
+*.pyc
+*.tar
+*.tar.gz
+
+

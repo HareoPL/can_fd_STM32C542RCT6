@@ -39,7 +39,32 @@ app/can_bus/can_parser/parsers/
 
 ---
 
-## 3. Procedura Krok po Kroku
+## 3. Szybkie Tworzenie: Generator Python (`tools/create_parser.py`)
+
+Do projektu dołączone jest narzędzie automatyzujące tworzenie szkieletu nowego parsera:
+```bash
+python tools/create_parser.py <nazwa_parsera>
+```
+
+*Przykład:*
+```bash
+python tools/create_parser.py battery
+```
+
+**Co wykonuje generator automatycznie:**
+1. Weryfikuje unikalność nazwy i brak konfliktów w plikach i enumach.
+2. Tworzy `app/can_bus/can_parser/parsers/cp_battery.h` z prototypem gettera profilu.
+3. Tworzy `app/can_bus/can_parser/parsers/cp_battery.c` z gotowym szkieletem ID, callbacków, tablicy filtrów i instrukcjami TODO.
+4. Dopisuje `CAN_PARSER_ID_BATTERY` do `can_parser_id_t` w `can_parser.h`.
+5. Dopisuje `#include "cp_battery.h"` oraz rejestruje wpis w `s_parsers` w `can_parser.c`.
+6. Dopisuje `app/can_bus/can_parser/parsers/cp_battery.c` do `target_sources()` w `CMakeLists.txt`.
+
+*Opcje narzędzia:*
+* `--dry-run` – symulacja bez dokonywania zmian na dysku: `python tools/create_parser.py bms --dry-run`
+
+---
+
+## 4. Ręczna Procedura Krok po Kroku (Referencja)
 
 ### Krok 1: Utworzenie pliku nagłówkowego `cp_<nazwa>.h`
 

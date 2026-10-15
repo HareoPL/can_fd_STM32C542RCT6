@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "STM32: Flash Device",
+            "label": "Flash Device",
             "type": "process",
             "command": "STM32_Programmer_CLI",
             "args": [
@@ -25,7 +25,17 @@
             "problemMatcher": []
         },
         {
-            "label": "Build",
+            "label": "[Windows] Configure",
+            "type": "cmake",
+            "command": "configure",
+            "problemMatcher": []
+        },
+        {
+            "label": "[Windows] Build",
+            "dependsOn": [
+                "[Windows] Configure"
+            ],
+            "dependsOrder": "sequence",
             "type": "cmake",
             "command": "build",
             "group": {
@@ -37,41 +47,166 @@
             ]
         },
         {
-            "label": "Build & Flash",
-            "dependsOn": [
-                "Build",
-                "STM32: Flash Device"
-            ],
-            "dependsOrder": "sequence",
-            "problemMatcher": [],
-            "group": "build"
-        },
-        {
-            "label": "Clean",
+            "label": "[Windows] Clean",
             "type": "cmake",
             "command": "clean",
             "problemMatcher": []
         },
         {
-            "label": "Rebuild",
+            "label": "[Windows] Rebuild",
             "dependsOn": [
-                "Clean",
-                "Build"
+                "[Windows] Clean",
+                "[Windows] Build"
             ],
             "dependsOrder": "sequence",
-            "problemMatcher": [],
-            "group": "build"
+            "group": "build",
+            "problemMatcher": []
         },
         {
-            "label": "Rebuild & Flash",
+            "label": "[Windows] Build & Flash",
             "dependsOn": [
-                "Rebuild",
-                "STM32: Flash Device"
+                "[Windows] Build",
+                "Flash Device"
             ],
             "dependsOrder": "sequence",
-            "problemMatcher": [],
-            "group": "build"
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "[Docker] Build",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\docker_build.bat"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "[Docker] Rebuild",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\docker_build.bat",
+                "rebuild"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "[Docker] Build & Flash",
+            "dependsOn": [
+                "[Docker] Build",
+                "Flash Device"
+            ],
+            "dependsOrder": "sequence",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean All",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "if exist build rmdir /s /q build"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[USB] Attach ST-Link to Docker",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\stlink_attach.bat"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[USB] Detach ST-Link from Docker",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\stlink_detach.bat"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Docker] Export Image to Archive",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\export_image.bat"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Docker] Import Image from Archive",
+            "type": "process",
+            "command": "cmd.exe",
+            "args": [
+                "/c",
+                "${workspaceFolder}\\.devcontainer\\import_image.bat"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
         }
     ]
 }
-

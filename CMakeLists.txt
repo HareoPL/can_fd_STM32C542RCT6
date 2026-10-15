@@ -60,7 +60,15 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional linker libraries here
 )
 
-# Print memory usage at the end of the build
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+# Print memory footprint summary at the end of the build
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+  add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${CMAKE_PROJECT_NAME}> --build-type "${CMAKE_BUILD_TYPE}"
+  )
+else()
+  add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
-)
+  )
+endif()
+

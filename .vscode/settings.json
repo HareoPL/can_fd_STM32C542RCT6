@@ -1,4 +1,5 @@
 {
+    "cmake.configureOnOpen": true,
     "cmake.sourceDirectory": "${workspaceFolder}",
     "cmake.cmakePath": "cube-cmake",
     "cmake.configureArgs": [
