@@ -130,7 +130,7 @@ add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
   add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${CMAKE_PROJECT_NAME}> --build-type "${CMAKE_BUILD_TYPE}"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${CMAKE_PROJECT_NAME}> --compact
   )
 else()
   add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
@@ -202,7 +202,7 @@ add_custom_command(TARGET ${BOOT_TARGET} POST_BUILD
 # Print memory footprint summary for Bootloader
 if(Python3_FOUND)
   add_custom_command(TARGET ${BOOT_TARGET} POST_BUILD
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${BOOT_TARGET}> --build-type "${CMAKE_BUILD_TYPE}"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${BOOT_TARGET}> --compact
   )
 endif()
 

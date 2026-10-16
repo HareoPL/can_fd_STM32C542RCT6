@@ -37,11 +37,7 @@ docker run --rm -v "%CURRENT_DIR%:/workspaces/5_v-box" -w /workspaces/5_v-box vb
 
 if %errorlevel% equ 0 (
     echo.
-    echo [SUKCES] Kompilacja w Dockerze zakonczona pomyslnie!
-    echo [INFO] Gotowe pliki binarne w katalogu: build\debug_GCC_NUCLEO-C542RC\
-    echo   - MainApp    : v_box.elf, v_box.bin, v_box.hex
-    echo   - Bootloader : v_box_boot.elf, v_box_boot.bin, v_box_boot.hex
-    echo   - Merged     : v_box_full.bin, v_box_full.hex
+    echo [SUKCES] Kompilacja w Dockerze zakonczona pomyslnie! [build\debug_GCC_NUCLEO-C542RC\]
 ) else (
     echo.
     echo [BLAD] Kompilacja w Dockerze zakonczona niepowodzeniem.

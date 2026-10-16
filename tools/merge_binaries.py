@@ -2,12 +2,23 @@
 # -*- coding: utf-8 -*-
 """
 Merges STM32 CAN Bootloader (0x08000000, 32 KB) and Main Application (0x08008000)
-into a single composite firmware image (v_box_full.bin and v_box_full.hex).
+into a single composite firmware image (v_box_full.bin and v_box_full.hex),
+and displays a unified Dual-Target Firmware & Memory Summary dashboard.
 """
 
 import sys
 import os
 import argparse
+
+# Ensure tools directory is on sys.path to import print_memory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+try:
+    from print_memory import print_dual_dashboard
+except ImportError:
+    print_dual_dashboard = None
 
 BOOT_BASE_ADDR   = 0x08000000
 APP_BASE_ADDR    = 0x08008000
@@ -73,12 +84,6 @@ def main():
     boot_len = len(boot_data)
     app_len = len(app_data)
 
-    print("==============================================================================")
-    print("                    Firmware Binary Merger (Dual-Target)                      ")
-    print("==============================================================================")
-    print(f"  Bootloader Image : {args.boot} ({boot_len:,} bytes / {boot_len/1024.0:.2f} KB)")
-    print(f"  Application Image: {args.app} ({app_len:,} bytes / {app_len/1024.0:.2f} KB)")
-
     if boot_len > BOOT_MAX_SIZE:
         print(f"[ERROR] Bootloader size ({boot_len} B) exceeds 32 KB limit ({BOOT_MAX_SIZE} B)!", file=sys.stderr)
         sys.exit(1)
@@ -100,13 +105,15 @@ def main():
 
     write_intel_hex(out_hex, BOOT_BASE_ADDR, merged_data)
 
-    merged_len = len(merged_data)
-    print("------------------------------------------------------------------------------")
-    print(f"  Merged Binary    : {out_bin} ({merged_len:,} bytes / {merged_len/1024.0:.2f} KB)")
-    print(f"  Merged Intel HEX : {out_hex}")
-    print(f"  Flash Range      : 0x{BOOT_BASE_ADDR:08X} - 0x{BOOT_BASE_ADDR + merged_len - 1:08X}")
-    print("  Status           : SUCCESS (Ready for full flashing via ST-Link)")
-    print("==============================================================================")
+    # Locate map files and print unified dashboard
+    boot_map = os.path.splitext(args.boot)[0] + '.map'
+    app_map = os.path.splitext(args.app)[0] + '.map'
+
+    if print_dual_dashboard:
+        print_dual_dashboard(boot_map, app_map, args.boot, args.app, out_bin, out_hex)
+    else:
+        merged_len = len(merged_data)
+        print(f"[INFO] Merged image created: {out_bin} ({merged_len:,} bytes)")
 
 
 if __name__ == "__main__":

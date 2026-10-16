@@ -4,7 +4,8 @@
 Memory footprint analysis script for STM32 firmware builds.
 Parses the linker map file (or ELF file via size tool) and prints a detailed,
 human-readable summary table of FLASH and RAM usage, including FreeRTOS heap,
-system stack, and custom sections.
+system stack, and custom sections. Supports single-target (detailed or compact)
+and dual-target (Bootloader + MainApp) dashboard views.
 """
 
 import sys
@@ -53,11 +54,6 @@ def parse_map_file(map_path):
         return None
 
     # 1. Parse Memory Configuration
-    # Example:
-    # Memory Configuration
-    # Name             Origin             Length             Attributes
-    # ROM              0x08000000         0x00040000         xr
-    # RAM              0x20000000         0x00010000         xrw
     regions = {}
     mem_cfg_pattern = r'Memory Configuration\s+Name\s+Origin\s+Length\s+Attributes\s+(.*?)\n\n'
     mem_cfg_match = re.search(mem_cfg_pattern, content, re.DOTALL)
@@ -111,13 +107,11 @@ def parse_map_file(map_path):
                 })
 
     # 3. Detect FreeRTOS ucHeap size
-    # Look for .bss.ucHeap or ucHeap in map file
     freertos_heap = 0
     heap_match = re.search(r'\.bss\.ucHeap\s+0x[0-9a-fA-F]+\s+(0x[0-9a-fA-F]+)', content)
     if heap_match:
         freertos_heap = int(heap_match.group(1), 16)
     else:
-        # Fallback check for ucHeap symbol
         sym_match = re.search(r'0x[0-9a-fA-F]+\s+(0x[0-9a-fA-F]+)\s+.*?ucHeap', content)
         if sym_match:
             freertos_heap = int(sym_match.group(1), 16)
@@ -152,15 +146,20 @@ def find_region_for_addr(addr, regions):
     return None
 
 
-def print_memory_report(data, elf_path, build_type="Debug"):
-    """Formats and prints the complete memory summary table."""
+def analyze_memory(map_path):
+    """
+    Parses and processes map file into structured memory statistics.
+    """
+    data = parse_map_file(map_path)
+    if not data:
+        return None
+
     regions = data['regions']
     sections = data['sections']
     freertos_heap = data['freertos_heap']
     stack_size = data['stack_size']
     libc_heap_size = data['libc_heap_size']
 
-    # Classify sections into regions
     rom_sections = []
     ram_sections = []
     other_sections = {}
@@ -174,8 +173,6 @@ def print_memory_report(data, elf_path, build_type="Debug"):
         lma = sec['lma']
         name = sec['name']
 
-        # Check LMA (Load Memory Address) for ROM placement (e.g. .data initializers stored in Flash)
-        # NOLOAD sections (like .bss, .stack, .heap) do not consume ROM space
         is_noload = name in ('.bss', '.stack', '.heap') or 'noload' in name.lower() or name.startswith('.bss')
         if lma is not None and not is_noload:
             lma_reg = find_region_for_addr(lma, regions)
@@ -183,7 +180,6 @@ def print_memory_report(data, elf_path, build_type="Debug"):
                 rom_used += size
                 rom_sections.append({'name': f"{name} (LMA)", 'size': size, 'desc': 'Flash initializers'})
 
-        # Check VMA (Virtual/Execution Address)
         vma_reg = find_region_for_addr(vma, regions)
         if vma_reg == 'ROM':
             rom_used += size
@@ -210,21 +206,16 @@ def print_memory_report(data, elf_path, build_type="Debug"):
     rom_pct = (rom_used / rom_total) * 100.0 if rom_total else 0.0
     ram_pct = (ram_used / ram_total) * 100.0 if ram_total else 0.0
 
-    # Consolidate standard ROM sections
     code_size = sum(s['size'] for s in rom_sections if s['name'] in ('.text', '.vectors'))
     rodata_size = sum(s['size'] for s in rom_sections if s['name'] == '.rodata')
     data_lma_size = sum(s['size'] for s in rom_sections if '(LMA)' in s['name'])
-    
-    # Custom sections in ROM (not .text, .vectors, .rodata, .data LMA, .ARM*, .*array, .*table)
+
     std_rom_names = {'.text', '.vectors', '.rodata', '.ARM', '.init_array', '.fini_array', '.copy.table', '.zero.table'}
     custom_rom_sections = [
-        s for s in rom_sections 
+        s for s in rom_sections
         if s['name'] not in std_rom_names and '(LMA)' not in s['name']
     ]
 
-    # Calculate RAM subcategories
-    # Static & BSS is whatever RAM is used excluding FreeRTOS heap, main stack, and libc heap
-    # Check if stack and libc heap have dedicated sections (.stack, .heap)
     has_stack_sec = any(s['name'] == '.stack' for s in ram_sections)
     has_heap_sec = any(s['name'] == '.heap' for s in ram_sections)
 
@@ -236,25 +227,85 @@ def print_memory_report(data, elf_path, build_type="Debug"):
     if static_bss_used < 0:
         static_bss_used = 0
 
-    # Custom sections in RAM (not .data, .bss, .stack, .heap)
     std_ram_names = {'.data', '.bss', '.stack', '.heap'}
     custom_ram_sections = [s for s in ram_sections if s['name'] not in std_ram_names]
 
-    # Status evaluation
     status_label = "OK"
     if rom_pct >= 90.0 or ram_pct >= 90.0:
         status_label = "CRITICAL (Low Memory)"
     elif rom_pct >= 80.0 or ram_pct >= 80.0:
         status_label = "WARNING (Approaching Capacity)"
 
-    elf_basename = os.path.basename(elf_path)
+    return {
+        'regions': regions,
+        'sections': sections,
+        'rom_used': rom_used,
+        'rom_total': rom_total,
+        'rom_free': rom_free,
+        'rom_pct': rom_pct,
+        'ram_used': ram_used,
+        'ram_total': ram_total,
+        'ram_free': ram_free,
+        'ram_pct': ram_pct,
+        'freertos_heap': freertos_heap,
+        'code_size': code_size,
+        'rodata_size': rodata_size,
+        'data_lma_size': data_lma_size,
+        'custom_rom_sections': custom_rom_sections,
+        'static_bss_used': static_bss_used,
+        'stack_size': stack_size,
+        'libc_heap_size': libc_heap_size,
+        'custom_ram_sections': custom_ram_sections,
+        'other_sections': other_sections,
+        'status_label': status_label,
+    }
 
-    # Print Table
+
+def print_compact_report(stats, elf_path):
+    """Prints a concise 1-line memory summary for build progress logs."""
+    elf_name = os.path.basename(elf_path)
+    rom_used = stats['rom_used']
+    rom_total = stats['rom_total']
+    rom_pct = stats['rom_pct']
+    ram_used = stats['ram_used']
+    ram_total = stats['ram_total']
+    ram_pct = stats['ram_pct']
+    status = stats['status_label']
+    print(f"[MEM] {elf_name:<14}: FLASH {format_bytes(rom_used)} / {format_kb(rom_total)} ({rom_pct:5.1f}%) | RAM {format_bytes(ram_used)} / {format_kb(ram_total)} ({ram_pct:5.1f}%) [{status}]")
+
+
+def print_memory_report(stats, elf_path, build_type="Debug"):
+    """Formats and prints the complete detailed memory summary table."""
+    regions = stats['regions']
+    other_sections = stats['other_sections']
+    rom_used = stats['rom_used']
+    rom_total = stats['rom_total']
+    rom_free = stats['rom_free']
+    rom_pct = stats['rom_pct']
+    ram_used = stats['ram_used']
+    ram_total = stats['ram_total']
+    ram_free = stats['ram_free']
+    ram_pct = stats['ram_pct']
+    freertos_heap = stats['freertos_heap']
+    code_size = stats['code_size']
+    rodata_size = stats['rodata_size']
+    data_lma_size = stats['data_lma_size']
+    custom_rom_sections = stats['custom_rom_sections']
+    static_bss_used = stats['static_bss_used']
+    stack_size = stats['stack_size']
+    libc_heap_size = stats['libc_heap_size']
+    custom_ram_sections = stats['custom_ram_sections']
+    status_label = stats['status_label']
+
+    elf_basename = os.path.basename(elf_path)
+    is_boot = 'boot' in elf_basename.lower()
+    target_role = "CAN BOOTLOADER" if is_boot else "MAIN APPLICATION"
+
     line_sep = "=" * 78
     sub_sep = "-" * 78
 
     print(line_sep)
-    print("                   STM32C542RCT6 Memory Footprint Summary")
+    print(f"       STM32C542 {target_role} Memory Footprint ({elf_basename})")
     print(line_sep)
     print("  Memory Region        Used [B]     Total [B]     Free [B]   Usage [%]  Visual Bar")
     print(sub_sep)
@@ -279,37 +330,37 @@ def print_memory_report(data, elf_path, build_type="Debug"):
     for cs in custom_ram_sections:
         cs_pct = (cs['size'] / ram_total) * 100.0
         print(f"    |-- {cs['name']:<13} {format_bytes(cs['size'])}        -             -       {cs_pct:5.2f}%   (Custom RAM section)")
-    
+
     static_pct = (static_bss_used / ram_total) * 100.0
     print(f"    |-- Static & BSS  {format_bytes(static_bss_used)}        -             -        {static_pct:5.2f}%   (Globals, buffers)")
-    
+
     stack_pct = (stack_size / ram_total) * 100.0
     print(f"    |-- Main Stack    {format_bytes(stack_size)}        -             -        {stack_pct:5.2f}%   (MSP / ISR stack)")
-    
+
     libc_pct = (libc_heap_size / ram_total) * 100.0
     print(f"    `-- Libc Heap     {format_bytes(libc_heap_size)}        -             -        {libc_pct:5.2f}%   (sysmem / _sbrk)")
 
-    # 3. Additional Regions (if any defined in linker script)
+    # 3. Additional Regions (e.g. SHARED_RAM)
     for reg_name, reg_secs in other_sections.items():
         reg_total = regions.get(reg_name, {}).get('length', 0)
         reg_used = sum(s['size'] for s in reg_secs)
         reg_free = reg_total - reg_used
         reg_pct = (reg_used / reg_total) * 100.0 if reg_total else 0.0
         print(sub_sep)
-        print(f"  {reg_name:<18} {format_bytes(reg_used)}   {format_kb(reg_total)}   {format_bytes(reg_free)}    {reg_pct:5.2f}%   [{make_bar(reg_pct)}]")
-        for s in reg_secs:
-            print(f"    |-- {s['name']:<13} {format_bytes(s['size'])}        -             -           -")
+        if reg_name == 'SHARED_RAM':
+            print(f"  SHARED_RAM (IPC)   {format_bytes(reg_used)}       64 B          0 B     [Fixed]   (Mailbox @ 0x2000FFC0)")
+            for s in reg_secs:
+                print(f"    `-- {s['name']:<13} {format_bytes(s['size'])}        -             -           -     (Shared .noinit IPC)")
+        else:
+            print(f"  {reg_name:<18} {format_bytes(reg_used)}   {format_kb(reg_total)}   {format_bytes(reg_free)}    {reg_pct:5.2f}%   [{make_bar(reg_pct)}]")
+            for s in reg_secs:
+                print(f"    |-- {s['name']:<13} {format_bytes(s['size'])}        -             -           -")
 
     # Format build type display
     bt_lower = build_type.lower()
-    if 'debug' in bt_lower:
-        display_build_type = 'Debug'
-    elif 'release' in bt_lower:
-        display_build_type = 'Release'
-    else:
-        display_build_type = build_type
+    display_build_type = 'Debug' if 'debug' in bt_lower else ('Release' if 'release' in bt_lower else build_type)
 
-    # 4. User Requested Footer
+    # 4. Footer
     print(line_sep)
     print(f"  Target MCU : STM32C542RCT6 (ARM Cortex-M33 @ 144 MHz)")
     print(f"  Firmware   : {elf_basename} [{display_build_type}]")
@@ -317,21 +368,90 @@ def print_memory_report(data, elf_path, build_type="Debug"):
     print(line_sep)
 
 
+def print_dual_dashboard(boot_map, app_map, boot_bin=None, app_bin=None, merged_bin=None, merged_hex=None):
+    """Prints a consolidated Dual-Target Firmware & Memory Summary dashboard."""
+    boot_stats = analyze_memory(boot_map) if boot_map and os.path.exists(boot_map) else None
+    app_stats = analyze_memory(app_map) if app_map and os.path.exists(app_map) else None
+
+    boot_flash_used = boot_stats['rom_used'] if boot_stats else (os.path.getsize(boot_bin) if boot_bin and os.path.exists(boot_bin) else 0)
+    boot_flash_total = boot_stats['rom_total'] if boot_stats else (32 * 1024)
+    boot_flash_pct = (boot_flash_used / boot_flash_total) * 100.0 if boot_flash_total else 0.0
+
+    boot_ram_used = boot_stats['ram_used'] if boot_stats else 0
+    boot_ram_total = boot_stats['ram_total'] if boot_stats else (64 * 1024 - 64)
+    boot_ram_pct = (boot_ram_used / boot_ram_total) * 100.0 if boot_ram_total else 0.0
+
+    app_flash_used = app_stats['rom_used'] if app_stats else (os.path.getsize(app_bin) if app_bin and os.path.exists(app_bin) else 0)
+    app_flash_total = app_stats['rom_total'] if app_stats else (224 * 1024)
+    app_flash_pct = (app_flash_used / app_flash_total) * 100.0 if app_flash_total else 0.0
+
+    app_ram_used = app_stats['ram_used'] if app_stats else 0
+    app_ram_total = app_stats['ram_total'] if app_stats else (64 * 1024 - 64)
+    app_ram_pct = (app_ram_used / app_ram_total) * 100.0 if app_ram_total else 0.0
+
+    app_heap = app_stats['freertos_heap'] if app_stats else 0
+    app_heap_pct = (app_heap / app_ram_total) * 100.0 if app_ram_total else 0.0
+
+    if merged_bin and os.path.exists(merged_bin):
+        merged_size = os.path.getsize(merged_bin)
+    elif boot_bin and app_bin and os.path.exists(boot_bin) and os.path.exists(app_bin):
+        merged_size = 32768 + os.path.getsize(app_bin)
+    else:
+        merged_size = 32768 + app_flash_used
+
+    start_addr = 0x08000000
+    end_addr = start_addr + merged_size - 1
+
+    line_sep = "=" * 88
+    sub_sep = "-" * 88
+
+    print(line_sep)
+    print("                   STM32C542 Dual-Target Firmware & Memory Summary                      ")
+    print(line_sep)
+    print("  Target / Component      Flash Address        Flash Usage [B]       RAM Usage [B]      ")
+    print(sub_sep)
+    print(f"  CAN Bootloader (Os)     0x08000000 ( 32 KB)  {format_bytes(boot_flash_used)} ({boot_flash_pct:5.1f}%)     {format_bytes(boot_ram_used)} ({boot_ram_pct:5.1f}%)  ")
+    print(f"  Main Application (RTOS) 0x08008000 (224 KB)  {format_bytes(app_flash_used)} ({app_flash_pct:5.1f}%)     {format_bytes(app_ram_used)} ({app_ram_pct:5.1f}%)  ")
+    if app_heap > 0:
+        print(f"    `-- FreeRTOS ucHeap   -                     -                    {format_bytes(app_heap)} ({app_heap_pct:5.1f}%)  ")
+    print(f"  Shared IPC (.noinit)    0x2000FFC0 (  64 B)   -                        64 B (Fixed)   ")
+    print(sub_sep)
+    print(f"  Composite Flash Range:  0x{start_addr:08X} - 0x{end_addr:08X} ({merged_size:,} bytes / {merged_size/1024.0:.1f} KB)")
+    print("  Output Files (build/debug_GCC_NUCLEO-C542RC/):")
+    print("    - Merged Full Image : v_box_full.hex | v_box_full.bin (Ready for ST-Link)")
+    print("    - Main Application  : v_box.elf | v_box.hex | v_box.bin (OTA Update)")
+    print("    - CAN Bootloader    : v_box_boot.elf | v_box_boot.hex | v_box_boot.bin")
+    print(line_sep)
+
+
 def main():
     parser = argparse.ArgumentParser(description="STM32 Firmware Memory Footprint Reporter")
-    parser.add_argument("elf_or_map", help="Path to ELF binary or .map file")
+    parser.add_argument("elf_or_map", nargs="?", default=None, help="Path to ELF binary or .map file")
     parser.add_argument("--build-type", default="Debug", help="Build type (Debug, Release, etc.)")
+    parser.add_argument("--compact", action="store_true", help="Print compact 1-line summary")
+    parser.add_argument("--dual", nargs=2, metavar=("BOOT_MAP", "APP_MAP"), help="Print dual-target dashboard")
+    parser.add_argument("--boot-bin", help="Path to boot binary for dual dashboard")
+    parser.add_argument("--app-bin", help="Path to app binary for dual dashboard")
+    parser.add_argument("--merged-bin", help="Path to merged binary for dual dashboard")
+    parser.add_argument("--merged-hex", help="Path to merged hex for dual dashboard")
     args = parser.parse_args()
 
-    input_path = args.elf_or_map
+    if args.dual:
+        boot_map = args.dual[0]
+        app_map = args.dual[1]
+        print_dual_dashboard(boot_map, app_map, args.boot_bin, args.app_bin, args.merged_bin, args.merged_hex)
+        sys.exit(0)
 
-    # Determine map file path
+    input_path = args.elf_or_map
+    if not input_path:
+        parser.print_help()
+        sys.exit(1)
+
     if input_path.endswith('.map'):
         map_path = input_path
         elf_path = input_path[:-4] + '.elf'
     else:
         elf_path = input_path
-        # Look for .map next to .elf
         base = os.path.splitext(input_path)[0]
         map_path = base + '.map'
 
@@ -339,12 +459,15 @@ def main():
         print(f"[WARN] Map file '{map_path}' not found. Cannot generate memory report.")
         sys.exit(0)
 
-    data = parse_map_file(map_path)
-    if not data:
+    stats = analyze_memory(map_path)
+    if not stats:
         print(f"[WARN] Could not parse map file '{map_path}'.")
         sys.exit(0)
 
-    print_memory_report(data, elf_path, args.build_type)
+    if args.compact:
+        print_compact_report(stats, elf_path)
+    else:
+        print_memory_report(stats, elf_path, args.build_type)
 
 
 if __name__ == '__main__':

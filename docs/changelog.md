@@ -53,6 +53,11 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Przekierowanie callbacków z profilu `cp_boot_ota.c` do kolejki workera w czasie < 1 µs.
 
 ### Zmienione
+- **Optymalizacja i czytelność raportowania pamięci oraz scalania wsadów (`tools/print_memory.py`, `tools/merge_binaries.py`, `CMakeLists.txt`, `.devcontainer/docker_build.bat`):**
+  - Wprowadzono skonsolidowany pulpit podsumowania Dual-Target (`print_dual_dashboard`), prezentujący w jednym, czytelnym zestawieniu (14 linii) wykorzystanie pamięci Flash, RAM, stosu i sterty FreeRTOS dla Bootloadera i Aplikacji oraz parametry scalonego obrazu.
+  - Wyeliminowano wielokrotne, nakładające się tabele pamięci podczas równoległego budowania w Ninja – poszczególne targety kompilacji raportują postęp w zwięzłym formacie jednolinijkowym (`[MEM] ...`), a pełny raport wyświetlany jest jednokrotnie na koniec procesu łączenia wsadów.
+  - Usunięto mylący pasek 100% zajętości pamięci dla bufora nieresetowalnego `SHARED_RAM` (oznaczono jako stały bufor IPC mailbox `[Fixed]`).
+  - Dodano wyraźne rozróżnienie ról targetów w nagłówkach raportów szczegółowych (`CAN BOOTLOADER` vs `MAIN APPLICATION`).
 - **Aktywacja sterowników HAL Flash (`generated/hal/stm32c5xx_hal_conf.h`, `CMakeLists.txt`):**
   - Odblokowanie makr `USE_HAL_FLASH_PROGRAM_BY_ADDR`, `USE_HAL_FLASH_ERASE_BY_ADDR`, `USE_HAL_FLASH_ERASE_PAGE`, `USE_HAL_FLASH_GET_LAST_ERRORS` oraz włączenie pliku `stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c` do kompilacji obu targetów.
 - **Wieloplatformowość modułu `safe_printf` dla systemów RTOS i bare-metal (`app/logging/safe_printf.c`):**
