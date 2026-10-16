@@ -1,6 +1,6 @@
 /**
  * @file stm32c5_can_adapter.c
- * @brief STM32C5 hardware adapter implementation for CAN and CAN FD bus.
+ * @brief STM32C5 hardware adapter implementation for CAN and CAN FD bus (CAN1 and CAN2).
  */
 
 #include "stm32c5_can_adapter.h"
@@ -10,6 +10,7 @@
 #include "stm32c5xx_hal_fdcan.h"
 #include "stm32c5xx_hal_cortex.h"
 #include "mx_fdcan1.h"
+#include "mx_fdcan2.h"
 #include <stddef.h>
 
 /**
@@ -22,6 +23,21 @@ static void* s_can1_rx_context = NULL;
  * @brief Active configuration cached for CAN1 instance.
  */
 static can_config_t s_can1_config = {
+    .frame_format = CAN_MSG_FRAME_FORMAT_CAN,
+    .baudrate_normal = CAN_BAUDRATE_500K,
+    .baudrate_FD = CAN_BAUDRATE_CUSTOM
+};
+
+/**
+ * @brief Variables storing RX notification callback and context for CAN2.
+ */
+static can_rx_notify_fn s_can2_rx_cb = NULL;
+static void* s_can2_rx_context = NULL;
+
+/**
+ * @brief Active configuration cached for CAN2 instance.
+ */
+static can_config_t s_can2_config = {
     .frame_format = CAN_MSG_FRAME_FORMAT_CAN,
     .baudrate_normal = CAN_BAUDRATE_500K,
     .baudrate_FD = CAN_BAUDRATE_CUSTOM
@@ -83,7 +99,7 @@ static bool stm32c5_set_nominal_baudrate(hal_fdcan_handle_t *hfdcan, can_baudrat
 {
     if (baudrate == CAN_BAUDRATE_CUSTOM)
     {
-        /* Preserve default hardware configuration from mx_fdcan1.c */
+        /* Preserve default hardware configuration */
         return true;
     }
 
@@ -187,14 +203,19 @@ static bool stm32c5_is_brs_enabled(const can_config_t *config)
 }
 
 /**
- * @brief Initializes CAN1 controller with given configuration (frame format, nominal and FD bit rates).
- * @param[in] config Pointer to CAN configuration parameters.
+ * @brief Generic initialization routine for any FDCAN instance.
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @param[in,out] p_cached_config Pointer to cached config structure.
+ * @param[in] config Pointer to desired CAN configuration.
+ * @param[in] irq_n NVIC IRQ number for this FDCAN instance line 0.
  * @return true on success, false on error.
  */
-static bool stm32c5_can1_init(const can_config_t *config)
+static bool stm32c5_can_init_generic(hal_fdcan_handle_t *hfdcan,
+                                     can_config_t *p_cached_config,
+                                     const can_config_t *config,
+                                     IRQn_Type irq_n)
 {
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
-    if (hfdcan == NULL)
+    if (hfdcan == NULL || p_cached_config == NULL)
     {
         return false;
     }
@@ -211,39 +232,39 @@ static bool stm32c5_can1_init(const can_config_t *config)
     /* Cache active configuration */
     if (config != NULL)
     {
-        s_can1_config = *config;
+        *p_cached_config = *config;
     }
     else
     {
-        s_can1_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN;
-        s_can1_config.baudrate_normal = CAN_BAUDRATE_500K;
-        s_can1_config.baudrate_FD = CAN_BAUDRATE_CUSTOM;
+        p_cached_config->frame_format = CAN_MSG_FRAME_FORMAT_CAN;
+        p_cached_config->baudrate_normal = CAN_BAUDRATE_500K;
+        p_cached_config->baudrate_FD = CAN_BAUDRATE_CUSTOM;
     }
 
     /* Configure nominal bit rate */
-    if (!stm32c5_set_nominal_baudrate(hfdcan, s_can1_config.baudrate_normal))
+    if (!stm32c5_set_nominal_baudrate(hfdcan, p_cached_config->baudrate_normal))
     {
         return false;
     }
 
     /* Configure frame format (Classic CAN vs CAN FD) */
-    if (s_can1_config.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
+    if (p_cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
     {
-        if (stm32c5_is_brs_enabled(&s_can1_config))
+        if (stm32c5_is_brs_enabled(p_cached_config))
         {
             if (HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_BRS) != HAL_OK)
             {
                 return false;
             }
 
-            if (!stm32c5_set_data_baudrate(hfdcan, s_can1_config.baudrate_FD))
+            if (!stm32c5_set_data_baudrate(hfdcan, p_cached_config->baudrate_FD))
             {
                 return false;
             }
         }
         else
         {
-            /* CAN FD mode without bit rate switching (data baudrate equals nominal or not specified) */
+            /* CAN FD mode without bit rate switching */
             if (HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_NO_BRS) != HAL_OK)
             {
                 return false;
@@ -260,8 +281,8 @@ static bool stm32c5_can1_init(const can_config_t *config)
     }
 
     /* Set safe interrupt priority for FreeRTOS (>= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY) */
-    HAL_CORTEX_NVIC_SetPriority(FDCAN1_IT0_IRQn, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, HAL_CORTEX_NVIC_SUB_PRIORITY_0);
-    HAL_CORTEX_NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
+    HAL_CORTEX_NVIC_SetPriority(irq_n, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, HAL_CORTEX_NVIC_SUB_PRIORITY_0);
+    HAL_CORTEX_NVIC_EnableIRQ(irq_n);
 
     /* Assign Rx FIFO 0 interrupt group to line 0 and enable */
     HAL_FDCAN_SetInterruptGroupsToLine(hfdcan, HAL_FDCAN_IT_GROUP_RX_FIFO_0, HAL_FDCAN_IT_LINE_0);
@@ -278,16 +299,21 @@ static bool stm32c5_can1_init(const can_config_t *config)
 }
 
 /**
- * @brief Transmits a CAN or CAN FD message.
+ * @brief Generic message transmission routine for any FDCAN instance.
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @param[in] cached_config Pointer to active configuration.
  * @param[in] id CAN Identifier (Standard or Extended).
  * @param[in] data Pointer to payload data buffer.
  * @param[in] len Length of data in bytes.
  * @return true on success, false if TX FIFO is full or parameter error.
  */
-static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
+static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
+                                         const can_config_t *cached_config,
+                                         uint32_t id,
+                                         const uint8_t* data,
+                                         uint8_t len)
 {
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
-    if (hfdcan == NULL || data == NULL)
+    if (hfdcan == NULL || cached_config == NULL || data == NULL)
     {
         return false;
     }
@@ -307,7 +333,7 @@ static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
     }
 
     hal_fdcan_tx_header_t tx_header = {0};
-    uint8_t max_payload = (s_can1_config.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? 64U : 8U;
+    uint8_t max_payload = (cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? 64U : 8U;
     uint8_t payload_len = (len > max_payload) ? max_payload : len;
 
     tx_header.b.data_length = bytes_to_fdcan_dlc(payload_len);
@@ -315,10 +341,10 @@ static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
     tx_header.b.identifier = CAN_msg_get_can_id(id);
     tx_header.b.frame_type = HAL_FDCAN_FRAME_DATA;
 
-    if (s_can1_config.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
+    if (cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
     {
         tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN;
-        tx_header.b.bit_rate_switch = stm32c5_is_brs_enabled(&s_can1_config)
+        tx_header.b.bit_rate_switch = stm32c5_is_brs_enabled(cached_config)
                                       ? HAL_FDCAN_BIT_RATE_SWITCH_ON
                                       : HAL_FDCAN_BIT_RATE_SWITCH_OFF;
     }
@@ -337,15 +363,18 @@ static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
 }
 
 /**
- * @brief Receives a CAN or CAN FD message from Rx FIFO 0.
+ * @brief Generic message reception routine from Rx FIFO 0.
+ * @param[in] hfdcan FDCAN peripheral handle.
  * @param[out] id Pointer to variable storing received identifier.
  * @param[out] data Buffer for received payload.
  * @param[out] len Pointer to variable storing received data length.
  * @return true on success, false if FIFO is empty or error occurred.
  */
-static bool stm32c5_can1_receive(uint32_t* id, uint8_t* data, uint8_t* len)
+static bool stm32c5_can_receive_generic(hal_fdcan_handle_t *hfdcan,
+                                        uint32_t* id,
+                                        uint8_t* data,
+                                        uint8_t* len)
 {
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
     if (hfdcan == NULL || id == NULL || data == NULL || len == NULL)
     {
         return false;
@@ -378,44 +407,16 @@ static bool stm32c5_can1_receive(uint32_t* id, uint8_t* data, uint8_t* len)
 }
 
 /**
- * @brief Attaches RX notification callback for CAN1.
- * @param[in] cb Callback function pointer.
- * @param[in] context User context passed to callback.
- */
-static void stm32c5_can1_attach_rx_callback(can_rx_notify_fn cb, void* context)
-{
-    s_can1_rx_cb = cb;
-    s_can1_rx_context = context;
-}
-
-/**
- * @brief Callback invoked from interrupt (ISR) upon Rx FIFO 0 events.
+ * @brief Generic filter configuration routine for any FDCAN instance.
  * @param[in] hfdcan FDCAN peripheral handle.
- * @param[in] rx_fifo0_interrupts FIFO 0 interrupt flags.
- */
-void HAL_FDCAN_RxFifo0Callback(hal_fdcan_handle_t *hfdcan, uint32_t rx_fifo0_interrupts)
-{
-    if (hfdcan == mx_fdcan1_gethandle())
-    {
-        if ((rx_fifo0_interrupts & (FDCAN_IR_RF0N | FDCAN_IR_RF0F)) != 0U)
-        {
-            if (s_can1_rx_cb != NULL)
-            {
-                s_can1_rx_cb(s_can1_rx_context);
-            }
-        }
-    }
-}
-
-/**
- * @brief Configures acceptance filters in STM32C5 FDCAN Message RAM.
  * @param[in] filters Array of filter configurations.
  * @param[in] num_filters Number of filters in the array (0 to accept all frames).
  * @return true on success, false on error.
  */
-static bool stm32c5_can1_set_filter(const can_filter_t *filters, uint32_t num_filters)
+static bool stm32c5_can_set_filter_generic(hal_fdcan_handle_t *hfdcan,
+                                           const can_filter_t *filters,
+                                           uint32_t num_filters)
 {
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
     if (hfdcan == NULL)
     {
         return false;
@@ -534,9 +535,36 @@ static bool stm32c5_can1_set_filter(const can_filter_t *filters, uint32_t num_fi
     return true;
 }
 
-/**
- * @brief Hardware interface constant for CAN1.
- */
+/* ===========================================================================
+ * CAN1 Implementation
+ * =========================================================================== */
+
+static bool stm32c5_can1_init(const can_config_t *config)
+{
+    return stm32c5_can_init_generic(mx_fdcan1_gethandle(), &s_can1_config, config, FDCAN1_IT0_IRQn);
+}
+
+static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
+{
+    return stm32c5_can_transmit_generic(mx_fdcan1_gethandle(), &s_can1_config, id, data, len);
+}
+
+static bool stm32c5_can1_receive(uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    return stm32c5_can_receive_generic(mx_fdcan1_gethandle(), id, data, len);
+}
+
+static void stm32c5_can1_attach_rx_callback(can_rx_notify_fn cb, void* context)
+{
+    s_can1_rx_cb = cb;
+    s_can1_rx_context = context;
+}
+
+static bool stm32c5_can1_set_filter(const can_filter_t *filters, uint32_t num_filters)
+{
+    return stm32c5_can_set_filter_generic(mx_fdcan1_gethandle(), filters, num_filters);
+}
+
 static const can_interface_t s_stm32c5_can1_interface = {
     .init = stm32c5_can1_init,
     .transmit = stm32c5_can1_transmit,
@@ -548,4 +576,79 @@ static const can_interface_t s_stm32c5_can1_interface = {
 const can_interface_t *stm32c5_can1_interfaceGet(void)
 {
     return &s_stm32c5_can1_interface;
+}
+
+/* ===========================================================================
+ * CAN2 Implementation
+ * =========================================================================== */
+
+static bool stm32c5_can2_init(const can_config_t *config)
+{
+    return stm32c5_can_init_generic(mx_fdcan2_gethandle(), &s_can2_config, config, FDCAN2_IT0_IRQn);
+}
+
+static bool stm32c5_can2_transmit(uint32_t id, const uint8_t* data, uint8_t len)
+{
+    return stm32c5_can_transmit_generic(mx_fdcan2_gethandle(), &s_can2_config, id, data, len);
+}
+
+static bool stm32c5_can2_receive(uint32_t* id, uint8_t* data, uint8_t* len)
+{
+    return stm32c5_can_receive_generic(mx_fdcan2_gethandle(), id, data, len);
+}
+
+static void stm32c5_can2_attach_rx_callback(can_rx_notify_fn cb, void* context)
+{
+    s_can2_rx_cb = cb;
+    s_can2_rx_context = context;
+}
+
+static bool stm32c5_can2_set_filter(const can_filter_t *filters, uint32_t num_filters)
+{
+    return stm32c5_can_set_filter_generic(mx_fdcan2_gethandle(), filters, num_filters);
+}
+
+static const can_interface_t s_stm32c5_can2_interface = {
+    .init = stm32c5_can2_init,
+    .transmit = stm32c5_can2_transmit,
+    .receive = stm32c5_can2_receive,
+    .attach_rx_callback = stm32c5_can2_attach_rx_callback,
+    .set_filter = stm32c5_can2_set_filter
+};
+
+const can_interface_t *stm32c5_can2_interfaceGet(void)
+{
+    return &s_stm32c5_can2_interface;
+}
+
+/* ===========================================================================
+ * Common Interrupt Callback Handler
+ * =========================================================================== */
+
+/**
+ * @brief Callback invoked from interrupt (ISR) upon Rx FIFO 0 events for either FDCAN1 or FDCAN2.
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @param[in] rx_fifo0_interrupts FIFO 0 interrupt flags.
+ */
+void HAL_FDCAN_RxFifo0Callback(hal_fdcan_handle_t *hfdcan, uint32_t rx_fifo0_interrupts)
+{
+    if ((rx_fifo0_interrupts & (FDCAN_IR_RF0N | FDCAN_IR_RF0F)) == 0U)
+    {
+        return;
+    }
+
+    if (hfdcan == mx_fdcan1_gethandle())
+    {
+        if (s_can1_rx_cb != NULL)
+        {
+            s_can1_rx_cb(s_can1_rx_context);
+        }
+    }
+    else if (hfdcan == mx_fdcan2_gethandle())
+    {
+        if (s_can2_rx_cb != NULL)
+        {
+            s_can2_rx_cb(s_can2_rx_context);
+        }
+    }
 }

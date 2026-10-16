@@ -1,6 +1,6 @@
 /**
   ******************************************************************************
-  * file           : main.h
+ * @file main.h
   * brief          : Header for main.c file.
   *                  This file contains the common defines of the application.
   ******************************************************************************
@@ -32,6 +32,7 @@ extern "C" {
 /* Exported macros -----------------------------------------------------------*/
 /* Exported variables --------------------------------------------------------*/
 extern can_instance_t can1_inst;
+extern can_instance_t can2_inst;
 
 /* Exported functions ------------------------------------------------------- */
 

@@ -102,6 +102,12 @@ system_status_t mx_system_init(void)
     return SYSTEM_PERIPHERAL_ERROR;
   }
 
+  /** FDCAN2 */
+  if (mx_fdcan2_init() == NULL)
+  {
+    return SYSTEM_PERIPHERAL_ERROR;
+  }
+
   /** USART2 */
   if (mx_usart2_uart_init() == NULL)
   {

@@ -2,6 +2,28 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-16]
+### Dodane
+- **Inicjalizacja i uruchomienie peryferium FDCAN2 dla Bootloadera / OTA (`generated/hal/mx_fdcan2.h`, `mx_fdcan2.c`, `mx_system.c`, `mx_hal_def.h`, `STM32_HAL_Driver_codegen.cmake`):**
+  - Implementacja niskopoziomowego sterownika `FDCAN2` na mikrokontrolerze STM32C542RCT6 (zegar 144 MHz, prescaler 1, timing: seg1=251, seg2=36, sjw=36 -> 500 kbps Classic CAN 2.0, próbkowanie 87.5%).
+  - Konfiguracja wyprowadzeń GPIO na Porcie B: `PB5` (RX, złącze CN10 pin 6) oraz `PB6` (TX, złącze CN10 pin 3) w trybie Alternate Function AF9.
+  - Konfiguracja przerwania `FDCAN2_IT0_IRQn` z bezpiecznym priorytetem FreeRTOS równym 5 (`HAL_CORTEX_NVIC_PREEMP_PRIORITY_5` >= `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`) oraz rejestracja procedury obsługi `FDCAN2_IT0_IRQHandler()`.
+- **Profil parsera CAN `cp_boot_ota` (`app/can_bus/can_parser/parsers/cp_boot_ota.h`, `cp_boot_ota.c`, `CMakeLists.txt`):**
+  - Wygenerowanie szkieletu narzędziem `tools/create_parser.py boot_ota` i rejestracja identyfikatora `CAN_PARSER_ID_BOOT_OTA` w dyspozytorze `can_parser.c`.
+  - Konfiguracja filtrów sprzętowych M_CAN Message RAM dla identyfikatorów `CAN_ID_OTA_BROADCAST` (`0x7DF`) oraz `CAN_ID_ISOTP_REQ` (`0x7E0`).
+  - Implementacja nieblokujących callbacków odbiorczych logujących odebrane ramki diagnostyczne i transportowe przez `safe_printf`.
+- **Wdrożenie instancji `can2_inst` w aplikacji (`main.c`):**
+  - Alokacja instancji `can2_inst` oraz inicjalizacja za pomocą `can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2")`.
+  - Automatyczne powiązanie instancji z profilem `CAN_PARSER_ID_BOOT_OTA` i uruchomienie dedykowanych zadań FreeRTOS `CAN2_tx` i `CAN2_rx`.
+
+### Zmienione
+- **Rozszerzenie adaptera portowego `stm32c5_can_adapter` o obsługę CAN2 (`app/port/stm32c5/stm32c5_can_adapter.h`, `stm32c5_can_adapter.c`):**
+  - Wystawienie publicznego gettera `const can_interface_t *stm32c5_can2_interfaceGet(void)` zgodnie z regułą zero-extern i hermetyzacją.
+  - Refaktoryzacja procedur inicjalizacji, transmisji, odbioru oraz programowania filtrów Message RAM na wspólny silnik parametryczny `stm32c5_can_*_generic()`.
+  - Rozbudowa procedury obsługi przerwania `HAL_FDCAN_RxFifo0Callback()` o dyskryminację instancji peryferyjnej (`FDCAN1` vs `FDCAN2`) i wywoływanie właściwego callbacku powiadomienia.
+- **Dostosowanie pamięci sterty FreeRTOS (`generated/middleware/FreeRTOSConfig.h`):**
+  - Zwiększenie `configTOTAL_HEAP_SIZE` z 16 KB (16384 B) do 24 KB (24576 B) z zachowaniem ponad 37 KB wolnej pamięci SRAM mikrokontrolera, zabezpieczające zasoby na kolejki i zadania obu instancji CAN.
+
 ## [2026-10-15]
 ### Dodane
 - **Kompletny ekosystem narzędziowy w kontenerze Docker (`.devcontainer/Dockerfile`):**

@@ -21,6 +21,8 @@ typedef enum
 {
     CAN_PARSER_ID_V_BOX = 0, /**< Parser Profile: V-Box telemetry & relay */
     CAN_PARSER_ID_EXAMPLE,   /**< Parser Profile: Example diagnostic & calibration */
+    CAN_PARSER_ID_BOOT_OTA,   /**< Parser Profile: boot_ota handler */
+
     CAN_PARSER_COUNT
 } can_parser_id_t;
 

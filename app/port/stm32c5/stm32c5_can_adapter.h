@@ -13,5 +13,12 @@
  */
 const can_interface_t *stm32c5_can1_interfaceGet(void);
 
+/**
+ * @brief Retrieves the pointer to the hardware interface for CAN2 on STM32C5.
+ * @return Pointer to constant can_interface_t structure.
+ */
+const can_interface_t *stm32c5_can2_interfaceGet(void);
+
 #endif /* STM32C5_CAN_ADAPTER_H */
+
 

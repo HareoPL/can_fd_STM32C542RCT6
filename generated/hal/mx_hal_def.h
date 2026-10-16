@@ -31,6 +31,7 @@ extern "C" {
 #include "mx_cortex_mpu.h"
 #include "mx_cortex_nvic.h"
 #include "mx_fdcan1.h"
+#include "mx_fdcan2.h"
 #include "mx_gpio_default.h"
 #include "mx_icache.h"
 #include "mx_rcc.h"

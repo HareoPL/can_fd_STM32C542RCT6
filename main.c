@@ -33,8 +33,9 @@
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
-/* Alokacja instancji dla CAN1 */
+/* Alokacja instancji dla CAN1 i CAN2 */
 can_instance_t can1_inst;
+can_instance_t can2_inst;
 
 /* Private functions prototype -----------------------------------------------*/
 
@@ -74,6 +75,21 @@ int main(void)
   }
 
   if (!can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX))
+  {
+    return (-1);
+  }
+
+  /* 3. Inicjalizacja instancji CAN2 dla Bootloadera / OTA (Classic CAN 2.0 @ 500 kbps) */
+  can2_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN;
+  can2_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
+  can2_inst.can_config.baudrate_FD = CAN_BAUDRATE_CUSTOM;
+
+  if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2"))
+  {
+    return (-1);
+  }
+
+  if (!can_parser_select(&can2_inst, CAN_PARSER_ID_BOOT_OTA))
   {
     return (-1);
   }

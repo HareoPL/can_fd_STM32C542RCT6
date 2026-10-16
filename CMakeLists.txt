@@ -64,6 +64,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/can_bus/can_parser/can_parser.c
   app/can_bus/can_parser/parsers/cp_v_box.c
   app/can_bus/can_parser/parsers/cp_example.c
+  app/can_bus/can_parser/parsers/cp_boot_ota.c
   app/io/io_manager.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c

@@ -85,6 +85,7 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | Peripheral | Instance | Clock Source / Speed | Purpose & Configuration |
 | :--- | :--- | :--- | :--- |
 | **FDCAN** | `FDCAN1` | PLL1Q (144 MHz) | Primary automotive communication bus. Configured for **Classic CAN 2.0B** at **500 kbps** nominal bitrate (Bit Time: 36 tq Prop/Seg1, 36 tq Seg2, SJW 36 tq). Hardware filtering with classic dual-filter ID masking. Connected to onboard Microchip MCP2562FD transceiver (U7). |
+| **FDCAN** | `FDCAN2` | PLL1Q (144 MHz) | Secondary communication bus dedicated for Bootloader, ISO 15765-2 (ISO-TP), and OTA firmware updates. Configured for **Classic CAN 2.0B** at **500 kbps** (Prescaler 1, Seg1 251, Seg2 36, SJW 36). |
 | **ADC** | `ADC1` | HCLK / Synchronous (48 MHz) | Single-channel 12-bit analog input on pin **PA0**. Raw resolution: 0..4095. Linearly mapped in software to 0..100% vehicle fuel level representation. |
 | **USART** | `USART2` | PCLK1 (144 MHz) | Serial debug / logging console at **115200 baud, 8N1**. Connected to ST-LINK Virtual COM Port (`VCP_TX` on PA2, `VCP_RX` on PA3). Protected by FreeRTOS mutex `printf_mutex`. |
 | **GPIO** | `GPIOA`, `GPIOB`, `GPIOC`, `GPIOE` | AHB4 (144 MHz) | 9 discrete inputs with internal pull-downs, 1 push-pull relay output, 1 heartbeat LED, 1 CAN transceiver standby output. |
@@ -103,6 +104,8 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | **PA8** | Output | Push-Pull, Low-Speed | **CN10 pin 23** | `D7` | **Bistable Relay Actuator** | Generates edges ($0 \rightarrow 1$ to CLOSE, $1 \rightarrow 0$ to OPEN) for bistable latching relay. |
 | **PB2** | Input | Input, Pull-Down | **CN10 pin 22** | - | **SW8 (RPM engine)** | Discrete input (Bit 8). Active HIGH (+3.3V), idle LOW via pull-down. |
 | **PB4** | Input | Input, Pull-Down | **CN10 pin 27** | `D5` | **SW0 (Ignition / ACC)** | Discrete input (Bit 0). Reads vehicle ignition key status. |
+| **PB5** | Alt (AF9) | High-Speed AF | **CN10 pin 6** | `D4` | **FDCAN2_RX** | CAN2 bus receive line (Bootloader / OTA update). |
+| **PB6** | Alt (AF9) | High-Speed AF | **CN10 pin 3** | `D10` | **FDCAN2_TX** | CAN2 bus transmit line (Bootloader / OTA update). |
 | **PB7** | Input | Input, Pull-Down | **CN10 pin 5** | - | **SW3 (Lights / Headlamps)** | Discrete input (Bit 3). Reads headlights activation state. |
 | **PB8** | Alt (AF9) | High-Speed AF | **CN10 pin 35** | `D15` | **FDCAN1_RX** | CAN bus receive line. Connected to MCP2562FD transceiver RXD. |
 | **PB9** | Alt (AF9) | High-Speed AF | **CN10 pin 33** | `D14` | **FDCAN1_TX** | CAN bus transmit line. Connected to MCP2562FD transceiver TXD. |
@@ -117,10 +120,10 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | **PA2** | Alt (AF7) | High-Speed AF | **CN7 pin 9** | `D1 (TX)` | **USART2_TX (VCP Log)** | UART output to ST-LINK Virtual COM Port at 115200 baud. |
 | **PA3** | Alt (AF7) | High-Speed AF | **CN7 pin 11** | `D0 (RX)` | **USART2_RX (VCP Log)** | UART input from ST-LINK Virtual COM Port. |
 
-### 3.2. Dedicated Reserved Pins for Second CAN Bus (FDCAN2)
-The following pins were deliberately vacated in the input layer to enable seamless, drop-in integration of an external CAN2 transceiver in the future:
-* **`PB5` (CN10 pin 6 / Arduino D4):** Reserved for **`FDCAN2_RX`** (Alternate Function AF9).
-* **`PB6` (CN10 pin 3 / Arduino D10):** Reserved for **`FDCAN2_TX`** (Alternate Function AF9).
+### 3.2. Secondary CAN Bus (FDCAN2) Active Configuration
+The secondary CAN interface (`FDCAN2`) is fully implemented and configured for Classic CAN 2.0 @ 500 kbps:
+* **`PB5` (CN10 pin 6 / Arduino D4):** Connected to external CAN transceiver **RXD** (`FDCAN2_RX`, AF9).
+* **`PB6` (CN10 pin 3 / Arduino D10):** Connected to external CAN transceiver **TXD** (`FDCAN2_TX`, AF9).
 
 ---
 
