@@ -4,6 +4,10 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-16]
 ### Dodane
+- **Pełny proces aktualizacji Firmware OTA po magistrali CAN z zapisem do Flash (Faza 5):**
+  - `openbl_flash_c5.c`: Dedykowany, statyczny bufor 512-bajtowy `s_aligned_flash_buf` w sekcji BSS gwarantujący ścisłe 32-bitowe wyrównanie wskaźnika danych dla sprzętowego kontrolera pamięci Flash (`HAL_FLASH_ProgramByAddrAdapt`) bez obciążania stosu mikrokontrolera. Bezpieczne kasowanie stron Flash z walidacją przestrzeni aplikacji (`0x08008000`–`0x08040000`) oraz weryfikacja zapisu bajt po bajcie (`memcmp`).
+  - `openbl_core.c`: Dodano weryfikację aktywnej autoryzacji sesji docelowej (`s_target_selected`) przed wykonaniem procedury skoku do Aplikacji w ramach komendy `CMD_GO_EXECUTE (0x21)`.
+  - `tools/can_updater.py`: Wdrożenie automatycznego wykrywania trybu urządzenia i żądania przełączenia `App -> Bootloader` (Step 1b: wysłanie `CMD_ENTER_BOOTLOADER`, odczekanie na restart i re-selekcja węzła w Bootloaderze przed wywołaniem kasowania i programowania). Zwiększono limit czasu oczekiwania na skasowanie pamięci Flash do 6,0 s oraz dodano automatyczne dopełnianie plików `.bin` bajtami `0xFF` do granicy 16 bajtów.
 - **Architektura podwójnego targetu budowania Dual-Target oraz skrypty linkera (`linker/stm32c542xc_boot_flash.ld`, `linker/stm32c542xc_app_flash.ld`, `CMakeLists.txt`, `stm32c5xx_dfp/CMakeLists.txt`):**
   - Podział pamięci Flash na region Bootloadera (32 KB, `0x08000000`–`0x08007FFF`) oraz Aplikacji Głównej (224 KB, `0x08008000`–`0x0803FFFF`).
   - Alokacja 64-bajtowego bufora pamięci nieresetowalnej `.noinit.boot_shared` (`SHARED_RAM` pod adresem `0x2000FFC0`) do bezpiecznej komunikacji międzyprocesowej IPC (Bootloader <-> Aplikacja) bez utraty danych przy `NVIC_SystemReset()`.

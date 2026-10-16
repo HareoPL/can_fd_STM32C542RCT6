@@ -18,7 +18,7 @@ include(cmake/components.cmake)
 # Automated Firmware & Hardware Versioning
 # ==============================================================================
 set(FW_VERSION_MAJOR 1)
-set(FW_VERSION_MINOR 0)
+set(FW_VERSION_MINOR 1)
 set(FW_VERSION_PATCH 0)
 set(FW_VERSION_STRING "v${FW_VERSION_MAJOR}.${FW_VERSION_MINOR}.${FW_VERSION_PATCH}")
 

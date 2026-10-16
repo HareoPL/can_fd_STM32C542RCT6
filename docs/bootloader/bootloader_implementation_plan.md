@@ -601,10 +601,10 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
 
 ## Podsumowanie Kolejności Wdrożenia (Checklista)
 
-- [ ] **Krok 1 (Faza 1):** `mx_fdcan2.c/h` + `stm32c5_can2_interfaceGet()` + `can2_inst` w `main.c` + `cp_boot_ota.c/h`.
-- [ ] **Krok 2 (Faza 2):** Warstwa `app/can_bus/isotp/` + `app/ota_update/` (96-bit UID Discovery, Select Target, Dummy Update z CRC32).
-- [ ] **Krok 3 (Faza 3):** Skrypt `tools/can_updater.py` (SLCAN/CANable) + test przesyłu **Dummy Update** z potwierdzeniami `ACK`.
-- [ ] **Krok 4 (Faza 4):** Skrypty linkera (`0x08000000` Boot + `0x08008000` App) + 2 targety w `CMakeLists.txt` + moduł `app/bootloader/` (OpenBootloader + Jump to App).
-- [ ] **Krok 5 (Faza 5):** Włączenie prawdziwego zapisu `HAL_FLASH` w Bootloaderze + pełny test aktualizacji `.bin` z poziomu Pythona.
+- [x] **Krok 1 (Faza 1):** `mx_fdcan2.c/h` + `stm32c5_can2_interfaceGet()` + `can2_inst` w `main.c` + `cp_boot_ota.c/h`.
+- [x] **Krok 2 (Faza 2):** Warstwa `app/can_bus/isotp/` + `app/ota_update/` (96-bit UID Discovery, Select Target, Dummy Update z CRC32).
+- [x] **Krok 3 (Faza 3):** Skrypt `tools/can_updater.py` (SLCAN/CANable) + test przesyłu **Dummy Update** z potwierdzeniami `ACK`.
+- [x] **Krok 4 (Faza 4):** Skrypty linkera (`0x08000000` Boot + `0x08008000` App) + 2 targety w `CMakeLists.txt` + moduł `app/bootloader/` (OpenBootloader + Jump to App).
+- [x] **Krok 5 (Faza 5):** Włączenie prawdziwego zapisu `HAL_FLASH` w Bootloaderze + pełny test aktualizacji `.bin` z poziomu Pythona.
 - [ ] **Krok 6 (Faza 6 - opcjonalnie):** Zdalna aktualizacja samego Bootloadera z poziomu Aplikacji Głównej przez *Staging Slot*.
 

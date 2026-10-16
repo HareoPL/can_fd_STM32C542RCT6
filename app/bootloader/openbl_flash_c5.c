@@ -11,6 +11,7 @@
 
 static hal_flash_handle_t s_hflash;
 static bool s_flash_initialized = false;
+static uint32_t s_aligned_flash_buf[128]; /**< 512-byte buffer in BSS ensuring 32-bit alignment */
 
 hal_status_t openbl_flash_init(void)
 {
@@ -86,11 +87,20 @@ hal_status_t openbl_flash_write(uint32_t start_addr, const uint8_t *data, uint32
         return HAL_INVALID_PARAM;
     }
 
+    /* Static 512-byte buffer in BSS to guarantee 32-bit alignment without consuming stack */
+    if (length > sizeof(s_aligned_flash_buf))
+    {
+        return HAL_INVALID_PARAM;
+    }
+
+    /* Copy payload into 32-bit aligned buffer */
+    memcpy(s_aligned_flash_buf, data, length);
+
     /* Unlock Flash registers */
     HAL_FLASH_ITF_Unlock(HAL_FLASH);
 
     /* Program Flash using adaptive width */
-    hal_status_t st = HAL_FLASH_ProgramByAddrAdapt(&s_hflash, start_addr, (const uint32_t *)data, length, 2000U);
+    hal_status_t st = HAL_FLASH_ProgramByAddrAdapt(&s_hflash, start_addr, s_aligned_flash_buf, length, 5000U);
 
     /* Lock Flash registers */
     HAL_FLASH_ITF_Lock(HAL_FLASH);

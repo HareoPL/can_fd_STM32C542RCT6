@@ -374,6 +374,35 @@ def run_update_session(bus: can.BusABC,
     mode = resp[1] if len(resp) > 1 else 0x01
     print(f"  [OK] Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
 
+    if not is_dummy and mode == 0x01:  # APPLICATION mode -> request switch to Bootloader
+        print("\n[Step 1b] Device is currently running APPLICATION. Requesting switch to BOOTLOADER...")
+        enter_pdu = bytes([CMD_ENTER_BOOTLOADER])
+        if not client.send_pdu(enter_pdu, timeout=1.5):
+            print("  [FAILED] Failed to transmit CMD_ENTER_BOOTLOADER frame", file=sys.stderr)
+            return False
+
+        resp_boot = client.recv_pdu(timeout=1.5)
+        if not resp_boot or len(resp_boot) < 1 or resp_boot[0] != OTA_RESP_ACK:
+            print(f"  [FAILED] Device rejected CMD_ENTER_BOOTLOADER (resp={resp_boot.hex() if resp_boot else 'None'})", file=sys.stderr)
+            return False
+
+        print("  [OK] Device acknowledged reboot to Bootloader! Waiting for MCU reset (~150 ms)...")
+        time.sleep(0.2)
+
+        # Re-select target in Bootloader to verify session is active
+        print("  --> Re-selecting target in Bootloader...")
+        if not client.send_pdu(select_pdu, timeout=1.5):
+            print("  [FAILED] Failed to transmit CMD_SELECT_TARGET after reboot", file=sys.stderr)
+            return False
+
+        resp = client.recv_pdu(timeout=1.5)
+        if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+            print(f"  [FAILED] Bootloader did not acknowledge selection after reboot", file=sys.stderr)
+            return False
+
+        mode = resp[1] if len(resp) > 1 else 0x00
+        print(f"  [OK] Connected to Bootloader! Mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
+
     # --------------------------------------------------------------------------
     # Step 2: Erase Application Flash Area
     # --------------------------------------------------------------------------
@@ -384,7 +413,7 @@ def run_update_session(bus: can.BusABC,
         print("  [FAILED] Failed to send CMD_ERASE_APP command", file=sys.stderr)
         return False
 
-    resp = client.recv_pdu(timeout=3.0)
+    resp = client.recv_pdu(timeout=6.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
         print(f"  [FAILED] Erase command failed or timeout (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
         return False
@@ -565,6 +594,11 @@ def main():
 
             with open(args.file, "rb") as f:
                 fw_data = f.read()
+
+            if (len(fw_data) % 16) != 0:
+                pad_len = 16 - (len(fw_data) % 16)
+                fw_data = fw_data + (b'\xFF' * pad_len)
+                print(f"[INFO] Padded firmware to 16-byte boundary (+{pad_len} B 0xFF, total: {len(fw_data)} B)")
 
             print(f"[INFO] Loaded firmware file '{args.file}' ({len(fw_data)} bytes)")
             success = run_update_session(bus,

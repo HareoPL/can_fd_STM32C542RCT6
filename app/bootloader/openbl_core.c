@@ -351,6 +351,13 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
 
         case CMD_GO_EXECUTE:
         {
+            if (!s_target_selected)
+            {
+                uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_NOT_SELECTED};
+                (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
+                return;
+            }
+
             safe_printf(TAG, "[GO] Jump command received! Acknowledging and jumping to App...\r\n");
             uint8_t ack[1] = {OTA_RESP_ACK};
             (void)isotp_send_pdu(&s_boot_isotp, ack, sizeof(ack));
