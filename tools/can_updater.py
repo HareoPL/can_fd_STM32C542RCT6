@@ -289,6 +289,20 @@ def scan_nodes(bus: can.BusABC, timeout: float = 0.5, verbose: bool = False) -> 
                         "version": f"v{v_major}.{v_minor}"
                     })
                 pending_f1 = None
+            elif sub_idx == 0xEE:
+                reason_code = rx.data[1]
+                fail_cnt = rx.data[2]
+                uid_hash = rx.data[3]
+                pc = rx.data[4] | (rx.data[5] << 8) | (rx.data[6] << 16) | (rx.data[7] << 24)
+                reason_map = {
+                    0x00: "NONE",
+                    0x01: "HARDFAULT",
+                    0x02: "RTOS_ASSERT",
+                    0x03: "WATCHDOG",
+                    0x04: "NO_APP (Blank/Missing Flash)"
+                }
+                reason_str = reason_map.get(reason_code, f"UNKNOWN(0x{reason_code:02X})")
+                print(f"  [RECOVERY BEACON 0xEE] Device in RECOVERY mode: Reason={reason_str}, Crashes={fail_cnt}, PC=0x{pc:08X}, UID_hash=0x{uid_hash:02X}")
 
     if not devices:
         print("  --> No STM32 devices responded on CAN bus.")

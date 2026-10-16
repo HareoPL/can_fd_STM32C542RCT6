@@ -511,11 +511,10 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
        * Bootloader **nie skacze do uszkodzonej aplikacji**, lecz przechodzi w tryb `BOOT_MODE_RECOVERY`!
        * Wypisuje na UART2 raport błędu (`[BOOT RECOVERY] MainApp crashed 3 times! Last reason=HardFault, PC=0x...`).
        * Co **1000 ms (1 Hz)** nadaje na `FDCAN2` (`ID = 0x7E9`) ramkę alarmową `CRASH_RECOVERY_BEACON` (`[0xEE, fault_reason, fail_cnt, uid_hash8, fault_pc(4B)]`) i czeka w trybie update na wgranie nowego firmware'u.
-     * **Przypadek C (Normalny start, `boot_fail_counter < 3`):**
-       * Czeka przez krótkie okno startowe (`300 ms`) na ewentualną komendę `SELECT_TARGET` / `ENTER_BOOTLOADER` na `FDCAN2`.
-       * Jeśli na `FDCAN2` cisza $\rightarrow$ sprawdza poprawność aplikacji pod `0x08008000` (czy pierwsze słowo `MSP` wskazuje na poprawny adres SRAM `0x20000000..0x20010000`, a drugie słowo `Reset_Handler` wskazuje na Flash `0x08008001..0x0803FFFF`).
-       * Jeśli aplikacja jest poprawna $\rightarrow$ inkrementuje `shared.boot_fail_counter++`, przelicza `shared.crc32` i wykonuje `boot_jump_to_application(0x08008000)`.
-       * Jeśli Flash aplikacji jest pusty (`0xFFFFFFFF`) $\rightarrow$ zostaje w Bootloaderze w trybie `RECOVERY`, nadaje co 1 s ramkę `0xEE` na CAN2 i czeka na wgranie firmware'u!
+      * **Przypadek C (Normalny szybki start, Fast-Boot):**
+        * Sprawdza poprawność wektora aplikacji pod `0x08008000` (czy pierwsze słowo `MSP` wskazuje na poprawny adres SRAM `0x20000000..0x20010000`, a drugie słowo `Reset_Handler` wskazuje na Flash `0x08008001..0x0803FFFF`).
+        * **Brak sztucznego opóźnienia:** Jeśli Aplikacja jest poprawna $\rightarrow$ inkrementuje `shared.boot_fail_counter++`, przelicza `shared.crc32` i bezzwłocznie wykonuje `boot_jump_to_application(0x08008000)` (czas rozruchu Bootloadera < 2 ms).
+        * Jeśli Flash aplikacji jest pusty (`0xFFFFFFFF`) lub uszkodzony $\rightarrow$ przechodzi w tryb ratunkowy `BOOT_MODE_RECOVERY` (`BOOT_FAULT_NO_APP = 0x04`), nadaje co 1 s ramkę ratunkową `0xEE` na CAN2 i czeka na wgranie firmware'u!
 * **Bezpieczna procedura `boot_jump_to_application(0x08008000)` (z czyszczeniem `MSPLIM`/`PSPLIM` dla Cortex-M33):**
   ```c
   __disable_irq();

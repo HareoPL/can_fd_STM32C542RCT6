@@ -35,7 +35,8 @@ typedef enum
     BOOT_FAULT_NONE         = 0x00U, /**< Normal system startup or graceful restart */
     BOOT_FAULT_HARDFAULT    = 0x01U, /**< Hardware exception (HardFault / BusFault / MemManage) */
     BOOT_FAULT_RTOS_ASSERT  = 0x02U, /**< FreeRTOS configASSERT failed */
-    BOOT_FAULT_WATCHDOG     = 0x03U  /**< Independent Watchdog (IWDG) timeout reset */
+    BOOT_FAULT_WATCHDOG     = 0x03U, /**< Independent Watchdog (IWDG) timeout reset */
+    BOOT_FAULT_NO_APP       = 0x04U  /**< No valid application detected in Flash */
 } boot_fault_reason_t;
 
 /**

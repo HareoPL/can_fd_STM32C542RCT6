@@ -59,6 +59,14 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Przekierowanie callbacków z profilu `cp_boot_ota.c` do kolejki workera w czasie < 1 µs.
 
 ### Zmienione
+- **Błyskawiczny rozruch aplikacji Fast-Boot oraz automatyczny tryb ratunkowy (`app/bootloader/boot_main.c`, `app/bootloader/boot_shared.h`, `tools/can_updater.py`):**
+  - Wyeliminowano sztuczne 300-milisekundowe okno nasłuchu CAN na starcie Bootloadera (`[NORMAL] Listening...`) opóźniające start systemu.
+  - Wprowadzono bezopóźnieniowy rozruch (Fast Boot): Bootloader natychmiast po resecie sprawdza integralność Aplikacji pod `0x08008000` (poprawność wskaźników MSP w SRAM i Reset_Handler we Flash). Jeśli Aplikacja istnieje, wykonuje skok bezzwłocznie (czas wykonania Bootloadera < 2 ms).
+  - Bootloader przechodzi w tryb oczekiwania i nasłuchu magistrali CAN2 wyłącznie w trzech uzasadnionych scenariuszach:
+    1. Aplikacja zgłosiła wielokrotne awarie (HardFault / Watchdog / Assert $\ge$ 3 razy) – tryb `BOOT_MODE_RECOVERY`,
+    2. Działająca Aplikacja zażądała wejścia do Bootloadera na żądanie PC (`CMD_ENTER_BOOTLOADER`) – tryb `BOOT_MODE_STAY_IN_BOOT`,
+    3. Pamięć Flash jest czysta lub Aplikacja uszkodzona – wejście w tryb ratunkowy z nowym kodem błędu `BOOT_FAULT_NO_APP` (kod `0x04`).
+  - W trybie awaryjnym/ratunkowym Bootloader natychmiast i cyklicznie (co 1 s) rozgłasza na ID `0x7E9` ramkę alarmową `0xEE` (`CRASH_RECOVERY_BEACON`) z kodem przyczyny, licznikiem awarii i adresem PC, a skrypt `tools/can_updater.py --scan` automatycznie dekoduje i wyświetla stan ratunkowy.
 - **Optymalizacja i czytelność raportowania pamięci oraz scalania wsadów (`tools/print_memory.py`, `tools/merge_binaries.py`, `CMakeLists.txt`, `.devcontainer/docker_build.bat`):**
   - Wprowadzono skonsolidowany pulpit podsumowania Dual-Target (`print_dual_dashboard`), prezentujący w jednym, czytelnym zestawieniu (14 linii) wykorzystanie pamięci Flash, RAM, stosu i sterty FreeRTOS dla Bootloadera i Aplikacji oraz parametry scalonego obrazu.
   - Wyeliminowano wielokrotne, nakładające się tabele pamięci podczas równoległego budowania w Ninja – poszczególne targety kompilacji raportują postęp w zwięzłym formacie jednolinijkowym (`[MEM] ...`), a pełny raport wyświetlany jest jednokrotnie na koniec procesu łączenia wsadów.

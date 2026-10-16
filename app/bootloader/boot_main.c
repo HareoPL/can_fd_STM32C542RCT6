@@ -16,7 +16,6 @@
 #include "openbl_core.h"
 
 #define TAG                 "BOOT"
-#define NORMAL_WINDOW_CYCLES 43200000UL /**< ~300 ms @ 144 MHz (300 ms * 144,000 cycles/ms) */
 
 /**
  * @brief Simple delay based on ARM cycle execution.
@@ -78,62 +77,46 @@ int main(void)
         boot_shared_clear();
     }
 
-    /* Initialize Bootloader CAN core and Flash subsystem */
-    openbl_core_init(session_selected);
-
     /* -------------------------------------------------------------------------
-     * Phase A: Normal Boot - Listen on CAN2 for 300 ms
+     * Phase A: Normal Boot - Instant Jump to Application if Valid
      * ------------------------------------------------------------------------- */
     if (mode == BOOT_MODE_NORMAL)
     {
-        safe_printf(TAG, "[NORMAL] Listening for CAN commands on 0x7DF / 0x7E0 (300 ms window)...\r\n");
-
-        uint32_t loops = 0U;
-        const uint32_t max_loops = 3000U; /* 3000 iterations with 100 us delay each ~ 300 ms */
-
-        while (loops < max_loops)
+        if (boot_is_app_valid(BOOT_APP_START_ADDR))
         {
-            openbl_core_poll();
+            safe_printf(TAG, "[FAST BOOT] Valid Application at 0x%08lX. Booting immediately...\r\n", BOOT_APP_START_ADDR);
 
-            /* If PC connected and selected target, switch to Stay-In-Boot mode */
-            if (openbl_core_is_session_active())
-            {
-                mode = BOOT_MODE_STAY_IN_BOOT;
-                safe_printf(TAG, "[NORMAL] Host connection established! Cancelling boot timeout.\r\n");
-                break;
-            }
+            /* Increment boot fail counter to detect crash loops before healthy confirmation */
+            g_boot_shared.boot_fail_counter++;
+            boot_shared_update_crc();
 
-            delay_cycles(14400U); /* ~100 us @ 144 MHz */
-            loops++;
+            boot_jump_to_application(BOOT_APP_START_ADDR);
         }
-
-        /* If no connection established, verify application integrity and jump */
-        if (mode == BOOT_MODE_NORMAL)
+        else
         {
-            if (boot_is_app_valid(BOOT_APP_START_ADDR))
-            {
-                safe_printf(TAG, "[JUMP] Valid Application detected at 0x%08lX! Booting...\r\n", BOOT_APP_START_ADDR);
-
-                /* Increment boot fail counter to detect crash loops before healthy confirmation */
-                g_boot_shared.boot_fail_counter++;
-                boot_shared_update_crc();
-
-                /* Delay briefly to flush UART transmitter */
-                delay_cycles(1440000U); /* ~10 ms */
-
-                boot_jump_to_application(BOOT_APP_START_ADDR);
-            }
-            else
-            {
-                safe_printf(TAG, "[ERROR] Application at 0x%08lX is EMPTY or INVALID! Entering Recovery Mode.\r\n", BOOT_APP_START_ADDR);
-                mode = BOOT_MODE_RECOVERY;
-            }
+            safe_printf(TAG, "[RECOVERY] No valid application at 0x%08lX (Flash blank or corrupt)!\r\n", BOOT_APP_START_ADDR);
+            safe_printf(TAG, "[RECOVERY] Entering Recovery Mode. Calling for rescue on CAN2 (0x7E9)...\r\n");
+            mode = BOOT_MODE_RECOVERY;
+            g_boot_shared.fault_reason = BOOT_FAULT_NO_APP;
+            g_boot_shared.fault_pc = BOOT_APP_START_ADDR;
+            g_boot_shared.boot_fail_counter = BOOT_MAX_FAIL_COUNTER;
+            boot_shared_update_crc();
         }
     }
 
     /* -------------------------------------------------------------------------
-     * Phase B: Stay in Bootloader or Recovery Mode
+     * Phase B: Stay in Bootloader or Recovery Mode (CAN listener active)
      * ------------------------------------------------------------------------- */
+    /* Initialize Bootloader CAN core and Flash subsystem */
+    openbl_core_init(session_selected);
+
+    /* Send immediate rescue beacon if in recovery mode */
+    if (mode == BOOT_MODE_RECOVERY)
+    {
+        openbl_core_send_recovery_beacon((uint8_t)g_boot_shared.fault_reason,
+                                        (uint8_t)g_boot_shared.boot_fail_counter,
+                                        g_boot_shared.fault_pc);
+    }
     uint32_t led_ticker = 0U;
     uint32_t beacon_ticker = 0U;
 
