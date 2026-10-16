@@ -18,7 +18,8 @@ STACK_SIZE = 0x400;
 
 MEMORY
 {
-  ROM (rx)        : org = 0x08008000, len = 0x38000   /* 224 KB Main Application */
+  ROM (rx)        : org = 0x08008000, len = 0x30000   /* 192 KB Main Application */
+  STAGING (r)     : org = 0x08038000, len = 0x08000   /* 32 KB Bootloader Staging Slot (Pages 112..127) */
   RAM (xrw)       : org = 0x20000000, len = 0x0FFC0   /* 64 KB - 64 B Shared RAM */
   SHARED_RAM (rw) : org = 0x2000FFC0, len = 0x00040   /* 64 B IPC Shared RAM (.noinit) */
 }

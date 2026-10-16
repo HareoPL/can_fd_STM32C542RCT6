@@ -72,6 +72,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/can_bus/isotp/isotp.c
   app/ota_update/crc32.c
   app/ota_update/ota_manager.c
+  app/ota_update/bootloader_updater.c
   app/ota_update/fault_recovery.c
   app/bootloader/boot_shared.c
   app/io/io_manager.c

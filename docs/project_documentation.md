@@ -16,6 +16,7 @@
 6. [Bistable Edge-Triggered Relay Control Engine](#6-bistable-edge-triggered-relay-control-engine)
 7. [FreeRTOS Concurrency & Real-Time Task Model](#7-freertos-concurrency--real-time-task-model)
 8. [Firmware & Hardware Versioning Subsystem](#8-firmware--hardware-versioning-subsystem)
+9. [CAN Bootloader & OTA Dual-Target Subsystem](#9-can-bootloader--ota-dual-target-subsystem)
 
 ---
 
@@ -410,5 +411,39 @@ During early boot (before FreeRTOS scheduler initialization), `main()` invokes `
   Build Time : 2026-10-15 12:28:34 UTC
 ======================================================================
 ```
+
+---
+
+## 9. CAN Bootloader & OTA Dual-Target Subsystem
+
+The system implements a fully integrated, dual-target firmware architecture consisting of an autonomous bare-metal **CAN Bootloader** (`v_box_boot`) and a preemptive FreeRTOS **Main Application** (`v_box`), communicating over **FDCAN2** (`PB5` RX / `PB6` TX, 500 kbps Classic CAN 2.0).
+
+### 9.1. Flash & SRAM Memory Map
+
+| Region | Physical Address Range | Size | Description |
+| :--- | :--- | :---: | :--- |
+| **Bootloader Slot** | `0x08000000` – `0x08007FFF` | 32 KB (Pages 0..15) | Bare-metal OpenBootloader core, Fast-Boot engine, Recovery rescue beacon |
+| **Main Application** | `0x08008000` – `0x08037FFF` | 192 KB (Pages 16..111) | FreeRTOS application firmware, tasks, CAN managers, telemetry |
+| **Bootloader Staging Slot** | `0x08038000` – `0x0803FFFF` | 32 KB (Pages 112..127) | Safe isolated staging area for remote Bootloader updates via MainApp |
+| **SRAM (Kernel/App)** | `0x20000000` – `0x2000FFBF` | 63.9 KB | Zero-initialized data, BSS, FreeRTOS ucHeap pool, system stacks |
+| **SHARED_RAM (IPC Mailbox)** | `0x2000FFC0` – `0x2000FFFF` | 64 B (`.noinit`) | Non-volatile IPC structure (`boot_shared_ram_t`) preserved across resets |
+
+### 9.2. Application Firmware OTA Update Flow (App -> Bootloader -> App)
+
+1. **Target Discovery & Selection:** PC scans nodes via broadcast `CMD_DISCOVER_NODES (0xA0)` on `0x7DF`. Devices reply with unique 96-bit UID on `0x7E9`. The target node is locked with `CMD_SELECT_TARGET (0xA1)`.
+2. **Reboot to Bootloader:** PC issues `CMD_ENTER_BOOTLOADER (0xA2)`. The Main Application writes `magic = BOOT_SHARED_MAGIC` into `SHARED_RAM` and executes `NVIC_SystemReset()`.
+3. **Flash Erase & Write:** Bootloader starts in < 2 ms, validates IPC mailbox, erases Application pages (`0x08008000`), streams binary blocks (256 B) via ISO 15765-2 transport with block-level CRC32, and verifies full-image CRC32 (`CMD_VERIFY_FIRMWARE`).
+4. **Fast-Boot Jump:** On `CMD_GO_EXECUTE (0x21)`, Bootloader deinitializes peripherals, resets VTOR to `0x08008000`, clears Cortex-M33 `MSPLIM`/`PSPLIM`, and branches to the new Application Reset_Handler.
+
+### 9.3. Remote Bootloader Update Flow via Staging Slot (Task 6.1)
+
+To prevent bricking the microcontroller in case of CAN bus disconnection or power failure during a bootloader update:
+1. **Target Verification:** The PC updater ensures the target is executing in **Main Application mode** (`0x08008000`), where the Bootloader Flash (`0x08000000`) is completely idle.
+2. **Staging Upload:** The new Bootloader image is streamed over ISO-TP into the dedicated top 32 KB **Staging Slot** (`0x08038000`). If transmission fails at any point, the existing Bootloader at `0x08000000` remains 100% intact.
+3. **Integrity & Vector Table Validation:** On `CMD_UPDATE_BOOTLOADER (0xA4)`, the Main Application:
+   * Validates full image CRC32 of the staged binary against the expected checksum.
+   * Validates the Cortex-M33 vector table (ensuring `MSP` resides in SRAM `0x20000000`..`0x20010000` and `Reset_Handler` points into `0x08000001`..`0x08008000` with Thumb bit 1).
+4. **Atomic Installation:** In a critical section (`taskENTER_CRITICAL()`), the Main Application erases `0x08000000`, copies the verified image from Staging, confirms byte-by-byte with `memcmp`, and sends positive `ACK`.
+5. **Reboot:** On `CMD_GO_EXECUTE`, `NVIC_SystemReset()` executes the newly installed Bootloader.
 
 

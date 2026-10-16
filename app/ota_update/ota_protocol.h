@@ -27,12 +27,22 @@ extern "C" {
 #define CMD_SELECT_TARGET               0xA1U   /**< Select target by 96-bit UID (ISO-TP on 0x7E0) */
 #define CMD_ENTER_BOOTLOADER            0xA2U   /**< Request MCU to enter/stay in bootloader mode */
 #define CMD_VERIFY_FIRMWARE             0xA3U   /**< Verify entire firmware CRC32 */
+#define CMD_UPDATE_BOOTLOADER           0xA4U   /**< Install and commit Bootloader from Staging Slot */
 #define CMD_GET_CMD                     0x00U   /**< OpenBootloader: Get allowed commands */
 #define CMD_GET_VERSION                 0x01U   /**< OpenBootloader: Get bootloader version */
 #define CMD_GET_ID                      0x02U   /**< OpenBootloader: Get chip ID */
 #define CMD_GO_EXECUTE                  0x21U   /**< OpenBootloader: Jump to address / start app */
 #define CMD_WRITE_MEMORY                0x31U   /**< OpenBootloader: Stream write memory block */
 #define CMD_ERASE_APP                   0x44U   /**< OpenBootloader: Erase application flash memory */
+
+/* ===========================================================================
+ * Bootloader & Staging Memory Layout Constants
+ * =========================================================================== */
+#define BOOTLOADER_FLASH_BASE           0x08000000UL    /**< Bootloader base address (Flash Bank 1) */
+#define BOOTLOADER_MAX_SIZE_BYTES       0x8000UL        /**< Bootloader maximum size: 32 KB */
+#define BOOTLOADER_PAGE_SIZE            2048U           /**< STM32C5 Flash page size: 2 KB */
+#define BOOTLOADER_STAGING_BASE         0x08038000UL    /**< Bootloader Staging Slot base in Flash (top 32 KB) */
+#define BOOTLOADER_STAGING_SIZE_BYTES   0x8000UL        /**< Bootloader Staging Slot size: 32 KB (16 pages) */
 
 /* ===========================================================================
  * Protocol Response Codes

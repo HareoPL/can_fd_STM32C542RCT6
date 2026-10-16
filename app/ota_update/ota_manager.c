@@ -16,6 +16,7 @@
 #include "stm32_hal.h"
 #include "boot_shared.h"
 #include "fault_recovery.h"
+#include "bootloader_updater.h"
 #include <string.h>
 
 #define TAG "OTA_MGR"
@@ -28,6 +29,9 @@ static uint8_t s_mcu_uid[STM32C5_UID_LEN_BYTES];
 
 /** @brief Target selection flag (true if this node's UID matched CMD_SELECT_TARGET). */
 static bool s_target_selected = false;
+
+/** @brief Bootloader update session flag (true when staging slot 0x08038000 is targeted). */
+static bool s_bootloader_update_active = false;
 
 /** @brief Pointer to CAN2 instance used for transmission. */
 static can_instance_t *s_can2_inst = NULL;
@@ -187,8 +191,25 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
             s_total_bytes_received = 0U;
             s_block_count = 0U;
 
-            safe_printf(TAG, "[OTA DUMMY] Erase simulated: addr=0x%08lX, size=%lu B\r\n",
-                        (unsigned long)erase_addr, (unsigned long)erase_size);
+            if (erase_addr == BOOTLOADER_STAGING_BASE)
+            {
+                s_bootloader_update_active = true;
+                safe_printf(TAG, "[BOOTLOADER UPDATE] Erasing staging slot 0x%08lX (%lu B)...\r\n",
+                            (unsigned long)erase_addr, (unsigned long)erase_size);
+
+                if (!bootloader_updater_erase_staging(erase_size))
+                {
+                    uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                    (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
+                    return;
+                }
+            }
+            else
+            {
+                s_bootloader_update_active = false;
+                safe_printf(TAG, "[OTA DUMMY] Erase simulated: addr=0x%08lX, size=%lu B\r\n",
+                            (unsigned long)erase_addr, (unsigned long)erase_size);
+            }
 
             uint8_t ack[1] = {OTA_RESP_ACK};
             (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
@@ -232,11 +253,24 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
 
             if (actual_crc != expected_crc)
             {
-                safe_printf(TAG, "[OTA DUMMY] Block CRC mismatch! Exp=0x%08lX, Calc=0x%08lX\r\n",
+                safe_printf(TAG, "[OTA] Block CRC mismatch! Exp=0x%08lX, Calc=0x%08lX\r\n",
                             (unsigned long)expected_crc, (unsigned long)actual_crc);
                 uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_CRC};
                 (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
                 return;
+            }
+
+            /* Flash into Staging Slot if Bootloader update is active */
+            if (s_bootloader_update_active && (block_addr >= BOOTLOADER_STAGING_BASE) &&
+                ((block_addr + block_len) <= (BOOTLOADER_STAGING_BASE + BOOTLOADER_STAGING_SIZE_BYTES)))
+            {
+                if (!bootloader_updater_write_staging(block_addr, &payload[7], block_len))
+                {
+                    safe_printf(TAG, "[BOOTLOADER UPDATE] Write failed at 0x%08lX\r\n", (unsigned long)block_addr);
+                    uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                    (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
+                    return;
+                }
             }
 
             /* Update global stream CRC32 accumulator with block payload only */
@@ -247,7 +281,7 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
 
             if ((s_block_count % 16U) == 0U)
             {
-                safe_printf(TAG, "[OTA DUMMY] Received block #%lu (addr=0x%08lX, %lu B total)\r\n",
+                safe_printf(TAG, "[OTA] Received block #%lu (addr=0x%08lX, %lu B total)\r\n",
                             (unsigned long)s_block_count, (unsigned long)block_addr, (unsigned long)s_total_bytes_received);
             }
 
@@ -280,14 +314,14 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
 
             if (s_total_bytes_received == expected_total_size && final_crc == expected_full_crc)
             {
-                safe_printf(TAG, "[OTA DUMMY] Verification SUCCESS! Received=%lu B, Full CRC=0x%08lX matched!\r\n",
+                safe_printf(TAG, "[OTA] Verification SUCCESS! Received=%lu B, Full CRC=0x%08lX matched!\r\n",
                             (unsigned long)s_total_bytes_received, (unsigned long)final_crc);
                 uint8_t ack[1] = {OTA_RESP_ACK};
                 (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
             }
             else
             {
-                safe_printf(TAG, "[OTA DUMMY] Verification FAILED! Recv=%lu B (exp %lu), CRC=0x%08lX (exp 0x%08lX)\r\n",
+                safe_printf(TAG, "[OTA] Verification FAILED! Recv=%lu B (exp %lu), CRC=0x%08lX (exp 0x%08lX)\r\n",
                             (unsigned long)s_total_bytes_received, (unsigned long)expected_total_size,
                             (unsigned long)final_crc, (unsigned long)expected_full_crc);
                 uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_CRC};
@@ -296,11 +330,60 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
             break;
         }
 
+        case CMD_UPDATE_BOOTLOADER:
+        {
+            if (!s_target_selected)
+            {
+                uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_NOT_SELECTED};
+                (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
+                return;
+            }
+
+            uint32_t exp_size = 0U;
+            uint32_t exp_crc  = 0U;
+            if (length >= 9U)
+            {
+                exp_size = (uint32_t)payload[1] | ((uint32_t)payload[2] << 8) |
+                           ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
+                exp_crc  = (uint32_t)payload[5] | ((uint32_t)payload[6] << 8) |
+                           ((uint32_t)payload[7] << 16) | ((uint32_t)payload[8] << 24);
+            }
+
+            safe_printf(TAG, "[BOOT_UPDATE] Install requested! Size=%lu B, CRC=0x%08lX\r\n",
+                        (unsigned long)exp_size, (unsigned long)exp_crc);
+
+            bool ok = bootloader_updater_install(exp_size, exp_crc);
+            if (ok)
+            {
+                safe_printf(TAG, "[BOOT_UPDATE] Bootloader successfully installed at 0x08000000!\r\n");
+                uint8_t ack[1] = {OTA_RESP_ACK};
+                (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
+            }
+            else
+            {
+                safe_printf(TAG, "[BOOT_UPDATE] Installation FAILED!\r\n");
+                uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
+            }
+            break;
+        }
+
         case CMD_GO_EXECUTE:
         {
-            safe_printf(TAG, "[OTA DUMMY] CMD_GO_EXECUTE received -> ACK sent\r\n");
-            uint8_t ack[1] = {OTA_RESP_ACK};
-            (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
+            if (s_bootloader_update_active)
+            {
+                safe_printf(TAG, "[BOOT_UPDATE] Resetting MCU to launch new Bootloader...\r\n");
+                uint8_t ack[1] = {OTA_RESP_ACK};
+                (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
+                vTaskDelay(pdMS_TO_TICKS(50));
+                NVIC_SystemReset();
+            }
+            else
+            {
+                safe_printf(TAG, "[OTA DUMMY] CMD_GO_EXECUTE received -> ACK sent\r\n");
+                uint8_t ack[1] = {OTA_RESP_ACK};
+                (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
+            }
             break;
         }
 
@@ -368,6 +451,7 @@ bool ota_manager_init(can_instance_t *can2_inst)
     }
 
     s_can2_inst = can2_inst;
+    (void)bootloader_updater_init();
 
     /* Read factory 96-bit Unique Device ID into cache using strictly 32-bit word accesses.
      * The STM32 Information Block / OTP bus does not support 8-bit or 16-bit accesses

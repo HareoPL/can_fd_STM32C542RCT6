@@ -606,5 +606,5 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
 - [x] **Krok 3 (Faza 3):** Skrypt `tools/can_updater.py` (SLCAN/CANable) + test przesyłu **Dummy Update** z potwierdzeniami `ACK`.
 - [x] **Krok 4 (Faza 4):** Skrypty linkera (`0x08000000` Boot + `0x08008000` App) + 2 targety w `CMakeLists.txt` + moduł `app/bootloader/` (OpenBootloader + Jump to App).
 - [x] **Krok 5 (Faza 5):** Włączenie prawdziwego zapisu `HAL_FLASH` w Bootloaderze + pełny test aktualizacji `.bin` z poziomu Pythona.
-- [ ] **Krok 6 (Faza 6 - opcjonalnie):** Zdalna aktualizacja samego Bootloadera z poziomu Aplikacji Głównej przez *Staging Slot*.
+- [x] **Krok 6 (Faza 6 - opcjonalnie):** Zdalna aktualizacja samego Bootloadera z poziomu Aplikacji Głównej przez *Staging Slot*.
 

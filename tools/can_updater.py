@@ -47,9 +47,13 @@ CMD_DISCOVER_NODES          = 0xA0
 CMD_SELECT_TARGET           = 0xA1
 CMD_ENTER_BOOTLOADER        = 0xA2
 CMD_VERIFY_FIRMWARE         = 0xA3
+CMD_UPDATE_BOOTLOADER       = 0xA4
 CMD_GO_EXECUTE              = 0x21
 CMD_WRITE_MEMORY            = 0x31
 CMD_ERASE_APP               = 0x44
+
+BOOTLOADER_STAGING_BASE     = 0x08038000
+BOOTLOADER_MAX_SIZE         = 32768
 
 OTA_RESP_ACK                = 0x79
 OTA_RESP_NACK               = 0x1F
@@ -500,6 +504,184 @@ def run_update_session(bus: can.BusABC,
     print("=" * 76)
     return True
 
+def run_bootloader_update_session(bus: can.BusABC,
+                                  target_uid: bytes,
+                                  bootloader_data: bytes,
+                                  block_size: int = 256,
+                                  verbose: bool = False) -> bool:
+    """
+    Executes a complete Bootloader update sequence via the Flash Staging Slot:
+    1. Select Target & verify/switch to APPLICATION mode.
+    2. Erase Staging Slot (0x08038000).
+    3. Stream Bootloader blocks to 0x08038000 with block-level CRC32.
+    4. Verify Full Staging Image CRC32.
+    5. Issue CMD_UPDATE_BOOTLOADER (0xA4) to validate Cortex-M33 vector table and install to 0x08000000.
+    6. Issue CMD_GO_EXECUTE to reboot MCU into the new Bootloader.
+    """
+    client = IsoTpClient(bus, tx_id=CAN_ID_ISOTP_REQ, rx_id=CAN_ID_ISOTP_RESP, verbose=verbose)
+    uid_str = format_uid(target_uid)
+    staging_address = BOOTLOADER_STAGING_BASE
+    total_size = len(bootloader_data)
+    full_crc32 = zlib.crc32(bootloader_data) & 0xFFFFFFFF
+
+    print("=" * 76)
+    print("  Starting BOOTLOADER FIRMWARE UPDATE (via Staging Slot)")
+    print(f"  Target UID      : {uid_str}")
+    print(f"  Staging Address : 0x{staging_address:08X} (Top 32 KB Flash)")
+    print(f"  Target Flash    : 0x08000000 - 0x08007FFF (Bootloader Sector)")
+    print(f"  Payload Size    : {total_size} bytes ({total_size/1024.0:.1f} KB)")
+    print(f"  Block Size      : {block_size} bytes")
+    print(f"  Full CRC32      : 0x{full_crc32:08X} (IEEE 802.3)")
+    print("=" * 76)
+
+    # --------------------------------------------------------------------------
+    # Step 1: Select Target by UID & Ensure APPLICATION mode
+    # --------------------------------------------------------------------------
+    print("\n[Step 1/6] Selecting Target Device by 96-bit UID...")
+    select_pdu = bytes([CMD_SELECT_TARGET]) + target_uid
+    if not client.send_pdu(select_pdu, timeout=1.0):
+        print("  [FAILED] Failed to transmit CMD_SELECT_TARGET frame", file=sys.stderr)
+        return False
+
+    resp = client.recv_pdu(timeout=1.0)
+    if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+        print(f"  [FAILED] Target did not acknowledge selection (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        return False
+
+    mode = resp[1] if len(resp) > 1 else 0x01
+    print(f"  [OK] Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
+
+    if mode == 0x00:  # BOOTLOADER mode -> Bootloader update must be done from APPLICATION
+        print("\n[Step 1b] Device is currently in BOOTLOADER mode.")
+        print("  --> Bootloader cannot overwrite itself while executing!")
+        print("  --> Requesting jump to APPLICATION mode...")
+        go_pdu = bytes([CMD_GO_EXECUTE])
+        client.send_pdu(go_pdu, timeout=1.0)
+        time.sleep(0.5)
+
+        # Re-select target in Application
+        print("  --> Re-connecting to device in Application...")
+        if not client.send_pdu(select_pdu, timeout=1.5):
+            print("  [FAILED] Failed to re-select target after jump", file=sys.stderr)
+            return False
+
+        resp = client.recv_pdu(timeout=1.5)
+        if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+            print("  [FAILED] Device did not respond after booting Application", file=sys.stderr)
+            return False
+
+        mode = resp[1] if len(resp) > 1 else 0x01
+        if mode != 0x01:
+            print(f"  [FAILED] Expected APPLICATION mode, got: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}", file=sys.stderr)
+            return False
+        print(f"  [OK] Successfully switched to APPLICATION mode!")
+
+    # --------------------------------------------------------------------------
+    # Step 2: Erase Staging Slot (0x08038000)
+    # --------------------------------------------------------------------------
+    print(f"\n[Step 2/6] Erasing Staging Slot (0x{staging_address:08X}, size={total_size} B)...")
+    erase_pdu = bytes([CMD_ERASE_APP]) + struct.pack('<II', staging_address, total_size)
+    if not client.send_pdu(erase_pdu, timeout=2.0):
+        print("  [FAILED] Failed to send erase staging command", file=sys.stderr)
+        return False
+
+    resp = client.recv_pdu(timeout=6.0)
+    if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+        print(f"  [FAILED] Staging erase rejected or timeout (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        return False
+
+    print("  [OK] Staging Slot erased successfully!")
+
+    # --------------------------------------------------------------------------
+    # Step 3: Stream Bootloader Blocks to Staging Slot
+    # --------------------------------------------------------------------------
+    print(f"\n[Step 3/6] Streaming {total_size} bytes to Staging Slot in blocks of {block_size} B...")
+    t_stream_start = time.time()
+    offset = 0
+    block_index = 0
+
+    while offset < total_size:
+        chunk = bootloader_data[offset : offset + block_size]
+        curr_addr = staging_address + offset
+        chunk_len = len(chunk)
+
+        payload_for_crc = struct.pack('<IH', curr_addr, chunk_len) + chunk
+        block_crc32 = zlib.crc32(payload_for_crc) & 0xFFFFFFFF
+        write_pdu = bytes([CMD_WRITE_MEMORY]) + payload_for_crc + struct.pack('<I', block_crc32)
+
+        success = False
+        for retry in range(3):
+            if not client.send_pdu(write_pdu, timeout=1.0):
+                continue
+            resp = client.recv_pdu(timeout=1.0)
+            if resp and len(resp) >= 1 and resp[0] == OTA_RESP_ACK:
+                success = True
+                break
+            elif verbose:
+                print(f"\n  [RETRY] Block #{block_index} failed, retrying ({retry+1}/3)...")
+
+        if not success:
+            print(f"\n  [FAILED] Error writing staging block at offset 0x{offset:X} after 3 retries!", file=sys.stderr)
+            return False
+
+        offset += chunk_len
+        block_index += 1
+        print_progress_bar(offset, total_size, t_stream_start, prefix="Staging: ")
+
+    print("\n  [OK] All Bootloader blocks successfully uploaded to Staging Slot!")
+
+    # --------------------------------------------------------------------------
+    # Step 4: Verify Full Staging CRC32
+    # --------------------------------------------------------------------------
+    print(f"\n[Step 4/6] Verifying Staged Image Checksum (CRC32: 0x{full_crc32:08X})...")
+    verify_pdu = bytes([CMD_VERIFY_FIRMWARE]) + struct.pack('<II', total_size, full_crc32)
+    if not client.send_pdu(verify_pdu, timeout=2.0):
+        print("  [FAILED] Failed to send CMD_VERIFY_FIRMWARE command", file=sys.stderr)
+        return False
+
+    resp = client.recv_pdu(timeout=2.0)
+    if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+        print(f"  [FAILED] Staged image checksum verification rejected! (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        return False
+
+    print("  [OK] Staged Bootloader integrity confirmed by target hardware!")
+
+    # --------------------------------------------------------------------------
+    # Step 5: Install & Commit Bootloader to 0x08000000 (CMD_UPDATE_BOOTLOADER)
+    # --------------------------------------------------------------------------
+    print("\n[Step 5/6] Committing & Installing Bootloader into Flash (0x08000000)...")
+    print("  --> Target will validate Cortex-M33 vector table and flash 0x08000000...")
+    install_pdu = bytes([CMD_UPDATE_BOOTLOADER]) + struct.pack('<II', total_size, full_crc32)
+    if not client.send_pdu(install_pdu, timeout=3.0):
+        print("  [FAILED] Failed to send CMD_UPDATE_BOOTLOADER command", file=sys.stderr)
+        return False
+
+    resp = client.recv_pdu(timeout=6.0)
+    if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
+        print(f"  [FAILED] Bootloader installation failed on device! (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        return False
+
+    print("  [OK] NEW BOOTLOADER SUCCESSFULLY INSTALLED AND VERIFIED AT 0x08000000!")
+
+    # --------------------------------------------------------------------------
+    # Step 6: Reboot into New Bootloader
+    # --------------------------------------------------------------------------
+    print("\n[Step 6/6] Requesting system reset to launch new Bootloader...")
+    go_pdu = bytes([CMD_GO_EXECUTE])
+    client.send_pdu(go_pdu, timeout=1.0)
+    time.sleep(0.3)
+    print("  [OK] Reset command sent! Target is booting new Bootloader...")
+
+    total_time = max(0.001, time.time() - t_stream_start)
+    avg_speed = (total_size / 1024.0) / total_time
+    print("\n" + "=" * 76)
+    print("  [SUCCESS] BOOTLOADER UPDATE COMPLETED SUCCESSFULLY!")
+    print(f"  Total Data      : {total_size} bytes ({total_size/1024.0:.2f} KB)")
+    print(f"  Transfer Time   : {total_time:.2f} seconds")
+    print(f"  Effective Speed : {avg_speed:.2f} KB/s")
+    print("=" * 76)
+    return True
+
 # ==============================================================================
 # Main Entry Point
 # ==============================================================================
@@ -512,6 +694,7 @@ def main():
                "  python tools/can_updater.py --port COM5 --scan\n"
                "  python tools/can_updater.py --port COM5 --dummy --size 32768\n"
                "  python tools/can_updater.py --port COM5 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin\n"
+               "  python tools/can_updater.py --port COM5 --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin\n"
     )
 
     parser.add_argument("--port", type=str, default=None, help="Serial COM port for SLCAN/CANable (e.g. COM5 or /dev/ttyACM0)")
@@ -521,7 +704,9 @@ def main():
     parser.add_argument("--uid", type=str, default=None, help="Target 96-bit MCU UID in hex (e.g. 0038002A-3132510F-39383531)")
     parser.add_argument("--dummy", action="store_true", help="Run Dummy Update test session (simulates erase and flash with CRC32)")
     parser.add_argument("--size", type=int, default=32768, help="Payload size for Dummy Update in bytes (default: 32768 = 32 KB)")
-    parser.add_argument("--file", type=str, default=None, help="Path to binary firmware file (.bin) to flash")
+    parser.add_argument("--file", type=str, default=None, help="Path to binary firmware file (.bin) to flash (Main Application)")
+    parser.add_argument("--update-bootloader", type=str, default=None, metavar="BOOT_BIN",
+                        help="Update Bootloader firmware using binary file via Staging Slot")
     parser.add_argument("--block-size", type=int, default=256, help="Block size per write transaction (default: 256 bytes)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose debug logging for all ISO-TP frames")
 
@@ -574,7 +759,7 @@ def main():
                 print("[ERROR] Multiple devices found on bus. Please specify which device to target using --uid <HEX>", file=sys.stderr)
                 sys.exit(1)
 
-        # Action 2: Dummy Update or Real Firmware Flash
+        # Action 2: Dummy Update, Real Firmware Flash, or Bootloader Update
         if args.dummy:
             # Generate deterministic synthetic test payload
             print(f"[INFO] Generating {args.size} bytes of test data for Dummy Update...")
@@ -585,6 +770,36 @@ def main():
                                          block_size=args.block_size,
                                          is_dummy=True,
                                          verbose=args.verbose)
+            sys.exit(0 if success else 1)
+
+        elif args.update_bootloader:
+            boot_path = args.update_bootloader
+            if not os.path.exists(boot_path):
+                print(f"[ERROR] Bootloader file '{boot_path}' does not exist!", file=sys.stderr)
+                sys.exit(1)
+
+            with open(boot_path, "rb") as f:
+                boot_data = f.read()
+
+            if len(boot_data) > BOOTLOADER_MAX_SIZE:
+                print(f"[ERROR] Bootloader size ({len(boot_data)} B) exceeds 32 KB limit!", file=sys.stderr)
+                sys.exit(1)
+
+            if len(boot_data) < 512:
+                print(f"[ERROR] Bootloader size ({len(boot_data)} B) is too small to be a valid image!", file=sys.stderr)
+                sys.exit(1)
+
+            if (len(boot_data) % 16) != 0:
+                pad_len = 16 - (len(boot_data) % 16)
+                boot_data = boot_data + (b'\xFF' * pad_len)
+                print(f"[INFO] Padded bootloader to 16-byte boundary (+{pad_len} B 0xFF, total: {len(boot_data)} B)")
+
+            print(f"[INFO] Loaded bootloader file '{boot_path}' ({len(boot_data)} bytes)")
+            success = run_bootloader_update_session(bus,
+                                                    target_uid=target_uid_bytes,
+                                                    bootloader_data=boot_data,
+                                                    block_size=args.block_size,
+                                                    verbose=args.verbose)
             sys.exit(0 if success else 1)
 
         elif args.file:
@@ -610,7 +825,7 @@ def main():
             sys.exit(0 if success else 1)
 
         else:
-            print("[INFO] No action specified. Use --scan, --dummy, or --file <firmware.bin>. See --help for usage.")
+            print("[INFO] No action specified. Use --scan, --dummy, --file <firmware.bin>, or --update-bootloader <boot.bin>. See --help for usage.")
 
     finally:
         bus.shutdown()
