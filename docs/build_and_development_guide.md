@@ -184,9 +184,20 @@ Aby zbudować i od razu wgrać kod jednym kliknięciem:
 * Użyj zadania **`[Docker] Build & Flash`** (dla kompilacji w Dockerze)
 
 ### Debugowanie w Visual Studio Code
-W zakładce **Run and Debug** (`Ctrl+Shift+D`) dostępny jest profil:
-* **`STM32Cube: Launch ST-Link GDB Server`**
-Profil ten automatycznie łączy się z wbudowanym na płytce programatorem ST-Link V3, zatrzymuje procesor na początku funkcji `main()` i umożliwia stawianie pułapek (breakpoints), podgląd zmiennych oraz inspekcję rejestrów peryferyjnych Cortex-M33.
+W zakładce **Run and Debug** (`Ctrl+Shift+D`) dostępne są dedykowane profile debugowania:
+1. **`STM32Cube: Debug Full System (Bootloader + App)`** *(Rekomendowany)*:
+   - Wgrywa do Flash oba obrazy (`v_box_boot.elf` pod `0x08000000` i `v_box.elf` pod `0x08008000`).
+   - Wczytuje tablice symboli dla obu programów jednocześnie.
+   - Umożliwia płynne śledzenie krokowe od startu procesora w Bootloaderze, przez skok `boot_jump_to_application()`, aż po start schedulera FreeRTOS w Aplikacji.
+2. **`STM32Cube: Debug Application (v_box)`**:
+   - Wgrywa i debuguje wyłącznie Aplikację Główną (`0x08008000`).
+   - Zatrzymuje procesor na początku funkcji `main()` w Aplikacji.
+3. **`STM32Cube: Debug Bootloader (v_box_boot)`**:
+   - Wgrywa i debuguje wyłącznie samodzielny Bootloader (`0x08000000`).
+   - Zatrzymuje procesor na początku funkcji `main()` w `boot_main.c`.
+4. **`STM32Cube: Attach to Target (Hotplug / No Reset)`**:
+   - Dołącza sesję GDB do już działającego mikrokontrolera bez wywoływania resetu (tryb Hotplug).
+   - Wczytuje symbole obu programów.
 
 ### Współdzielenie programatora ST-Link z kontenerem (USB Pass-through)
 Jeśli chcesz debugować bezpośrednio z wnętrza Linuksa (np. przez `openocd` lub `st-info` w Dockerze):

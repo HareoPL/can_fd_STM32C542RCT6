@@ -4,17 +4,66 @@
         {
             "type": "stlinkgdbtarget",
             "request": "launch",
-            "name": "STM32Cube: Launch ST-Link GDB Server",
+            "name": "STM32Cube: Debug Full System (Bootloader + App)",
             "origin": "snippet",
             "cwd": "${workspaceFolder}",
+            "deviceName": "STM32C542RCT6",
             "preBuild": "${command:st-stm32-ide-debug-launch.build}",
             "runEntry": "main",
             "imagesAndSymbols": [
                 {
-                    "imageFileName": "${command:st-stm32-ide-debug-launch.get-projects-binary-from-context1}"
+                    "imageFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box_boot.elf"
+                },
+                {
+                    "imageFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box.elf"
+                }
+            ]
+        },
+        {
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "name": "STM32Cube: Debug Application (v_box)",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "deviceName": "STM32C542RCT6",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box.elf"
+                }
+            ]
+        },
+        {
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "name": "STM32Cube: Debug Bootloader (v_box_boot)",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "deviceName": "STM32C542RCT6",
+            "preBuild": "${command:st-stm32-ide-debug-launch.build}",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box_boot.elf"
+                }
+            ]
+        },
+        {
+            "type": "stlinkgdbtarget",
+            "request": "attach",
+            "name": "STM32Cube: Attach to Target (Hotplug / No Reset)",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "deviceName": "STM32C542RCT6",
+            "imagesAndSymbols": [
+                {
+                    "symbolFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box.elf"
+                },
+                {
+                    "symbolFileName": "${workspaceFolder}/build/debug_GCC_NUCLEO-C542RC/v_box_boot.elf"
                 }
             ]
         }
     ]
 }
-

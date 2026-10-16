@@ -19,6 +19,12 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Zrzut adresu instrukcji błędu (`stacked_pc`) i rejestru statusu rdzenia (`SCB->CFSR`) do pamięci `SHARED_RAM` przed programowym resetem mikrokontrolera.
   - Licznik nieudanych uruchomień (`boot_fail_counter`): po 3 nieudanych startach Aplikacji mikrokontroler permanentnie blokuje dalsze pętle resetu, wchodzi w tryb `BOOT_MODE_RECOVERY`, transmituje co 1 s ramkę alarmową `0xEE` (`CRASH_RECOVERY_BEACON`) na magistralę CAN2 i oczekuje na wgranie poprawionej wersji oprogramowania.
   - Mechanizm potwierdzania stabilnego rozruchu (`fault_recovery_confirm_app_healthy()`): po 3 sekundach bezawaryjnej pracy scheduler zeruje licznik błędów.
+- **Konfiguracje uruchomieniowe debugera ST-Link GDB Server (`.vscode/launch.json`, `docs/build_and_development_guide.md`):**
+  - Dodano 4 dedykowane profile debugowania w VS Code:
+    1. `STM32Cube: Debug Full System (Bootloader + App)` – wgrywanie obu wsadów i ładowanie podwójnej tablicy symboli dla Bootloadera i Aplikacji z możliwością płynnego śledzenia tranzycji skoku przez pułapki w obu przestrzeniach.
+    2. `STM32Cube: Debug Application (v_box)` – ukierunkowane debugowanie wyłącznie Aplikacji Głównej (`0x08008000`) ze stopem na `main()`.
+    3. `STM32Cube: Debug Bootloader (v_box_boot)` – ukierunkowane debugowanie wyłącznie Bootloadera (`0x08000000`).
+    4. `STM32Cube: Attach to Target (Hotplug / No Reset)` – bezinwazyjne dołączenie sesji GDB do działającego procesora bez wywoływania resetu mikrokontrolera.
 - **Narzędzie scalania wsadów binarnych i zadania programowania (`tools/merge_binaries.py`, `.vscode/tasks.json`, `.devcontainer/docker_build.bat`):**
   - Implementacja skryptu `tools/merge_binaries.py` generującego połączone obrazy produkcyjne `v_box_full.bin` oraz `v_box_full.hex` łączące Bootloader pod `0x08000000` i Aplikację pod `0x08008000` (z dopełnieniem przestrzeni bajtami `0xFF`).
   - Nowe zadania w VS Code: `[Flash] Full Merged Image (Bootloader + App)`, `[Flash] Bootloader Only`, `[Flash] MainApp Only`.
