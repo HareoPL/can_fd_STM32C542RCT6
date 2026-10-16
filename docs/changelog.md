@@ -15,6 +15,17 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 - **Wdrożenie instancji `can2_inst` w aplikacji (`main.c`):**
   - Alokacja instancji `can2_inst` oraz inicjalizacja za pomocą `can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2")`.
   - Automatyczne powiązanie instancji z profilem `CAN_PARSER_ID_BOOT_OTA` i uruchomienie dedykowanych zadań FreeRTOS `CAN2_tx` i `CAN2_rx`.
+- **Warstwa transportowa ISO 15765-2 (ISO-TP) w czystym C (`app/can_bus/isotp/isotp.h`, `isotp.c`):**
+  - Implementacja przenośnego stosu ISO-TP (SF, FF, CF, FC) z buforem reasemblacji do 540 bajtów.
+  - Automatyczne generowanie ramek Flow Control (`0x30, BS=0, STmin=1ms`) na ID `0x7E8` po odebraniu First Frame.
+  - Weryfikacja ciągłości numeracji sekwencyjnej Sequence Number (SN) ramek Consecutive Frame.
+- **Moduł sum kontrolnych CRC32 IEEE 802.3 (`app/ota_update/crc32.h`, `crc32.c`):**
+  - Tablicowa implementacja sumy kontrolnej Ethernet/ZIP/zlib (wielomian `0xEDB88320`) zgodna w 100% z narzędziami PC w Pythonie.
+- **Asynchroniczny menedżer OTA i silnik weryfikacji Dummy Update (`app/ota_update/ota_manager.h`, `ota_manager.c`, `ota_protocol.h`):**
+  - Implementacja dedykowanego zadania FreeRTOS `ota_worker_task` (kolejka `s_ota_rx_queue`) gwarantującego nieblokujące wykonanie `can_rx_task` (Reguła 14).
+  - Obsługa procedury Discovery (`0xA0`) z antykolizyjnym slotem czasowym opartym na 96-bitowym fabrycznym UID (`0x08FFF800`) i odpowiedzią na `0x7E9`.
+  - Obsługa wyboru węzła Target Select (`0xA1`), symulowanego kasowania Erase (`0x44`), strumieniowego odbioru bloków pamięci (`0x31`) z weryfikacją CRC32 bloku oraz finalnej weryfikacji całości wsadu (`0xA3`).
+  - Przekierowanie callbacków z profilu `cp_boot_ota.c` do kolejki workera w czasie < 1 µs.
 
 ### Zmienione
 - **Rozszerzenie adaptera portowego `stm32c5_can_adapter` o obsługę CAN2 (`app/port/stm32c5/stm32c5_can_adapter.h`, `stm32c5_can_adapter.c`):**

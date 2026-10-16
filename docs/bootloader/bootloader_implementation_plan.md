@@ -372,29 +372,31 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
 
 > **Cel Fazy 2:** Stworzenie warstwy transportowej **ISO 15765-2 (ISO-TP)** oraz maszyny stanów **Dummy Update** w aplikacji głównej, pozwalającej przetestować pełny przesył pliku `.bin` po CAN2 (wraz z Discovery po UID, Flow Control i weryfikacją CRC32) bez dotykania pamięci Flash.
 
-#### [Task 2.1] Implementacja modułu protokołu transportowego `app/can_bus/isotp/`
+#### [Task 2.1] [ZREALIZOWANO] Implementacja modułu protokołu transportowego `app/can_bus/isotp/`
+* **Status:** Zrealizowane i przetestowane kompilacyjnie.
 * **Pliki do utworzenia:**
   * `app/can_bus/isotp/isotp.h`
   * `app/can_bus/isotp/isotp.c`
 * **Szczegóły implementacyjne:**
   * Czysty, przenośny kod C (może być wywoływany zarówno w zadaniu FreeRTOS w Aplikacji, jak i w pętli bare-metal w Bootloaderze!).
-  * Wstrzykiwanie funkcji wysyłającej pojedynczą ramkę CAN 8B (`isotp_send_frame_fn`).
+  * Wstrzykiwanie funkcji wysyłającej pojedynczą ramkę CAN 8B (`isotp_can_tx_fn`).
   * Obsługa odbioru wieloramkowego (RX):
-    * Rozpoznawanie `Single Frame (0x0L)` $\rightarrow$ natychmiastowe wywołanie callbacku `on_pdu_received(payload, len)`.
+    * Rozpoznawanie `Single Frame (0x0L)` $\rightarrow$ natychmiastowe wywołanie callbacku `rx_cb(payload, len)`.
     * Rozpoznawanie `First Frame (0x1LLL)` $\rightarrow$ zapisanie oczekiwanej długości (do `ISOTP_MAX_BUF_SIZE = 540` bajtów), skopiowanie pierwszych 6 bajtów i natychmiastowe odesłanie ramki **`Flow Control (0x30, BS=0, STmin=1ms)`** na ID `0x7E8`.
-    * Rozpoznawanie `Consecutive Frame (0x2N)` $\rightarrow$ weryfikacja ciągłości numeru sekwencyjnego `SN = (prev_sn + 1) & 0x0F`, kopiowanie kolejnych 7 bajtów, aż do skompletowania całego pakietu i wywołania `on_pdu_received()`.
+    * Rozpoznawanie `Consecutive Frame (0x2N)` $\rightarrow$ weryfikacja ciągłości numeru sekwencyjnego `SN = (prev_sn + 1) & 0x0F`, kopiowanie kolejnych 7 bajtów, aż do skompletowania całego pakietu i wywołania `rx_cb()`.
   * Obsługa nadawania (TX):
     * Dla odpowiedzi $\le 7$ bajtów (np. `[0x79, BlockSeq]`) wysyła pojedynczą ramkę `Single Frame`.
     * Dla dłuższych odpowiedzi dzieli dane na `FF` + `CF` po otrzymaniu `FC`.
 
-#### [Task 2.2] Implementacja modułu `app/ota_update/` (UID Discovery + Dummy Update Worker)
+#### [Task 2.2] [ZREALIZOWANO] Implementacja modułu `app/ota_update/` (UID Discovery + Dummy Update Worker)
+* **Status:** Zrealizowane i przetestowane kompilacyjnie.
 * **Pliki do utworzenia:**
   * `app/ota_update/ota_protocol.h` (wspólne stałe protokołu: kody komend `0xA0`, `0xA1`, `0xA2`, `0x44`, `0x31`, `0xA3`, `0x21`, `ACK=0x79`, `NACK=0x1F`, struktury ramek).
   * `app/ota_update/crc32.h` i `app/ota_update/crc32.c` (szybka implementacja `CRC32 IEEE 802.3` – identyczna ze standardowym `zlib.crc32` w Pythonie).
   * `app/ota_update/ota_manager.h` i `app/ota_update/ota_manager.c`.
 * **Szczegóły implementacyjne (zgodnie z Regułą 14 – Zakaz blokowania `can_rx_task`):**
   * Callbacki w `cp_boot_ota.c` (dla ID `0x7DF` oraz `0x7E0`) wykonują się w `< 1 µs` – wrzucają odebraną ramkę CAN `CAN_msg_t` do kolejki FreeRTOS `s_ota_rx_queue` za pomocą `xQueueSend(..., 0)`.
-  * Dedykowane zadanie `ota_worker_task` (priorytet `tskIDLE_PRIORITY + 2`, stos 512 słów) odbiera ramki z kolejki i zasila maszynę stanów `isotp_on_can_frame()` oraz obsługuje komendy:
+  * Dedykowane zadanie `ota_worker_task` (priorytet `TASK_PRIO_OTA_WORKER`, stos 512 słów) odbiera ramki z kolejki i zasila maszynę stanów `isotp_on_can_frame()` oraz obsługuje komendy:
     1. **`CMD_DISCOVER_NODES (0xA0)`:** Odczytuje 96-bitowy `UID` z `0x08FFF800`, wylicza `delay = (crc32(uid, 12) & 0x1F) * 3`, wykonuje `vTaskDelay(pdMS_TO_TICKS(delay))` (w wątku workera, nigdy w `can_rx_task`!) i wysyła 2 ramki identyfikacyjne na `0x7E9`.
     2. **`CMD_SELECT_TARGET (0xA1)`:** Porównuje 12 bajtów `UID` z własnym `UID_BASE`. Jeśli zgodne – aktywuje sesję i odsyła `0x79 (ACK)`.
     3. **`CMD_ERASE_APP (0x44)` (Tryb Dummy):** Weryfikuje zakres adresów, resetuje licznik odebranych bajtów i bufor akumulacyjny CRC32, loguje `[OTA DUMMY] Erase simulated for size=...` i odsyła `0x79 (ACK)`.
@@ -404,7 +406,7 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
        * Sprawdza ciągłość adresów (`0x08008000 + offset`).
        * Aktualizuje globalne `CRC32` strumienia i odsyła `[0x79 (ACK), block_seq]`.
     5. **`CMD_VERIFY_FIRMWARE (0xA3)` (Tryb Dummy):** Porównuje wyliczone `CRC32` całego odebranego strumienia z `CRC32` przysłanym przez PC. Jeśli się zgadza – wypisuje na UART podsumowanie sukcesu i odsyła `0x79 (ACK)`.
-* **Rejestracja w `CMakeLists.txt`:** Dodanie `isotp.c`, `crc32.c`, `ota_manager.c` oraz ścieżek `app/can_bus/isotp` i `app/ota_update`.
+* **Rejestracja w `CMakeLists.txt`:** Dodano `isotp.c`, `crc32.c`, `ota_manager.c` oraz ścieżki `app/can_bus/isotp` i `app/ota_update`.
 
 ---
 

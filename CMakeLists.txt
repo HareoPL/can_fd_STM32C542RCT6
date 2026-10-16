@@ -65,6 +65,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/can_bus/can_parser/parsers/cp_v_box.c
   app/can_bus/can_parser/parsers/cp_example.c
   app/can_bus/can_parser/parsers/cp_boot_ota.c
+  app/can_bus/isotp/isotp.c
+  app/ota_update/crc32.c
+  app/ota_update/ota_manager.c
   app/io/io_manager.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
@@ -81,6 +84,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
   app/can_bus
   app/can_bus/can_parser
   app/can_bus/can_parser/parsers
+  app/can_bus/isotp
+  app/ota_update
   app/port
   app/port/stm32c5
   app/io

@@ -27,6 +27,7 @@
 #include "can_parser.h"
 #include "stm32c5_can_adapter.h"
 #include "io_manager.h"
+#include "ota_manager.h"
 #include "version.h"
 
 /* Private typedef -----------------------------------------------------------*/
@@ -90,6 +91,12 @@ int main(void)
   }
 
   if (!can_parser_select(&can2_inst, CAN_PARSER_ID_BOOT_OTA))
+  {
+    return (-1);
+  }
+
+  /* 4. Inicjalizacja menedżera aktualizacji OTA (Dummy Update Worker i ISO-TP) */
+  if (!ota_manager_init(&can2_inst))
   {
     return (-1);
   }

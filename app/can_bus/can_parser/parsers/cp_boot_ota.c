@@ -8,6 +8,7 @@
 #include "cp_boot_ota.h"
 #include "safe_printf.h"
 #include "can_msg_types.h"
+#include "ota_manager.h"
 #include <stddef.h>
 
 /** @brief Logging tag for this parser profile. */
@@ -24,7 +25,7 @@
 /* ===========================================================================
  * Message reception callbacks:
  * - Executed in the context of FreeRTOS can_rx_task.
- * - Non-blocking execution only.
+ * - Non-blocking execution only (< 1 microsecond, feeds FreeRTOS worker queue).
  * =========================================================================== */
 
 /**
@@ -38,10 +39,7 @@ static void on_boot_ota_broadcast_rx(const CAN_msg_t *msg)
         return;
     }
 
-    safe_printf(TAG, "[CAN2 RX] Broadcast Frame (ID=0x%03lX, len=%u, byte0=0x%02X)\r\n",
-                (unsigned long)msg->ident,
-                (unsigned int)msg->len,
-                (msg->len > 0U) ? (unsigned int)msg->data[0] : 0U);
+    ota_manager_feed_can_frame(msg);
 }
 
 /**
@@ -55,10 +53,7 @@ static void on_boot_ota_isotp_req_rx(const CAN_msg_t *msg)
         return;
     }
 
-    safe_printf(TAG, "[CAN2 RX] ISO-TP Request Frame (ID=0x%03lX, len=%u, byte0=0x%02X)\r\n",
-                (unsigned long)msg->ident,
-                (unsigned int)msg->len,
-                (msg->len > 0U) ? (unsigned int)msg->data[0] : 0U);
+    ota_manager_feed_can_frame(msg);
 }
 
 /* --- Private Profile Definition --------------------------------------------*/
