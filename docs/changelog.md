@@ -4,6 +4,12 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-16]
 ### Dodane
+- **Narzędzie CLI aktualizacji i diagnostyki CAN Updater w Pythonie (`tools/can_updater.py`, `tools/requirements_ota.txt`):**
+  - Implementacja wieloplatformowego skryptu CLI (`can_updater.py`) opartego na `python-can` wspierającego adaptery SLCAN (np. CANable) oraz natywne SocketCAN (Linux).
+  - Wbudowany, czysty stos transportowy ISO 15765-2 (ISO-TP) w Pythonie realizujący segmentację i asemblację ramek SF, FF, CF z dynamiczną obsługą Flow Control (Block Size oraz STmin) bez potrzeby zewnętrznych sterowników jądra systemu.
+  - Procedura skanowania magistrali (`--scan`) z odpytywaniem na ID `0x7DF` i parsowaniem dwuramkowych ogłoszeń na ID `0x7E9` (ekstrakcja 96-bitowego fabrycznego UID, trybu pracy urządzenia oraz wersji oprogramowania).
+  - Tryb symulacji Dummy Update (`--dummy`, `--size`) testujący pełną ścieżkę aktualizacji (Target Select -> Erase -> Stream Blocks z weryfikacją CRC32 pojedynczych bloków 256B -> weryfikacja całościowego obrazu CRC32 -> Jump) z dynamicznym paskiem postępu na żywo, pomiarem przepustowości (KB/s) oraz czasem operacji.
+  - Obsługa programowania właściwych plików binarnych (`--file`) z automatycznym podziałem na bloki i do 3 ponowień transmisji przy błędach szyny.
 - **Inicjalizacja i uruchomienie peryferium FDCAN2 dla Bootloadera / OTA (`generated/hal/mx_fdcan2.h`, `mx_fdcan2.c`, `mx_system.c`, `mx_hal_def.h`, `STM32_HAL_Driver_codegen.cmake`):**
   - Implementacja niskopoziomowego sterownika `FDCAN2` na mikrokontrolerze STM32C542RCT6 (zegar 144 MHz, prescaler 1, timing: seg1=251, seg2=36, sjw=36 -> 500 kbps Classic CAN 2.0, próbkowanie 87.5%).
   - Konfiguracja wyprowadzeń GPIO na Porcie B: `PB5` (RX, złącze CN10 pin 6) oraz `PB6` (TX, złącze CN10 pin 3) w trybie Alternate Function AF9.

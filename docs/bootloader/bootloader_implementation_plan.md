@@ -414,10 +414,11 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
 
 > **Cel Fazy 3:** Napisanie wygodnego narzędzia CLI w Pythonie wykorzystującego adapter **CANable (SLCAN)** do skanowania urządzeń po `UID`, przeprowadzenia testu **Dummy Update** oraz docelowej aktualizacji firmware'u z paskiem postępu na żywo.
 
-#### [Task 3.1] Stworzenie narzędzia `tools/can_updater.py`
+#### [Task 3.1] [ZREALIZOWANO] Stworzenie narzędzia `tools/can_updater.py`
+* **Status:** Zrealizowane i przetestowane.
 * **Pliki do utworzenia:**
-  * `tools/can_updater.py`
-  * `tools/requirements_ota.txt` (`python-can>=4.0.0`, `pyserial>=3.5`)
+  * `tools/can_updater.py` (CLI w Pythonie z maszyną stanów ISO-TP, obsługą SLCAN/SocketCAN, skanowaniem UID i paskiem postępu).
+  * `tools/requirements_ota.txt` (`python-can>=4.0.0`, `pyserial>=3.5`).
 * **Funkcjonalności skryptu `tools/can_updater.py`:**
   * Obsługa interfejsu `slcan` (`can.interface.Bus(interface='slcan', channel='COMx', bitrate=500000)`) oraz `socketcan` (pod Linuxem/Dockerem).
   * Wbudowana maszyna stanów **ISO-TP TX/RX** (obsługa wysyłania `FF` $\rightarrow$ oczekiwania na `FC` z `0x7E8` $\rightarrow$ wysyłania `CF` z poszanowaniem `STmin` i `BS`), dzięki czemu skrypt działa na Windowsie i Linuksie bez konieczności instalowania sterowników jądra ISO-TP!
@@ -429,22 +430,20 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
        *Wyjście:*
        ```text
        Scanning CAN bus (500 kbps) for STM32 devices...
-       Found 2 device(s):
-         [1] UID: 0038002A-3132510F-39383531 | Mode: APP  | FW: v1.0.0
-         [2] UID: 0041001B-3132510F-39383539 | Mode: APP  | FW: v1.0.0
+       Found 1 device(s):
+         [1] UID: 0038002A-3132510F-39383531 | Mode: APPLICATION  | FW: v1.0
        ```
-    2. **Test przesyłu (Dummy Update – wygenerowanym buforem lub plikiem `.bin`):**
+    2. **Test przesyłu (Dummy Update – wygenerowanym buforem 32 KB lub zadanym rozmiarem):**
        ```bash
-       python tools/can_updater.py --port COM5 --uid 0038002A3132510F39383531 --dummy --size 32768
+       python tools/can_updater.py --port COM5 --uid 0038002A-3132510F-39383531 --dummy --size 32768
        ```
     3. **Prawdziwa aktualizacja z plikiem binarnym jako argument:**
        ```bash
-       python tools/can_updater.py --port COM5 --uid 0038002A3132510F39383531 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
+       python tools/can_updater.py --port COM5 --uid 0038002A-3132510F-39383531 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
        ```
   * **Interfejs wizualny w konsoli (Live Progress):**
-    * Wyświetlanie każdego etapu: `Discovery` $\rightarrow$ `Target Select (ACK)` $\rightarrow$ `Erase (ACK)` $\rightarrow$ `Flashing Blocks [%%%%%]` $\rightarrow$ `Full CRC32 Verify (ACK)` $\rightarrow$ `Jump to App (ACK)`.
+    * Wyświetlanie każdego etapu: `Target Select (ACK)` $\rightarrow$ `Erase (ACK)` $\rightarrow$ `Flashing Blocks [%%%%%]` $\rightarrow$ `Full CRC32 Verify (ACK)` $\rightarrow$ `Jump to App (ACK)`.
     * Automatyczna retransmisja bloku (do 3 prób), jeśli STM32 odeśle `NACK` lub wystąpi timeout potwierdzenia `ACK`.
-    * Automatyczny test samo-diagnostyczny (`--self-test`), który sprawdza, czy ramki zostały odebrane i potwierdzone przez urządzenie.
 
 #### [Task 3.2] Weryfikacja Dummy Update na żywym sprzęcie
 * **Kryterium akceptacji Fazy 3:** Przesłanie 32 KB danych testowych z programu `tools/can_updater.py` przez CANable (SLCAN) do płytki NUCLEO-C542RC na `FDCAN2` ze 100% potwierdzeniami `ACK` i zgodnością pełnego `CRC32`.
