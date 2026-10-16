@@ -5,7 +5,8 @@ Memory footprint analysis script for STM32 firmware builds.
 Parses the linker map file (or ELF file via size tool) and prints a detailed,
 human-readable summary table of FLASH and RAM usage, including FreeRTOS heap,
 system stack, and custom sections. Supports single-target (detailed or compact)
-and dual-target (Bootloader + MainApp) dashboard views.
+and dual-target (Bootloader + MainApp) dashboard views with explicit Free Space
+reporting.
 """
 
 import sys
@@ -22,14 +23,20 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 
 def format_bytes(byte_count):
-    """Formats bytes with thousands separator."""
+    """Formats bytes with thousands separator (e.g. ' 56 040 B')."""
     return f"{byte_count:7,d} B".replace(",", " ")
 
 
 def format_kb(byte_count):
-    """Formats bytes as Kilobytes."""
+    """Formats bytes as Kilobytes (e.g. '  54.7 KB')."""
     kb = byte_count / 1024.0
     return f"{kb:6.1f} KB"
+
+
+def format_size_pair(byte_count):
+    """Formats bytes and KB together tightly: ' 56 040 B ( 54.7 KB)'."""
+    kb = byte_count / 1024.0
+    return f"{format_bytes(byte_count)} ({kb:5.1f} KB)"
 
 
 def make_bar(pct, width=20):
@@ -97,7 +104,6 @@ def parse_map_file(map_path):
             vma = int(m.group(2), 16)
             size = int(m.group(3), 16)
             lma = int(m.group(4), 16) if m.group(4) else None
-            # Ignore debug symbols and non-allocated sections with address 0
             if size > 0 and vma != 0:
                 sections.append({
                     'name': sec_name,
@@ -265,13 +271,15 @@ def print_compact_report(stats, elf_path):
     """Prints a concise 1-line memory summary for build progress logs."""
     elf_name = os.path.basename(elf_path)
     rom_used = stats['rom_used']
-    rom_total = stats['rom_total']
+    rom_free = stats['rom_free']
     rom_pct = stats['rom_pct']
+    rom_free_pct = 100.0 - rom_pct
     ram_used = stats['ram_used']
-    ram_total = stats['ram_total']
+    ram_free = stats['ram_free']
     ram_pct = stats['ram_pct']
-    status = stats['status_label']
-    print(f"[MEM] {elf_name:<14}: FLASH {format_bytes(rom_used)} / {format_kb(rom_total)} ({rom_pct:5.1f}%) | RAM {format_bytes(ram_used)} / {format_kb(ram_total)} ({ram_pct:5.1f}%) [{status}]")
+    ram_free_pct = 100.0 - ram_pct
+
+    print(f"[MEM] {elf_name:<14}: FLASH Used: {format_bytes(rom_used)} ({rom_pct:4.1f}%) | Free: {format_bytes(rom_free)} ({rom_free_pct:4.1f}%) || RAM Used: {format_bytes(ram_used)} ({ram_pct:4.1f}%) | Free: {format_bytes(ram_free)} ({ram_free_pct:4.1f}%)")
 
 
 def print_memory_report(stats, elf_path, build_type="Debug"):
@@ -282,10 +290,12 @@ def print_memory_report(stats, elf_path, build_type="Debug"):
     rom_total = stats['rom_total']
     rom_free = stats['rom_free']
     rom_pct = stats['rom_pct']
+    rom_free_pct = 100.0 - rom_pct
     ram_used = stats['ram_used']
     ram_total = stats['ram_total']
     ram_free = stats['ram_free']
     ram_pct = stats['ram_pct']
+    ram_free_pct = 100.0 - ram_pct
     freertos_heap = stats['freertos_heap']
     code_size = stats['code_size']
     rodata_size = stats['rodata_size']
@@ -301,11 +311,11 @@ def print_memory_report(stats, elf_path, build_type="Debug"):
     is_boot = 'boot' in elf_basename.lower()
     target_role = "CAN BOOTLOADER" if is_boot else "MAIN APPLICATION"
 
-    line_sep = "=" * 78
-    sub_sep = "-" * 78
+    line_sep = "=" * 82
+    sub_sep = "-" * 82
 
     print(line_sep)
-    print(f"       STM32C542 {target_role} Memory Footprint ({elf_basename})")
+    print(f"         STM32C542 {target_role} Memory Footprint ({elf_basename})")
     print(line_sep)
     print("  Memory Region        Used [B]     Total [B]     Free [B]   Usage [%]  Visual Bar")
     print(sub_sep)
@@ -360,38 +370,52 @@ def print_memory_report(stats, elf_path, build_type="Debug"):
     bt_lower = build_type.lower()
     display_build_type = 'Debug' if 'debug' in bt_lower else ('Release' if 'release' in bt_lower else build_type)
 
-    # 4. Footer
+    # 4. Footer & Prominent Remaining Space
     print(line_sep)
     print(f"  Target MCU : STM32C542RCT6 (ARM Cortex-M33 @ 144 MHz)")
-    print(f"  Firmware   : {elf_basename} [{display_build_type}]")
-    print(f"  Status     : {status_label} (FLASH: {100.0 - rom_pct:.1f}% free, RAM: {100.0 - ram_pct:.1f}% free)")
+    print(f"  Firmware   : {elf_basename} [{display_build_type}] | Status: {status_label}")
+    print(sub_sep)
+    print(f"  >>> FREE MEMORY: FLASH: {format_bytes(rom_free)} ({format_kb(rom_free)} / {rom_free_pct:.1f}% free) | RAM: {format_bytes(ram_free)} ({format_kb(ram_free)} / {ram_free_pct:.1f}% free) <<<")
     print(line_sep)
 
 
 def print_dual_dashboard(boot_map, app_map, boot_bin=None, app_bin=None, merged_bin=None, merged_hex=None):
-    """Prints a consolidated Dual-Target Firmware & Memory Summary dashboard."""
+    """
+    Prints a consolidated, highly readable Dual-Target Firmware & Memory Summary dashboard
+    with explicit Total, Used, and FREE memory columns and prominent remaining capacity.
+    """
     boot_stats = analyze_memory(boot_map) if boot_map and os.path.exists(boot_map) else None
     app_stats = analyze_memory(app_map) if app_map and os.path.exists(app_map) else None
 
+    # Bootloader stats
     boot_flash_used = boot_stats['rom_used'] if boot_stats else (os.path.getsize(boot_bin) if boot_bin and os.path.exists(boot_bin) else 0)
     boot_flash_total = boot_stats['rom_total'] if boot_stats else (32 * 1024)
+    boot_flash_free = boot_flash_total - boot_flash_used
     boot_flash_pct = (boot_flash_used / boot_flash_total) * 100.0 if boot_flash_total else 0.0
 
     boot_ram_used = boot_stats['ram_used'] if boot_stats else 0
     boot_ram_total = boot_stats['ram_total'] if boot_stats else (64 * 1024 - 64)
+    boot_ram_free = boot_ram_total - boot_ram_used
     boot_ram_pct = (boot_ram_used / boot_ram_total) * 100.0 if boot_ram_total else 0.0
 
+    # Application stats
     app_flash_used = app_stats['rom_used'] if app_stats else (os.path.getsize(app_bin) if app_bin and os.path.exists(app_bin) else 0)
     app_flash_total = app_stats['rom_total'] if app_stats else (224 * 1024)
+    app_flash_free = app_flash_total - app_flash_used
     app_flash_pct = (app_flash_used / app_flash_total) * 100.0 if app_flash_total else 0.0
+    app_flash_free_pct = 100.0 - app_flash_pct
 
     app_ram_used = app_stats['ram_used'] if app_stats else 0
     app_ram_total = app_stats['ram_total'] if app_stats else (64 * 1024 - 64)
+    app_ram_free = app_ram_total - app_ram_used
     app_ram_pct = (app_ram_used / app_ram_total) * 100.0 if app_ram_total else 0.0
+    app_ram_free_pct = 100.0 - app_ram_pct
 
     app_heap = app_stats['freertos_heap'] if app_stats else 0
     app_heap_pct = (app_heap / app_ram_total) * 100.0 if app_ram_total else 0.0
 
+    # Total Chip Flash calculations (256 KB MCU)
+    total_mcu_flash = 256 * 1024
     if merged_bin and os.path.exists(merged_bin):
         merged_size = os.path.getsize(merged_bin)
     elif boot_bin and app_bin and os.path.exists(boot_bin) and os.path.exists(app_bin):
@@ -399,28 +423,54 @@ def print_dual_dashboard(boot_map, app_map, boot_bin=None, app_bin=None, merged_
     else:
         merged_size = 32768 + app_flash_used
 
+    total_flash_free = total_mcu_flash - merged_size
+    total_flash_pct = (merged_size / total_mcu_flash) * 100.0
+
     start_addr = 0x08000000
     end_addr = start_addr + merged_size - 1
 
-    line_sep = "=" * 88
-    sub_sep = "-" * 88
+    line_sep = "=" * 105
+    sub_sep = "-" * 105
 
     print(line_sep)
-    print("                   STM32C542 Dual-Target Firmware & Memory Summary                      ")
+    print("                              STM32C542 Dual-Target Memory & Flash Summary                               ")
     print(line_sep)
-    print("  Target / Component      Flash Address        Flash Usage [B]       RAM Usage [B]      ")
+    print("  Target / Region               Origin       Total Size        Used Space              Free Space         Usage  ")
     print(sub_sep)
-    print(f"  CAN Bootloader (Os)     0x08000000 ( 32 KB)  {format_bytes(boot_flash_used)} ({boot_flash_pct:5.1f}%)     {format_bytes(boot_ram_used)} ({boot_ram_pct:5.1f}%)  ")
-    print(f"  Main Application (RTOS) 0x08008000 (224 KB)  {format_bytes(app_flash_used)} ({app_flash_pct:5.1f}%)     {format_bytes(app_ram_used)} ({app_ram_pct:5.1f}%)  ")
+
+    # 1. Bootloader Rows
+    print("  BOOTLOADER (v_box_boot)")
+    print(f"    |-- FLASH (ROM)           0x08000000       {format_kb(boot_flash_total)}   {format_size_pair(boot_flash_used):>21}   {format_size_pair(boot_flash_free):>21}   {boot_flash_pct:5.1f}% ")
+    print(f"    `-- RAM (SRAM)            0x20000000       {format_kb(boot_ram_total)}   {format_size_pair(boot_ram_used):>21}   {format_size_pair(boot_ram_free):>21}   {boot_ram_pct:5.1f}% ")
+    print(sub_sep)
+
+    # 2. Main Application Rows
+    print("  APPLICATION (v_box)")
+    print(f"    |-- FLASH (ROM)           0x08008000      {format_kb(app_flash_total)}   {format_size_pair(app_flash_used):>21}   {format_size_pair(app_flash_free):>21}   {app_flash_pct:5.1f}% ")
+    print(f"    |-- RAM (SRAM)            0x20000000       {format_kb(app_ram_total)}   {format_size_pair(app_ram_used):>21}   {format_size_pair(app_ram_free):>21}   {app_ram_pct:5.1f}% ")
     if app_heap > 0:
-        print(f"    `-- FreeRTOS ucHeap   -                     -                    {format_bytes(app_heap)} ({app_heap_pct:5.1f}%)  ")
-    print(f"  Shared IPC (.noinit)    0x2000FFC0 (  64 B)   -                        64 B (Fixed)   ")
+        print(f"    `-- FreeRTOS ucHeap           -                -       {format_size_pair(app_heap):>21}             -             {app_heap_pct:5.1f}% ")
     print(sub_sep)
-    print(f"  Composite Flash Range:  0x{start_addr:08X} - 0x{end_addr:08X} ({merged_size:,} bytes / {merged_size/1024.0:.1f} KB)")
+
+    # 3. IPC Shared Memory
+    print(f"  SHARED_RAM (IPC Mailbox)    0x2000FFC0         64 B       {'64 B (Fixed)':>21}   {'0 B':>21}   100.0% ")
+    print(sub_sep)
+
+    # 4. Total Chip Flash
+    print(f"  TOTAL FLASH OCCUPIED        0x08000000      {format_kb(total_mcu_flash)}   {format_size_pair(merged_size):>21}   {format_size_pair(total_flash_free):>21}   {total_flash_pct:5.1f}% ")
+    print(f"    `-- Merged Range: 0x{start_addr:08X} - 0x{end_addr:08X} (Bootloader 32 KB slot + App {format_kb(app_flash_used).strip()})")
+    print(line_sep)
+
+    # 5. Output Artifacts
     print("  Output Files (build/debug_GCC_NUCLEO-C542RC/):")
-    print("    - Merged Full Image : v_box_full.hex | v_box_full.bin (Ready for ST-Link)")
-    print("    - Main Application  : v_box.elf | v_box.hex | v_box.bin (OTA Update)")
-    print("    - CAN Bootloader    : v_box_boot.elf | v_box_boot.hex | v_box_boot.bin")
+    print("    * Merged Full Image : v_box_full.hex | v_box_full.bin (ST-Link / Production Flash)")
+    print("    * Main Application  : v_box.elf | v_box.hex | v_box.bin (OTA Update Firmware)")
+    print("    * CAN Bootloader    : v_box_boot.elf | v_box_boot.hex | v_box_boot.bin")
+    print(line_sep)
+
+    # 6. Prominent Remaining Space Callout Banner at the very end
+    callout = f">>> FREE MEMORY: App Flash: {format_bytes(app_flash_free).strip()} ({format_kb(app_flash_free).strip()} / {app_flash_free_pct:.1f}%) | App RAM: {format_bytes(app_ram_free).strip()} ({format_kb(app_ram_free).strip()} / {app_ram_free_pct:.1f}%) <<<"
+    print(f"  {callout.center(101)}")
     print(line_sep)
 
 
