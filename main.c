@@ -29,6 +29,7 @@
 #include "io_manager.h"
 #include "ota_manager.h"
 #include "version.h"
+#include "safe_printf.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -51,9 +52,27 @@ int main(void)
     * You can use STM32CubeMX to generate and call this code or not in this project.
     * It also contains the HAL initialization and the initial clock configuration.
     */
-  if (mx_system_init() != SYSTEM_OK)
+  system_status_t sys_status = mx_system_init();
+  if (sys_status != SYSTEM_OK)
   {
-    return (-1);
+    /* Fast toggle LD1 (PA5) to signal fatal hardware/clock initialization error */
+    HAL_RCC_GPIOA_EnableClock();
+    hal_gpio_config_t led_cfg = {
+        .mode        = HAL_GPIO_MODE_OUTPUT,
+        .pull        = HAL_GPIO_PULL_NO,
+        .speed       = HAL_GPIO_SPEED_FREQ_LOW,
+        .output_type = HAL_GPIO_OUTPUT_PUSHPULL
+    };
+    (void)HAL_GPIO_Init(HAL_GPIOA, HAL_GPIO_PIN_5, &led_cfg);
+
+    while (1)
+    {
+      HAL_GPIO_TogglePin(HAL_GPIOA, HAL_GPIO_PIN_5);
+      for (volatile uint32_t i = 0; i < 1000000UL; i++)
+      {
+        __NOP();
+      }
+    }
   }
 
   /* Print system boot banner with FW/HW version and build metadata */
@@ -72,11 +91,13 @@ int main(void)
 
   if (!can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1"))
   {
+    safe_printf(NULL, "[MAIN] ERROR: CAN1 manager init failed!\r\n");
     return (-1);
   }
 
   if (!can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX))
   {
+    safe_printf(NULL, "[MAIN] ERROR: CAN1 parser select failed!\r\n");
     return (-1);
   }
 
@@ -87,28 +108,33 @@ int main(void)
 
   if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2"))
   {
+    safe_printf(NULL, "[MAIN] ERROR: CAN2 manager init failed!\r\n");
     return (-1);
   }
 
   if (!can_parser_select(&can2_inst, CAN_PARSER_ID_BOOT_OTA))
   {
+    safe_printf(NULL, "[MAIN] ERROR: CAN2 parser select failed!\r\n");
     return (-1);
   }
 
   /* 4. Inicjalizacja menedżera aktualizacji OTA (Dummy Update Worker i ISO-TP) */
   if (!ota_manager_init(&can2_inst))
   {
+    safe_printf(NULL, "[MAIN] ERROR: OTA manager init failed!\r\n");
     return (-1);
   }
 
   if(!io_manager_init())
   {
+    safe_printf(NULL, "[MAIN] ERROR: IO manager init failed!\r\n");
     return (-1);
   }
   
   /* Initialize FreeRTOS tasks */
   if (app_synctasks_init() != 0)
   {
+    safe_printf(NULL, "[MAIN] ERROR: app_synctasks_init failed!\r\n");
     return (-1);
   }
 

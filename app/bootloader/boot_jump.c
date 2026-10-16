@@ -6,8 +6,12 @@
 #include "boot_jump.h"
 #include "boot_shared.h"
 #include "stm32_hal.h"
+#include "mx_fdcan1.h"
 #include "mx_fdcan2.h"
 #include "mx_usart2.h"
+#include "mx_tim6.h"
+#include "mx_rcc.h"
+#include "mx_icache.h"
 
 bool boot_is_app_valid(uint32_t app_address)
 {
@@ -42,16 +46,25 @@ bool boot_is_app_valid(uint32_t app_address)
 
 void boot_jump_to_application(uint32_t app_address)
 {
+    /* De-initialize peripherals used by bootloader */
+    mx_fdcan2_deinit();
+    mx_fdcan1_deinit();
+    mx_usart2_uart_deinit();
+
+    /* Stop and reset ICACHE */
+    HAL_ICACHE_DeInit(mx_icache_gethandle());
+
+    /* Reset peripheral buses and restore default system clock (HSIDIV3, PSI/PLL disabled) */
+    (void)HAL_DeInit();
+    mx_rcc_deinit();
+    mx_tim6_deinit();
+
     __disable_irq();
 
     /* Disable and clear SysTick timer */
     SysTick->CTRL = 0U;
     SysTick->LOAD = 0U;
     SysTick->VAL  = 0U;
-
-    /* De-initialize peripherals used by bootloader */
-    mx_fdcan2_deinit();
-    mx_usart2_uart_deinit();
 
     /* Disable all NVIC interrupts and clear all pending interrupt requests */
     for (uint32_t i = 0U; i < 8U; i++)
@@ -73,15 +86,19 @@ void boot_jump_to_application(uint32_t app_address)
     uint32_t app_msp = *(volatile uint32_t *)app_address;
     uint32_t app_entry = *(volatile uint32_t *)(app_address + 4U);
 
-    /* Set Main Stack Pointer to application MSP */
-    __set_MSP(app_msp);
-    __set_CONTROL(0U); /* Ensure privileged mode with MSP stack */
+    /* Ensure privileged mode with MSP stack */
+    __set_CONTROL(0U);
+    __ISB();
 
-    __enable_irq();
-
-    /* Execute branch to Application Reset_Handler */
-    void (*app_reset_handler)(void) = (void (*)(void))app_entry;
-    app_reset_handler();
+    /* Execute atomic inline assembly jump to Application Reset_Handler */
+    __asm volatile (
+        "cpsie i        \n"  /* Enable interrupts (standard reset state) */
+        "msr   msp, %0  \n"  /* Set Application Main Stack Pointer */
+        "bx    %1       \n"  /* Branch to Application Reset_Handler */
+        :
+        : "r" (app_msp), "r" (app_entry)
+        : "memory"
+    );
 
     /* Unreachable code: trap if application handler unexpectedly returns */
     while (1)

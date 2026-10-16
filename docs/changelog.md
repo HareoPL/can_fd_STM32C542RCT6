@@ -70,6 +70,12 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Zwiększenie `configTOTAL_HEAP_SIZE` z 16 KB (16384 B) do 24 KB (24576 B) z zachowaniem ponad 37 KB wolnej pamięci SRAM mikrokontrolera, zabezpieczające zasoby na kolejki i zadania obu instancji CAN.
 
 ### Naprawione
+- **Procedura skoku z Bootloadera do Aplikacji Głównej (`app/bootloader/boot_jump.c`, `main.c`):**
+  - Wyeliminowano zawieszenie mikrokontrolera w pętli `while(1)` po skoku do Aplikacji (brak startu schedulera FreeRTOS i brak pracy diody LD1 heartbeat).
+  - Przyczyną problemu było pozostawienie aktywnego generatora zegara PSI @ 144 MHz po stronie Bootloadera – funkcja `HAL_RCC_PSI_SetConfig()` w `mx_rcc_init()` Aplikacji sprawdza, czy oscylator jest wyłączony (`is_psis_ready == 0U`), w wyniku czego zwracała krytyczny status `HAL_ERROR` (`SYSTEM_CLOCK_ERROR`), powodując wyjście z funkcji `main()` z kodem `-1`.
+  - W `boot_jump_to_application()` zaimplementowano pełne przywrócenie stanu sprzętowego: deinitializację peryferiów (`mx_fdcan1_deinit`, `mx_fdcan2_deinit`, `mx_usart2_uart_deinit`, `mx_tim6_deinit`), zatrzymanie i deinitializację pamięci podręcznej ICACHE (`HAL_ICACHE_DeInit`), reset szyn HAL (`HAL_DeInit()`) oraz reset drzewa zegarowego RCC (`mx_rcc_deinit() -> HAL_RCC_Reset()` do domyślnego HSIDIV3 @ 48 MHz).
+  - Zastąpiono wywołanie skoku przez C-wskaźnik funkcji atomicznym skokiem w asemblerze Cortex-M33 (`cpsie i`, `msr msp, %0`, `bx %1`), zapewniając nienaruszony stan rejestrów stosu i przerwań jak po resecie sprzętowym.
+  - W `main.c` dodano sygnalizację awarii zegarów/sprzętu (szybkie miganie LD1) oraz diagnostyczne logi UART w przypadku niepowodzenia inicjalizacji menedżerów CAN, OTA, I/O i zadań FreeRTOS.
 - **Obsługa odczytu 96-bitowego fabrycznego Device UID (`app/ota_update/ota_manager.c`):**
   - Wyeliminowano krytyczny błąd szyny (BusFault) i HardFault mikrokontrolera Cortex-M33, zastępując dostęp bajtowy (`uint8_t *` / `ldrb`) odczytem 32-bitowym słownym (`uint32_t *` / `ldr`) z wyrównanych adresów bloku informacyjnego Flash (`0x08FFF800`, `0x08FFF804`, `0x08FFF808`), zgodnie ze specyfikacją szyny systemowej STM32C5.
 
