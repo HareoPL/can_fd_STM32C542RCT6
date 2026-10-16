@@ -291,13 +291,13 @@ extern "C" {
 #define USE_HAL_FLASH_CLK_ENABLE_MODEL          HAL_CLK_ENABLE_NO
 #define USE_HAL_FLASH_REGISTER_CALLBACKS        0U
 #define USE_HAL_FLASH_USER_DATA                 0U
-#define USE_HAL_FLASH_GET_LAST_ERRORS           0U
+#define USE_HAL_FLASH_GET_LAST_ERRORS           1U
 /* Use the FLASH program by address feature */
-#define USE_HAL_FLASH_PROGRAM_BY_ADDR           0U
+#define USE_HAL_FLASH_PROGRAM_BY_ADDR           1U
 /* Use the FLASH erase by address feature */
-#define USE_HAL_FLASH_ERASE_BY_ADDR             0U
+#define USE_HAL_FLASH_ERASE_BY_ADDR             1U
 /* Use the FLASH erase by PAGE feature */
-#define USE_HAL_FLASH_ERASE_PAGE                0U
+#define USE_HAL_FLASH_ERASE_PAGE                1U
 /* Use the FLASH bank erase feature */
 #define USE_HAL_FLASH_ERASE_BANK                0U
 /* Use the FLASH mass erase feature */

@@ -454,8 +454,9 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
 
 > **Cel Fazy 4:** Podział pamięci Flash na Bootloader (`0x08000000`, 32 KB) oraz Aplikację (`0x08008000`, 224 KB), konfiguracja 3 trybów budowania w CMake (`Bootloader`, `MainApp`, `Merged`) i implementacja właściwego Bootloadera.
 
-#### [Task 4.1] Aktywacja sterownika HAL FLASH dla STM32C542
-* **Pliki do modyfikacji:**
+#### [Task 4.1] [ZREALIZOWANO] Aktywacja sterownika HAL FLASH dla STM32C542
+* **Status:** Zrealizowane i przetestowane kompilacyjnie.
+* **Pliki zmodyfikowane:**
   * `generated/hal/stm32c5xx_hal_conf.h`:
     ```c
     #define USE_HAL_FLASH_PROGRAM_BY_ADDR           1U
@@ -463,10 +464,11 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
     #define USE_HAL_FLASH_ERASE_PAGE                1U
     #define USE_HAL_FLASH_GET_LAST_ERRORS           1U
     ```
-  * `CMakeLists.txt`: Dodanie pliku `stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c` do kompilacji.
+  * `CMakeLists.txt`: Dodano plik `stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c` do kompilacji obu targetów.
 
-#### [Task 4.2] Utworzenie dedykowanych skryptów linkera (`.ld`) oraz relokacja `VTOR`
-* **Pliki do utworzenia / modyfikacji:**
+#### [Task 4.2] [ZREALIZOWANO] Utworzenie dedykowanych skryptów linkera (`.ld`) oraz relokacja `VTOR`
+* **Status:** Zrealizowane.
+* **Pliki utworzone / zmodyfikowane:**
   * `linker/stm32c542xc_boot_flash.ld` (dla Bootloadera):
     * `ROM (rx) : org = 0x08000000, len = 0x08000` (32 KB)
     * `RAM (xrw) : org = 0x20000000, len = 0x0FFC0`
@@ -476,37 +478,33 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
     * `RAM (xrw) : org = 0x20000000, len = 0x0FFC0`
     * `SHARED_RAM (rw) : org = 0x2000FFC0, len = 0x40` (sekcja `.noinit.boot_shared`)
   * Relokacja tablicy wektorów przerwań `SCB->VTOR`:
-    * W `stm32c5xx_dfp/Source/Templates/system_stm32c5xx.c` funkcja `SystemInit()` wykonuje już `SCB_SetVTOR((uint32_t)(&__VECTOR_TABLE[0]));`! Ponieważ `__VECTOR_TABLE` jest umieszczona w sekcji `.vectors` na początku regionu `ROM`, dla Bootloadera `VTOR` automatycznie ustawi się na `0x08000000`, a dla Aplikacji Głównej automatycznie ustawi się na `0x08008000`!
+    * W `stm32c5xx_dfp/Source/Templates/system_stm32c5xx.c` funkcja `SystemInit()` wykonuje `SCB_SetVTOR((uint32_t)(&__VECTOR_TABLE[0]));`. Ponieważ `__VECTOR_TABLE` jest umieszczona w sekcji `.vectors` na początku regionu `ROM`, dla Bootloadera `VTOR` automatycznie ustawia się na `0x08000000`, a dla Aplikacji Głównej na `0x08008000`.
 
-#### [Task 4.3] Konfiguracja `CMakeLists.txt` pod 2 targety (`v_box_boot` oraz `v_box`) i łączenie wsadów
-* **Pliki do modyfikacji:**
-  * `CMakeLists.txt`
-  * `tools/print_memory.py` (obsługa raportowania rozmiaru zarówno dla `v_box_boot.elf` [limit 32 KB], jak i `v_box.elf` [limit 224 KB])
-  * `tools/merge_binaries.py` (skrypt pomocniczy łączący `v_box_boot.bin` @ `0x08000000` + `v_box.bin` @ `0x08008000` w jeden plik `v_box_full.bin` oraz `v_box_full.hex` przy użyciu `srec_cat` lub czystego Pythona).
-  * `.vscode/tasks.json` – dodanie wygodnych zadań:
-    * `[Build] Bootloader Only`
-    * `[Build] MainApp Only`
-    * `[Build] Both (Bootloader + MainApp Merged)`
+#### [Task 4.3] [ZREALIZOWANO] Konfiguracja `CMakeLists.txt` pod 2 targety (`v_box_boot` oraz `v_box`) i łączenie wsadów
+* **Status:** Zrealizowane i przetestowane.
+* **Pliki zmodyfikowane / utworzone:**
+  * `CMakeLists.txt` (konfiguracja targetów `v_box` oraz `v_box_boot` z optymalizacją `-Os` dla bootloadera).
+  * `stm32c5xx_dfp/CMakeLists.txt` (wsparcie właściwości docelowej `CUSTOM_LINKER_SCRIPT`).
+  * `tools/print_memory.py` (obsługa raportowania rozmiaru dla `v_box_boot.elf` [limit 32 KB] oraz `v_box.elf` [limit 224 KB]).
+  * `tools/merge_binaries.py` (skrypt pomocniczy łączący `v_box_boot.bin` @ `0x08000000` + `v_box.bin` @ `0x08008000` w jeden plik `v_box_full.bin` oraz `v_box_full.hex`).
+  * `.vscode/tasks.json` – zadania programowania i budowania:
     * `[Flash] Full Merged Image (Bootloader + App)`
-* **Generowanie plików `.bin` i `.hex`:**
-  * Automatyczne wywołanie `arm-none-eabi-objcopy -O binary v_box.elf v_box.bin` po każdym buildzie aplikacji, aby plik `v_box.bin` był zawsze gotowy dla skryptu `can_updater.py`.
+    * `[Flash] Bootloader Only`
+    * `[Flash] MainApp Only`
+  * `.devcontainer/docker_build.bat` – eksport wszystkich artefaktów (.elf, .bin, .hex) do `build/debug_GCC_NUCLEO-C542RC/`.
 
-#### [Task 4.4] Implementacja Bootloadera (`app/bootloader/`) i procedury skoku `jump_to_app`
-#### [Task 4.4] Implementacja Bootloadera (`app/bootloader/`), detekcji `HardFault` i procedury skoku `jump_to_app`
-* **Pliki do utworzenia:**
-  * `app/bootloader/boot_main.c` (punkt wejścia `main()` dla targetu `v_box_boot` – bez FreeRTOSa, lekka pętla główna).
-  * `app/bootloader/openbl_core.h` i `openbl_core.c` (obsługa komend OpenBootloader + naszych komend UID/Verify).
-  * `app/bootloader/openbl_flash_c5.h` i `openbl_flash_c5.c` (adaptacja interfejsu pamięci OpenBootloader pod `HAL_FLASH` STM32C542).
-  * `app/bootloader/boot_jump.h` i `boot_jump.c` (bezpieczny skok do aplikacji oraz współdzielona struktura `boot_shared_ram_t`).
-  * `app/bootloader/boot_jump.h` i `boot_jump.c` (bezpieczny skok do aplikacji oraz obsługa współdzielonej struktury `boot_shared_ram_t`).
-  * `app/ota_update/fault_recovery.h` i `app/ota_update/fault_recovery.c` (nadpisanie `__WEAK void HardFault_Handler(void)` w `MainApp`, zrzut `fault_pc` i `SCB->CFSR` do `SHARED_RAM`, `NVIC_SystemReset()` oraz funkcja potwierdzająca zdrowy start `fault_recovery_confirm_app_healthy()` po 3 sekundach pracy FreeRTOS).
+#### [Task 4.4] [ZREALIZOWANO] Implementacja Bootloadera (`app/bootloader/`), detekcji `HardFault` i procedury skoku `jump_to_app`
+* **Status:** Zrealizowane i przetestowane.
+* **Pliki utworzone / zmodyfikowane:**
+  * `app/bootloader/boot_main.c` (punkt wejścia `main()` dla targetu `v_box_boot` – bare-metal bez FreeRTOSa).
+  * `app/bootloader/boot_shared.h` i `boot_shared.c` (definicja i walidacja 64-bajtowej struktury IPC w `SHARED_RAM` z CRC32).
+  * `app/bootloader/openbl_core.h` i `openbl_core.c` (bare-metal dyspozytor protokołu OpenBootloader + UID/Verify na CAN2).
+  * `app/bootloader/openbl_flash_c5.h` i `openbl_flash_c5.c` (sterownik zapisu/kasowania Flash STM32C542).
+  * `app/bootloader/boot_jump.h` i `boot_jump.c` (bezpieczny skok do Aplikacji: deinit peryferiów, czyszczenie MSPLIM/PSPLIM, relokacja VTOR, skok do Reset_Handler).
+  * `app/ota_update/fault_recovery.h` i `app/ota_update/fault_recovery.c` (przechwycenie `HardFault_Handler` w `MainApp`, zrzut `fault_pc` i `SCB->CFSR` do `SHARED_RAM`, reset MCU oraz potwierdzenie zdrowego startu `fault_recovery_confirm_app_healthy()` po 3 sekundach pracy FreeRTOS).
+  * `app/logging/safe_printf.c` (wsparcie działania bez FreeRTOS dla targetu Bootloadera).
 * **Logika startowa Bootloadera (`boot_main.c`):**
   1. Inicjalizacja zegarów (`mx_system_init()` – 144 MHz, `FDCAN2`, `USART2` do logów, `GPIO` dioda LD1).
-  2. Sprawdzenie flagi w `SHARED_RAM` (`0x2000FFC0`):
-     * Jeśli `magic == 0xB00710AD` (Aplikacja zażądała wejścia w Bootloader po CAN):
-       * Czyści `magic`, ustawia `s_ota_target_selected = (shared.session_selected == 1)`, odsyła `ACK (0x79)` na `0x7E8` (informując skrypt Pythona, że Bootloader już wystartował!) i zostaje w pętli Bootloadera bez limitu czasu (lub z timeoutem nieaktywności np. 30 s).
-     * Jeśli to normalny zimny start (Power-On Reset):
-       * Czeka przez krótkie okno startowe (np. `500 ms`) na ewentualną komendę `SELECT_TARGET` / `ENTER_BOOTLOADER` na `FDCAN2`.
   2. Walidacja `CRC32` struktury `SHARED_RAM` (`0x2000FFC0`):
      * **Przypadek A (`magic == 0xB00710AD`):** Aplikacja zażądała wejścia w Bootloader po CAN $\rightarrow$ czyści `magic`, ustawia `s_ota_target_selected = (shared.session_selected == 1)`, odsyła `ACK (0x79)` na `0x7E8` i zostaje w pętli Bootloadera.
      * **Przypadek B (`boot_fail_counter >= 3` – Wykryto pętlę `HardFault` / Resetów w `MainApp`):**
@@ -514,11 +512,8 @@ Poniżej znajduje się kompletny podział wdrożenia na **5 głównych faz** (or
        * Wypisuje na UART2 raport błędu (`[BOOT RECOVERY] MainApp crashed 3 times! Last reason=HardFault, PC=0x...`).
        * Co **1000 ms (1 Hz)** nadaje na `FDCAN2` (`ID = 0x7E9`) ramkę alarmową `CRASH_RECOVERY_BEACON` (`[0xEE, fault_reason, fail_cnt, uid_hash8, fault_pc(4B)]`) i czeka w trybie update na wgranie nowego firmware'u.
      * **Przypadek C (Normalny start, `boot_fail_counter < 3`):**
-       * Czeka przez krótkie okno startowe (np. `300 ms`) na ewentualną komendę `SELECT_TARGET` / `ENTER_BOOTLOADER` na `FDCAN2`.
+       * Czeka przez krótkie okno startowe (`300 ms`) na ewentualną komendę `SELECT_TARGET` / `ENTER_BOOTLOADER` na `FDCAN2`.
        * Jeśli na `FDCAN2` cisza $\rightarrow$ sprawdza poprawność aplikacji pod `0x08008000` (czy pierwsze słowo `MSP` wskazuje na poprawny adres SRAM `0x20000000..0x20010000`, a drugie słowo `Reset_Handler` wskazuje na Flash `0x08008001..0x0803FFFF`).
-       * Jeśli aplikacja jest poprawna $\rightarrow$ wykonuje `boot_jump_to_application(0x08008000)`.
-       * Jeśli Flash aplikacji jest pusty (`0xFFFFFFFF`) $\rightarrow$ zostaje w Bootloaderze (mrugając szybko diodą LD1 5 Hz) i czeka na wgranie firmware'u po CAN2!
-* **Bezpieczna procedura `boot_jump_to_application(0x08008000)`:**
        * Jeśli aplikacja jest poprawna $\rightarrow$ inkrementuje `shared.boot_fail_counter++`, przelicza `shared.crc32` i wykonuje `boot_jump_to_application(0x08008000)`.
        * Jeśli Flash aplikacji jest pusty (`0xFFFFFFFF`) $\rightarrow$ zostaje w Bootloaderze w trybie `RECOVERY`, nadaje co 1 s ramkę `0xEE` na CAN2 i czeka na wgranie firmware'u!
 * **Bezpieczna procedura `boot_jump_to_application(0x08008000)` (z czyszczeniem `MSPLIM`/`PSPLIM` dla Cortex-M33):**

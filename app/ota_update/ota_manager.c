@@ -13,6 +13,9 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "stm32_hal.h"
+#include "boot_shared.h"
+#include "fault_recovery.h"
 #include <string.h>
 
 #define TAG "OTA_MGR"
@@ -151,9 +154,13 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
                 return;
             }
 
-            safe_printf(TAG, "[CMD] ENTER_BOOTLOADER received (Dummy mode: sending ACK)\r\n");
-            uint8_t ack[1] = {OTA_RESP_ACK};
-            (void)isotp_send_pdu(&s_isotp_link, ack, sizeof(ack));
+            safe_printf(TAG, "[CMD] ENTER_BOOTLOADER requested! Saving state to SHARED_RAM and resetting...\r\n");
+            uint8_t resp[2] = {OTA_RESP_ACK, OTA_MODE_APPLICATION};
+            (void)isotp_send_pdu(&s_isotp_link, resp, sizeof(resp));
+
+            boot_shared_request_bootloader(s_target_selected);
+            vTaskDelay(pdMS_TO_TICKS(30));
+            NVIC_SystemReset();
             break;
         }
 
@@ -319,9 +326,19 @@ static void ota_worker_task(void *pvParameters)
 
     safe_printf(TAG, "OTA Worker Task started\r\n");
 
+    bool healthy_confirmed = false;
+
     for (;;)
     {
-        if (xQueueReceive(s_ota_rx_queue, &rx_msg, portMAX_DELAY) == pdTRUE)
+        /* Check if system has run stably for 3000 ms (clears boot failure counter) */
+        if (!healthy_confirmed && (xTaskGetTickCount() >= pdMS_TO_TICKS(3000U)))
+        {
+            healthy_confirmed = true;
+            fault_recovery_confirm_app_healthy();
+            safe_printf(TAG, "[HEALTHY] Application ran stably for 3s. Boot fail counter cleared.\r\n");
+        }
+
+        if (xQueueReceive(s_ota_rx_queue, &rx_msg, pdMS_TO_TICKS(500U)) == pdTRUE)
         {
             uint32_t can_id = CAN_msg_get_can_id(rx_msg.ident);
 

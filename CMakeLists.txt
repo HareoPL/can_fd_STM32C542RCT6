@@ -56,6 +56,10 @@ configure_file(
   @ONLY
 )
 
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+  CUSTOM_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/linker/stm32c542xc_app_flash.ld"
+)
+
 # Stubs to be able to add compiler flag overrides, e.g. -Os
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/version/version.c
@@ -68,16 +72,20 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/can_bus/isotp/isotp.c
   app/ota_update/crc32.c
   app/ota_update/ota_manager.c
+  app/ota_update/fault_recovery.c
+  app/bootloader/boot_shared.c
   app/io/io_manager.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
   app/port/stm32c5/stm32c5_can_adapter.c
   stm32c5xx_drivers/hal/stm32c5xx_hal_adc.c
+  stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional include directories here
   app
+  app/bootloader
   app/version
   ${CMAKE_CURRENT_BINARY_DIR}/generated_version
   app/logging
@@ -111,7 +119,14 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional linker libraries here
 )
 
-# Print memory footprint summary at the end of the build
+# Generate raw binary and hex files for Main Application
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
+  COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.hex
+  COMMENT "Generating ${CMAKE_PROJECT_NAME}.bin and ${CMAKE_PROJECT_NAME}.hex"
+)
+
+# Print memory footprint summary for Main Application
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
   add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
@@ -120,6 +135,87 @@ if(Python3_FOUND)
 else()
   add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+  )
+endif()
+
+# ==============================================================================
+# Target 2: CAN Bootloader (v_box_boot) - Lightweight Bare-Metal (No FreeRTOS)
+# ==============================================================================
+set(BOOT_TARGET "v_box_boot")
+add_executable(${BOOT_TARGET})
+set_target_properties(${BOOT_TARGET} PROPERTIES
+  SUFFIX ".elf"
+  CUSTOM_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/linker/stm32c542xc_boot_flash.ld"
+)
+target_compile_options(${BOOT_TARGET} PUBLIC ${CPU_FLAGS})
+target_compile_options(${BOOT_TARGET} PUBLIC "SHELL:-g3 -Os -fdata-sections -ffunction-sections -std=gnu11 -Wall -fstack-usage --specs=nano.specs --specs=nosys.specs -Werror=implicit-function-declaration ${CC_SECURE}")
+target_compile_definitions(${BOOT_TARGET} PUBLIC STM32C542xx _RTE_)
+target_link_options(${BOOT_TARGET} PUBLIC -Wl,-Map=${BOOT_TARGET}.map -Wl,--gc-sections -Wl,--start-group -lc -lm -Wl,--end-group -static --specs=nano.specs --specs=nosys.specs ${CC_SECURE})
+target_link_options(${BOOT_TARGET} PUBLIC ${CPU_FLAGS})
+
+target_sources(${BOOT_TARGET} PRIVATE
+  app/bootloader/boot_main.c
+  app/bootloader/boot_shared.c
+  app/bootloader/boot_jump.c
+  app/bootloader/openbl_core.c
+  app/bootloader/openbl_flash_c5.c
+  app/can_bus/isotp/isotp.c
+  app/ota_update/crc32.c
+  app/logging/safe_printf.c
+  app/port/stm32c5/bsp_io.c
+  stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c
+)
+
+target_include_directories(${BOOT_TARGET} PUBLIC
+  .
+  arch/cmsis/CMSIS/Core/Include
+  generated/hal
+  stm32c5xx_dfp/Include
+  stm32c5xx_drivers/hal
+  stm32c5xx_drivers/ll
+  user_modifiable/_debug_GCC_NUCLEO-C542RC
+  app
+  app/bootloader
+  app/logging
+  app/can_bus/isotp
+  app/ota_update
+  app/port
+  app/port/stm32c5
+)
+
+target_link_libraries(${BOOT_TARGET} PUBLIC
+  generated_STMicroelectronics_stm32c5xx_hal_drivers_0_0_1
+  generated_STMicroelectronics_syscalls_2_0_0
+  STMicroelectronics_CMSIS_6_3_0
+  STMicroelectronics_stm32c5xx_dfp_2_1_0
+  STMicroelectronics_stm32c5xx_hal_drivers_2_1_0
+  STMicroelectronics_syscalls_2_0_0
+)
+
+# Generate raw binary and hex files for Bootloader
+add_custom_command(TARGET ${BOOT_TARGET} POST_BUILD
+  COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${BOOT_TARGET}> ${CMAKE_CURRENT_BINARY_DIR}/${BOOT_TARGET}.bin
+  COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${BOOT_TARGET}> ${CMAKE_CURRENT_BINARY_DIR}/${BOOT_TARGET}.hex
+  COMMENT "Generating ${BOOT_TARGET}.bin and ${BOOT_TARGET}.hex"
+)
+
+# Print memory footprint summary for Bootloader
+if(Python3_FOUND)
+  add_custom_command(TARGET ${BOOT_TARGET} POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/print_memory.py $<TARGET_FILE:${BOOT_TARGET}> --build-type "${CMAKE_BUILD_TYPE}"
+  )
+endif()
+
+# ==============================================================================
+# Composite Firmware Merger (v_box_full.bin and v_box_full.hex)
+# ==============================================================================
+if(Python3_FOUND)
+  add_custom_target(merge_firmware ALL
+    DEPENDS ${CMAKE_PROJECT_NAME} ${BOOT_TARGET}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/merge_binaries.py
+            --boot ${CMAKE_CURRENT_BINARY_DIR}/${BOOT_TARGET}.bin
+            --app ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
+    COMMENT "Merging Bootloader and MainApp into v_box_full.bin and v_box_full.hex"
   )
 endif()
 

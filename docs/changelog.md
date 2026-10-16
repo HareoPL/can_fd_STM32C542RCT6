@@ -4,6 +4,25 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-16]
 ### Dodane
+- **Architektura podwójnego targetu budowania Dual-Target oraz skrypty linkera (`linker/stm32c542xc_boot_flash.ld`, `linker/stm32c542xc_app_flash.ld`, `CMakeLists.txt`, `stm32c5xx_dfp/CMakeLists.txt`):**
+  - Podział pamięci Flash na region Bootloadera (32 KB, `0x08000000`–`0x08007FFF`) oraz Aplikacji Głównej (224 KB, `0x08008000`–`0x0803FFFF`).
+  - Alokacja 64-bajtowego bufora pamięci nieresetowalnej `.noinit.boot_shared` (`SHARED_RAM` pod adresem `0x2000FFC0`) do bezpiecznej komunikacji międzyprocesowej IPC (Bootloader <-> Aplikacja) bez utraty danych przy `NVIC_SystemReset()`.
+  - Dedykowane targety kompilacji w CMake: `v_box` (Aplikacja z FreeRTOS, limit 224 KB) oraz `v_box_boot` (samodzielny Bootloader bare-metal z flagą optymalizacji `-Os`, rozmiar 20 064 B, 61.2% zajętości).
+- **Samodzielny Bootloader magistrali CAN (`app/bootloader/`):**
+  - `boot_main.c`: Lekki, bezsystemowy punkt wejścia ze 144 MHz zegarem bazowym, obsługą peryferium FDCAN2 i USART2, 300 ms oknem startowym nasłuchu na CAN2 oraz automatycznym skokiem do aplikacji.
+  - `boot_shared.h`, `boot_shared.c`: Moduł współdzielonej struktury IPC (`boot_shared_ram_t`, `BOOT_SHARED_MAGIC = 0xB00710AD`) zabezpieczonej sumą kontrolną CRC32.
+  - `boot_jump.h`, `boot_jump.c`: Bezpieczna procedura tranzycji do Aplikacji Głównej (`boot_jump_to_application`) z wyłączeniem przerwań, deinitializacją FDCAN2 i UART, czyszczeniem rejestrów limitu stosu Cortex-M33 (`MSPLIM`, `PSPLIM`), relokacją tablicy wektorów przerwań (`SCB->VTOR = 0x08008000`), ustawieniem wskaźnika MSP i skokiem do `Reset_Handler`.
+  - `openbl_core.h`, `openbl_core.c`: Bare-metal silnik protokołu OpenBootloader obsługujący komendy `CMD_DISCOVER_NODES (0xA0)`, `CMD_SELECT_TARGET (0xA1)`, `CMD_ENTER_BOOTLOADER (0xA2)`, `CMD_ERASE_APP (0x44)`, `CMD_WRITE_MEMORY (0x31)`, `CMD_VERIFY_FIRMWARE (0xA3)` oraz `CMD_JUMP_TO_APP (0x21)`.
+  - `openbl_flash_c5.h`, `openbl_flash_c5.c`: Sterownik operacji Flash STM32C542 realizujący odblokowanie/blokowanie kontrolera Flash, kasowanie stron (`HAL_FLASH_EraseByAddr`) oraz adaptacyjne programowanie bloków pamięci z natychmiastową weryfikacją odczytu.
+- **Mechanizm Anti-Brick oraz automatyczna telemetria awarii Recovery (`app/ota_update/fault_recovery.h`, `fault_recovery.c`):**
+  - Przechwytywanie wyjątków `HardFault_Handler`, `MemManage_Handler`, `BusFault_Handler`, `UsageFault_Handler` oraz asercji FreeRTOS `configASSERT` w Aplikacji Głównej.
+  - Zrzut adresu instrukcji błędu (`stacked_pc`) i rejestru statusu rdzenia (`SCB->CFSR`) do pamięci `SHARED_RAM` przed programowym resetem mikrokontrolera.
+  - Licznik nieudanych uruchomień (`boot_fail_counter`): po 3 nieudanych startach Aplikacji mikrokontroler permanentnie blokuje dalsze pętle resetu, wchodzi w tryb `BOOT_MODE_RECOVERY`, transmituje co 1 s ramkę alarmową `0xEE` (`CRASH_RECOVERY_BEACON`) na magistralę CAN2 i oczekuje na wgranie poprawionej wersji oprogramowania.
+  - Mechanizm potwierdzania stabilnego rozruchu (`fault_recovery_confirm_app_healthy()`): po 3 sekundach bezawaryjnej pracy scheduler zeruje licznik błędów.
+- **Narzędzie scalania wsadów binarnych i zadania programowania (`tools/merge_binaries.py`, `.vscode/tasks.json`, `.devcontainer/docker_build.bat`):**
+  - Implementacja skryptu `tools/merge_binaries.py` generującego połączone obrazy produkcyjne `v_box_full.bin` oraz `v_box_full.hex` łączące Bootloader pod `0x08000000` i Aplikację pod `0x08008000` (z dopełnieniem przestrzeni bajtami `0xFF`).
+  - Nowe zadania w VS Code: `[Flash] Full Merged Image (Bootloader + App)`, `[Flash] Bootloader Only`, `[Flash] MainApp Only`.
+  - Automatyczne generowanie i kopiowanie wszystkich artefaktów (`.elf`, `.bin`, `.hex`) do katalogu wyjściowego `build/debug_GCC_NUCLEO-C542RC/`.
 - **Narzędzie CLI aktualizacji i diagnostyki CAN Updater w Pythonie (`tools/can_updater.py`, `tools/requirements_ota.txt`):**
   - Implementacja wieloplatformowego skryptu CLI (`can_updater.py`) opartego na `python-can` wspierającego adaptery SLCAN (np. CANable) oraz natywne SocketCAN (Linux).
   - Wbudowany, czysty stos transportowy ISO 15765-2 (ISO-TP) w Pythonie realizujący segmentację i asemblację ramek SF, FF, CF z dynamiczną obsługą Flow Control (Block Size oraz STmin) bez potrzeby zewnętrznych sterowników jądra systemu.
@@ -34,6 +53,10 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Przekierowanie callbacków z profilu `cp_boot_ota.c` do kolejki workera w czasie < 1 µs.
 
 ### Zmienione
+- **Aktywacja sterowników HAL Flash (`generated/hal/stm32c5xx_hal_conf.h`, `CMakeLists.txt`):**
+  - Odblokowanie makr `USE_HAL_FLASH_PROGRAM_BY_ADDR`, `USE_HAL_FLASH_ERASE_BY_ADDR`, `USE_HAL_FLASH_ERASE_PAGE`, `USE_HAL_FLASH_GET_LAST_ERRORS` oraz włączenie pliku `stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c` do kompilacji obu targetów.
+- **Wieloplatformowość modułu `safe_printf` dla systemów RTOS i bare-metal (`app/logging/safe_printf.c`):**
+  - Uzależnienie muteksu FreeRTOS i nagłówków `FreeRTOS.h`/`semphr.h` od makra `CMSIS_USE_RTOS_FreeRTOS_Core_11_3_1`. Umożliwiło to bezkolizyjne współdzielenie tego samego kodu logowania przez USART2 w Aplikacji z FreeRTOS oraz w bare-metal Bootloaderze.
 - **Rozszerzenie adaptera portowego `stm32c5_can_adapter` o obsługę CAN2 (`app/port/stm32c5/stm32c5_can_adapter.h`, `stm32c5_can_adapter.c`):**
   - Wystawienie publicznego gettera `const can_interface_t *stm32c5_can2_interfaceGet(void)` zgodnie z regułą zero-extern i hermetyzacją.
   - Refaktoryzacja procedur inicjalizacji, transmisji, odbioru oraz programowania filtrów Message RAM na wspólny silnik parametryczny `stm32c5_can_*_generic()`.

@@ -33,12 +33,15 @@ if /i "%1"=="rebuild" (
 
 echo [INFO] Rozpoczynanie kompilacji projektu w kontenerze Docker...
 
-docker run --rm -v "%CURRENT_DIR%:/workspaces/5_v-box" -w /workspaces/5_v-box vbox-builder sh -c "cmake -B build/docker -G Ninja -DCMAKE_BUILD_TYPE=debug_GCC_NUCLEO-C542RC -DTOOLCHAIN_FILE=GCC.14.3.1.cmake && ninja -C build/docker && mkdir -p build/debug_GCC_NUCLEO-C542RC && cp build/docker/v_box.elf build/debug_GCC_NUCLEO-C542RC/v_box.elf"
+docker run --rm -v "%CURRENT_DIR%:/workspaces/5_v-box" -w /workspaces/5_v-box vbox-builder sh -c "cmake -B build/docker -G Ninja -DCMAKE_BUILD_TYPE=debug_GCC_NUCLEO-C542RC -DTOOLCHAIN_FILE=GCC.14.3.1.cmake && ninja -C build/docker && mkdir -p build/debug_GCC_NUCLEO-C542RC && cp -f build/docker/v_box* build/debug_GCC_NUCLEO-C542RC/"
 
 if %errorlevel% equ 0 (
     echo.
     echo [SUKCES] Kompilacja w Dockerze zakonczona pomyslnie!
-    echo [INFO] Gotowy plik binarny: build\debug_GCC_NUCLEO-C542RC\v_box.elf
+    echo [INFO] Gotowe pliki binarne w katalogu: build\debug_GCC_NUCLEO-C542RC\
+    echo   - MainApp    : v_box.elf, v_box.bin, v_box.hex
+    echo   - Bootloader : v_box_boot.elf, v_box_boot.bin, v_box_boot.hex
+    echo   - Merged     : v_box_full.bin, v_box_full.hex
 ) else (
     echo.
     echo [BLAD] Kompilacja w Dockerze zakonczona niepowodzeniem.

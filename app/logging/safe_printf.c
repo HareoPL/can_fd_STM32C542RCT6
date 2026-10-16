@@ -4,9 +4,14 @@
 #include <string.h>
 
 /* RTOS and System includes */
+#if defined(CMSIS_USE_RTOS_FreeRTOS_Core_11_3_1)
 #include "FreeRTOS.h"
 #include "task.h"
 #include "mx_freertos_app.h"
+#define HAVE_FREERTOS 1
+#else
+#define HAVE_FREERTOS 0
+#endif
 #include "stm32c5xx_hal.h"
 
 /* UART handle declaration from HAL generated code */
@@ -44,6 +49,7 @@ void safe_printf(const char *tag, const char *fmt, ...)
         len = PRINT_BUFFER_SIZE - 1;
     }
 
+#if HAVE_FREERTOS
     /* If RTOS mutex is ready and scheduler is running, take mutex */
     if (printf_mutex != NULL && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
     {
@@ -58,5 +64,9 @@ void safe_printf(const char *tag, const char *fmt, ...)
         /* Pre-scheduler / early boot: transmit directly via polling */
         HAL_UART_Transmit(huart, (uint8_t*)buffer, len, 1000);
     }
+#else
+    /* Bare-metal / Bootloader: transmit directly via polling */
+    HAL_UART_Transmit(huart, (uint8_t*)buffer, len, 1000);
+#endif
 }
 

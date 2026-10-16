@@ -25,6 +25,75 @@
             "problemMatcher": []
         },
         {
+            "label": "[Flash] Full Merged Image (Bootloader + App)",
+            "type": "process",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=SWD",
+                "mode=UR",
+                "-w",
+                "${workspaceFolder}\\build\\debug_GCC_NUCLEO-C542RC\\v_box_full.hex",
+                "-v",
+                "-rst"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Flash] Bootloader Only",
+            "type": "process",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=SWD",
+                "mode=UR",
+                "-w",
+                "${workspaceFolder}\\build\\debug_GCC_NUCLEO-C542RC\\v_box_boot.hex",
+                "-v",
+                "-rst"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Flash] MainApp Only",
+            "type": "process",
+            "command": "STM32_Programmer_CLI",
+            "args": [
+                "-c",
+                "port=SWD",
+                "mode=UR",
+                "-w",
+                "${workspaceFolder}\\build\\debug_GCC_NUCLEO-C542RC\\v_box.hex",
+                "-v",
+                "-rst"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "[Windows] Configure",
             "type": "cmake",
             "command": "configure",
