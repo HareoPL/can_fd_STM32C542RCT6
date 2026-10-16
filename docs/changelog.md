@@ -35,6 +35,10 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 - **Dostosowanie pamięci sterty FreeRTOS (`generated/middleware/FreeRTOSConfig.h`):**
   - Zwiększenie `configTOTAL_HEAP_SIZE` z 16 KB (16384 B) do 24 KB (24576 B) z zachowaniem ponad 37 KB wolnej pamięci SRAM mikrokontrolera, zabezpieczające zasoby na kolejki i zadania obu instancji CAN.
 
+### Naprawione
+- **Obsługa odczytu 96-bitowego fabrycznego Device UID (`app/ota_update/ota_manager.c`):**
+  - Wyeliminowano krytyczny błąd szyny (BusFault) i HardFault mikrokontrolera Cortex-M33, zastępując dostęp bajtowy (`uint8_t *` / `ldrb`) odczytem 32-bitowym słownym (`uint32_t *` / `ldr`) z wyrównanych adresów bloku informacyjnego Flash (`0x08FFF800`, `0x08FFF804`, `0x08FFF808`), zgodnie ze specyfikacją szyny systemowej STM32C5.
+
 ## [2026-10-15]
 ### Dodane
 - **Kompletny ekosystem narzędziowy w kontenerze Docker (`.devcontainer/Dockerfile`):**

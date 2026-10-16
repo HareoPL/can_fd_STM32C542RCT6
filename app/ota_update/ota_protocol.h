@@ -65,3 +65,4 @@ extern "C" {
 #endif
 
 #endif /* OTA_PROTOCOL_H */
+

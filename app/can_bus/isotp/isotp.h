@@ -140,3 +140,4 @@ void isotp_reset_rx(isotp_link_t *link);
 #endif
 
 #endif /* ISOTP_H */
+

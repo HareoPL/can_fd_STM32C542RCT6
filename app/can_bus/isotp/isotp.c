@@ -233,3 +233,4 @@ bool isotp_send_pdu(isotp_link_t *link, const uint8_t *payload, uint16_t length)
         return link->tx_fn(link->tx_can_id, ff_frame, sizeof(ff_frame), link->user_ctx);
     }
 }
+

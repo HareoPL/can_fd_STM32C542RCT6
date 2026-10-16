@@ -352,12 +352,14 @@ bool ota_manager_init(can_instance_t *can2_inst)
 
     s_can2_inst = can2_inst;
 
-    /* Read factory 96-bit Unique Device ID into cache */
-    const volatile uint8_t *uid_ptr = (const volatile uint8_t *)STM32C5_UID_BASE;
-    for (size_t i = 0; i < STM32C5_UID_LEN_BYTES; i++)
-    {
-        s_mcu_uid[i] = uid_ptr[i];
-    }
+    /* Read factory 96-bit Unique Device ID into cache using strictly 32-bit word accesses.
+     * The STM32 Information Block / OTP bus does not support 8-bit or 16-bit accesses
+     * and triggers an immediate BusFault / HardFault if LDRB/LDRH is used. */
+    uint32_t uid_words[3];
+    uid_words[0] = *((const volatile uint32_t *)(STM32C5_UID_BASE + 0x00U));
+    uid_words[1] = *((const volatile uint32_t *)(STM32C5_UID_BASE + 0x04U));
+    uid_words[2] = *((const volatile uint32_t *)(STM32C5_UID_BASE + 0x08U));
+    memcpy(s_mcu_uid, uid_words, sizeof(s_mcu_uid));
 
     safe_printf(TAG, "Initialized. MCU UID: %02X%02X%02X%02X-%02X%02X%02X%02X-%02X%02X%02X%02X\r\n",
                 s_mcu_uid[0], s_mcu_uid[1], s_mcu_uid[2], s_mcu_uid[3],

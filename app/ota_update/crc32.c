@@ -73,3 +73,4 @@ uint32_t crc32_calculate(const uint8_t *data, size_t length)
 {
     return crc32_finalize(crc32_update(crc32_init(), data, length));
 }
+

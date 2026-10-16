@@ -44,3 +44,4 @@ const uint8_t *ota_manager_get_uid(void);
 #endif
 
 #endif /* OTA_MANAGER_H */
+
