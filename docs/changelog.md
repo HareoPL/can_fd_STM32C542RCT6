@@ -4,6 +4,11 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
 ### Dodane
+- **Kompleksowa dokumentacja techniczna i instrukcja obsługi podsystemu CAN Bootloader & OTA (`docs/bootloader/can_bootloader_and_ota_guide.md`, `README.md`, `docs/project_documentation.md`):**
+  - Szczegółowy opis architektury Dual-Target (`v_box_boot` + `v_box`), mapy pamięci Flash/SRAM, warstwy ISO-TP, protokołu OpenBootloader oraz mechanizmów Anti-Brick (Deferred Vector Table Commit, reset RCC przy skoku, Staging Slot).
+  - Pełne diagramy przepływu programu (`Program Flow` w Mermaid) z podziałem na Bootloader (Fast-Boot < 2 ms, Stay-in-Boot, Recovery Mode `0xEE`) oraz Aplikację Główną (asynchroniczny `ota_worker_task`, 3s Healthy confirmation, `fault_recovery`).
+  - Instrukcja podłączenia sprzętowego dla konwertera **CANable 2.0** i transceivera 3.3V do kontrolera **FDCAN2** (`PB5` CN10 pin 6 / D4, `PB6` CN10 pin 3 / D10) oraz podręcznik CLI dla `tools/can_updater.py` i `tools/test_ota_suite.py` z autentycznymi logami z konsoli PC oraz terminala UART2.
+  - Aktualizacja głównego pliku `README.md` o opis architektury Dual-Target, instrukcje aktualizacji po CAN, nowe zadania VS Code (`[Flash] Full Merged Image`, `[Flash] Bootloader Only`, `[Flash] MainApp Only`) oraz linki do nowej dokumentacji.
 - **Interaktywny i zautomatyzowany pakiet testowy awarii i mechanizmów odporności OTA (`tools/test_ota_suite.py`):**
   - Implementacja dedykowanego narzędzia testowego weryfikującego odporność Bootloadera i Aplikacji Głównej na wstrzykiwane błędy i awarie zasilania.
   - **Test 1 (Application - Corrupted CRC32):** Weryfikacja odrzucenia uszkodzonej sumy kontrolnej weryfikacji aplikacji (`OTA_RESP_NACK, OTA_ERR_CRC`) i braku skoku do uszkodzonego kodu.

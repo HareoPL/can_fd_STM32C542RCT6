@@ -416,6 +416,8 @@ During early boot (before FreeRTOS scheduler initialization), `main()` invokes `
 
 ## 9. CAN Bootloader & OTA Dual-Target Subsystem
 
+> **Full Guide & Operating Manual:** See [docs/bootloader/can_bootloader_and_ota_guide.md](file:///c:/WORK/5_v-box/docs/bootloader/can_bootloader_and_ota_guide.md) for complete program flow diagrams, hardware wiring (`CANable 2.0` + `FDCAN2`), and CLI usage examples.
+
 The system implements a fully integrated, dual-target firmware architecture consisting of an autonomous bare-metal **CAN Bootloader** (`v_box_boot`) and a preemptive FreeRTOS **Main Application** (`v_box`), communicating over **FDCAN2** (`PB5` RX / `PB6` TX, 500 kbps Classic CAN 2.0).
 
 ### 9.1. Flash & SRAM Memory Map
@@ -432,8 +434,8 @@ The system implements a fully integrated, dual-target firmware architecture cons
 
 1. **Target Discovery & Selection:** PC scans nodes via broadcast `CMD_DISCOVER_NODES (0xA0)` on `0x7DF`. Devices reply with unique 96-bit UID on `0x7E9`. The target node is locked with `CMD_SELECT_TARGET (0xA1)`.
 2. **Reboot to Bootloader:** PC issues `CMD_ENTER_BOOTLOADER (0xA2)`. The Main Application writes `magic = BOOT_SHARED_MAGIC` into `SHARED_RAM` and executes `NVIC_SystemReset()`.
-3. **Flash Erase & Write:** Bootloader starts in < 2 ms, validates IPC mailbox, erases Application pages (`0x08008000`), streams binary blocks (256 B) via ISO 15765-2 transport with block-level CRC32, and verifies full-image CRC32 (`CMD_VERIFY_FIRMWARE`).
-4. **Fast-Boot Jump:** On `CMD_GO_EXECUTE (0x21)`, Bootloader deinitializes peripherals, resets VTOR to `0x08008000`, clears Cortex-M33 `MSPLIM`/`PSPLIM`, and branches to the new Application Reset_Handler.
+3. **Flash Erase, Deferred Vector Write & Verification:** Bootloader starts in < 2 ms, validates IPC mailbox, erases Application pages (`0x08008000`), and streams binary blocks (256 B) via ISO 15765-2 transport with block-level CRC32. **Block 0 (`0x08008000`) is buffered in RAM (`s_deferred_vector_block`) and committed to Flash only inside `CMD_VERIFY_FIRMWARE (0xA3)`** after full-image CRC32 validation succeeds, preventing power-loss bricking.
+4. **Fast-Boot Jump:** On `CMD_GO_EXECUTE (0x21)`, Bootloader deinitializes peripherals and RCC clocks (`mx_rcc_deinit()`), resets VTOR to `0x08008000`, clears Cortex-M33 `MSPLIM`/`PSPLIM`, and branches to the new Application `Reset_Handler`.
 
 ### 9.3. Remote Bootloader Update Flow via Staging Slot (Task 6.1)
 
@@ -443,7 +445,7 @@ To prevent bricking the microcontroller in case of CAN bus disconnection or powe
 3. **Integrity & Vector Table Validation:** On `CMD_UPDATE_BOOTLOADER (0xA4)`, the Main Application:
    * Validates full image CRC32 of the staged binary against the expected checksum.
    * Validates the Cortex-M33 vector table (ensuring `MSP` resides in SRAM `0x20000000`..`0x20010000` and `Reset_Handler` points into `0x08000001`..`0x08008000` with Thumb bit 1).
-4. **Atomic Installation:** In a critical section (`taskENTER_CRITICAL()`), the Main Application erases `0x08000000`, copies the verified image from Staging, confirms byte-by-byte with `memcmp`, and sends positive `ACK`.
+4. **Atomic Installation:** In a critical section (`taskENTER_CRITICAL()`), the Main Application erases `0x08000000`, copies the verified image from Staging, confirms byte-by-byte with `memcmp`, erases the Staging Slot, and sends positive `ACK`.
 5. **Reboot:** On `CMD_GO_EXECUTE`, `NVIC_SystemReset()` executes the newly installed Bootloader.
 
 
