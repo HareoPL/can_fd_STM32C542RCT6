@@ -27,7 +27,19 @@ import time
 import zlib
 import struct
 import argparse
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Callable
+
+# ==============================================================================
+# Protocol Callbacks for GUI & Automation Integration
+# ==============================================================================
+# progress_cb(current_bytes: int, total_bytes: int, speed_kbps: float, eta_sec: float, retries: int)
+ProgressCallback = Optional[Callable[[int, int, float, float, int], None]]
+# step_cb(step_index: int, total_steps: int, step_title: str)
+StepCallback = Optional[Callable[[int, int, str], None]]
+# log_cb(level: str, message: str)  # level in {"INFO", "OK", "WARN", "ERROR", "RECOVERY"}
+LogCallback = Optional[Callable[[str, str], None]]
+# cancel_cb() -> bool  # returns True if user requested abort
+CancelCallback = Optional[Callable[[], bool]]
 
 try:
     import can
@@ -67,6 +79,27 @@ OTA_MODE_NAMES = {
     OTA_MODE_APPLICATION: "APPLICATION",
     OTA_MODE_RECOVERY: "RECOVERY_MODE"
 }
+
+OTA_ERR_NAMES = {
+    0x00: "No Error / Brak błędu",
+    0x01: "CRC32 Checksum Mismatch / Błąd sumy kontrolnej",
+    0x02: "Flash Address Out of Range / Adres poza zakresem partycji",
+    0x03: "16-Byte Alignment Error / Błąd wyrównania 16-bajtowego",
+    0x04: "Flash Hardware / Vector Table Error / Błąd sprzętowy pamięci Flash lub wektorów",
+    0x05: "Protocol Sequence Error / Błąd sekwencji protokołu",
+    0x06: "Command Disallowed in Current Mode / Polecenie niedozwolone w tym trybie"
+}
+
+def decode_nack(resp: Optional[bytes]) -> str:
+    """Decodes OTA NACK error code into human-readable description."""
+    if not resp or len(resp) == 0:
+        return "Timeout (Brak odpowiedzi)"
+    if resp[0] == OTA_RESP_NACK:
+        code = resp[1] if len(resp) > 1 else 0x00
+        desc = OTA_ERR_NAMES.get(code, f"Nieznany błąd (0x{code:02X})")
+        return f"NACK (0x{code:02X}: {desc})"
+    return f"Nieoczekiwana odpowiedź (0x{resp.hex()})"
+
 
 # ==============================================================================
 # ISO 15765-2 (ISO-TP) Transport Layer Client
@@ -249,11 +282,19 @@ def parse_uid(raw_uid: str) -> bytes:
         raise ValueError(f"Invalid UID length: expected 24 hex characters (12 bytes), got '{raw_uid}'")
     return bytes.fromhex(clean)
 
-def scan_nodes(bus: can.BusABC, timeout: float = 0.5, verbose: bool = False) -> List[Dict]:
+def scan_nodes(bus: can.BusABC,
+               timeout: float = 0.5,
+               verbose: bool = False,
+               log_cb: LogCallback = None,
+               beacons_out: Optional[List[Dict]] = None) -> List[Dict]:
     """
     Broadcasts CMD_DISCOVER_NODES (0xA0) on 0x7DF and collects announcements from 0x7E9.
+    Computes 8-bit UID hash (CRC32 & 0xFF) and captures 0xEE CRASH_RECOVERY_BEACON frames.
     """
-    print("\n[INFO] Scanning CAN bus (500 kbps) for STM32 devices...")
+    scan_msg = "Scanning CAN bus (500 kbps) for STM32 devices..."
+    print(f"\n[INFO] {scan_msg}")
+    if log_cb:
+        log_cb("INFO", scan_msg)
 
     # Clear pending RX queue
     while bus.recv(timeout=0.01):
@@ -289,13 +330,18 @@ def scan_nodes(bus: can.BusABC, timeout: float = 0.5, verbose: bool = False) -> 
                 if uid_bytes not in seen_uids:
                     seen_uids.add(uid_bytes)
                     mode_str = OTA_MODE_NAMES.get(mode_byte, f"UNKNOWN(0x{mode_byte:02X})")
-                    devices.append({
+                    uid_hash = zlib.crc32(uid_bytes) & 0xFF
+                    dev_entry = {
                         "uid": uid_bytes,
                         "uid_str": format_uid(uid_bytes),
+                        "uid_hash": uid_hash,
                         "mode": mode_str,
                         "mode_byte": mode_byte,
                         "version": f"v{v_major}.{v_minor}"
-                    })
+                    }
+                    devices.append(dev_entry)
+                    if log_cb:
+                        log_cb("INFO", f"Discovered node: UID={dev_entry['uid_str']} (Hash=0x{uid_hash:02X}) Mode={mode_str} FW={dev_entry['version']}")
                 pending_f1 = None
             elif sub_idx == 0xEE:
                 reason_code = rx.data[1]
@@ -310,15 +356,32 @@ def scan_nodes(bus: can.BusABC, timeout: float = 0.5, verbose: bool = False) -> 
                     0x04: "NO_APP (Blank/Missing Flash)"
                 }
                 reason_str = reason_map.get(reason_code, f"UNKNOWN(0x{reason_code:02X})")
-                print(f"  [RECOVERY BEACON 0xEE] Device in RECOVERY mode: Reason={reason_str}, Crashes={fail_cnt}, PC=0x{pc:08X}, UID_hash=0x{uid_hash:02X}")
+                beacon_dict = {
+                    "reason_code": reason_code,
+                    "reason_str": reason_str,
+                    "fail_cnt": fail_cnt,
+                    "uid_hash": uid_hash,
+                    "pc": pc,
+                    "timestamp": time.time()
+                }
+                if beacons_out is not None:
+                    beacons_out.append(beacon_dict)
+                rec_log = f"Device in RECOVERY mode: Reason={reason_str}, Crashes={fail_cnt}, PC=0x{pc:08X}, UID_hash=0x{uid_hash:02X}"
+                print(f"  [RECOVERY BEACON 0xEE] {rec_log}")
+                if log_cb:
+                    log_cb("RECOVERY", rec_log)
 
     if not devices:
         print("  --> No STM32 devices responded on CAN bus.")
+        if log_cb:
+            log_cb("WARN", "No STM32 devices responded on CAN bus.")
     else:
         print(f"\n[OK] Found {len(devices)} device(s) on CAN bus:")
         for idx, dev in enumerate(devices, 1):
-            print(f"  [{idx}] UID: {dev['uid_str']} | Mode: {dev['mode']:<12} | FW: {dev['version']}")
+            print(f"  [{idx}] UID: {dev['uid_str']} (Hash: 0x{dev['uid_hash']:02X}) | Mode: {dev['mode']:<12} | FW: {dev['version']}")
         print()
+        if log_cb:
+            log_cb("OK", f"Discovery finished: {len(devices)} device(s) active on CAN bus.")
 
     return devices
 
@@ -349,11 +412,20 @@ def run_update_session(bus: can.BusABC,
                        is_dummy: bool = True,
                        verbose: bool = False,
                        abort_after_blocks: Optional[int] = None,
-                       force_crc: Optional[int] = None) -> bool:
+                       force_crc: Optional[int] = None,
+                       progress_cb: ProgressCallback = None,
+                       step_cb: StepCallback = None,
+                       log_cb: LogCallback = None,
+                       cancel_cb: CancelCallback = None) -> bool:
     """
     Executes a complete update sequence (Target Select -> Erase -> Stream Blocks -> Verify CRC32 -> Execute).
     Supports fault-injection via abort_after_blocks and force_crc.
+    Notifies caller via progress_cb, step_cb, log_cb, and supports early cancellation via cancel_cb.
     """
+    def _log(level: str, msg: str):
+        if log_cb:
+            log_cb(level, msg)
+
     client = IsoTpClient(bus, tx_id=CAN_ID_ISOTP_REQ, rx_id=CAN_ID_ISOTP_RESP, verbose=verbose)
     uid_str = format_uid(target_uid)
     mode_label = "DUMMY UPDATE (Simulation)" if is_dummy else "FIRMWARE FLASH (Hardware Flash)"
@@ -367,81 +439,131 @@ def run_update_session(bus: can.BusABC,
     full_crc32 = force_crc if force_crc is not None else (zlib.crc32(firmware_data) & 0xFFFFFFFF)
     print(f"  Full CRC32      : 0x{full_crc32:08X} (IEEE 802.3)")
     print("=" * 76)
+    _log("INFO", f"Starting {mode_label} for {uid_str} ({len(firmware_data)} B, CRC32=0x{full_crc32:08X})")
 
     # --------------------------------------------------------------------------
     # Step 1: Select Target by UID
     # --------------------------------------------------------------------------
-    print("\n[Step 1/5] Selecting Target Device by 96-bit UID...")
+    if step_cb:
+        step_cb(1, 5, "Selecting Target Device by 96-bit UID")
+    step1_msg = f"[Step 1/5] Selecting Target Device by 96-bit UID ({uid_str})..."
+    print(f"\n{step1_msg}")
+    _log("INFO", step1_msg)
+
     select_pdu = bytes([CMD_SELECT_TARGET]) + target_uid
     if not client.send_pdu(select_pdu, timeout=1.0):
-        print("  [FAILED] Failed to transmit CMD_SELECT_TARGET frame", file=sys.stderr)
+        fail_msg = "Failed to transmit CMD_SELECT_TARGET frame"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=1.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Target did not acknowledge selection (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Target did not acknowledge selection: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     mode = resp[1] if len(resp) > 1 else 0x01
-    print(f"  [OK] Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
+    ok_msg = f"Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}"
+    print(f"  [OK] {ok_msg}")
+    _log("OK", ok_msg)
 
     if not is_dummy and mode == 0x01:  # APPLICATION mode -> request switch to Bootloader
-        print("\n[Step 1b] Device is currently running APPLICATION. Requesting switch to BOOTLOADER...")
+        step1b_msg = "[Step 1b] Device is currently running APPLICATION. Requesting switch to BOOTLOADER..."
+        print(f"\n{step1b_msg}")
+        _log("INFO", step1b_msg)
         enter_pdu = bytes([CMD_ENTER_BOOTLOADER])
         if not client.send_pdu(enter_pdu, timeout=1.5):
-            print("  [FAILED] Failed to transmit CMD_ENTER_BOOTLOADER frame", file=sys.stderr)
+            fail_msg = "Failed to transmit CMD_ENTER_BOOTLOADER frame"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         resp_boot = client.recv_pdu(timeout=1.5)
         if not resp_boot or len(resp_boot) < 1 or resp_boot[0] != OTA_RESP_ACK:
-            print(f"  [FAILED] Device rejected CMD_ENTER_BOOTLOADER (resp={resp_boot.hex() if resp_boot else 'None'})", file=sys.stderr)
+            fail_msg = f"Device rejected CMD_ENTER_BOOTLOADER: {decode_nack(resp_boot)}"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
-        print("  [OK] Device acknowledged reboot to Bootloader! Waiting for MCU reset (~150 ms)...")
+        reboot_msg = "Device acknowledged reboot to Bootloader! Waiting for MCU reset (~150 ms)..."
+        print(f"  [OK] {reboot_msg}")
+        _log("INFO", reboot_msg)
         time.sleep(0.2)
 
         # Re-select target in Bootloader to verify session is active
         print("  --> Re-selecting target in Bootloader...")
         if not client.send_pdu(select_pdu, timeout=1.5):
-            print("  [FAILED] Failed to transmit CMD_SELECT_TARGET after reboot", file=sys.stderr)
+            fail_msg = "Failed to transmit CMD_SELECT_TARGET after reboot"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         resp = client.recv_pdu(timeout=1.5)
         if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-            print(f"  [FAILED] Bootloader did not acknowledge selection after reboot", file=sys.stderr)
+            fail_msg = f"Bootloader did not acknowledge selection after reboot: {decode_nack(resp)}"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         mode = resp[1] if len(resp) > 1 else 0x00
-        print(f"  [OK] Connected to Bootloader! Mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
+        boot_conn_msg = f"Connected to Bootloader! Mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}"
+        print(f"  [OK] {boot_conn_msg}")
+        _log("OK", boot_conn_msg)
 
     # --------------------------------------------------------------------------
     # Step 2: Erase Application Flash Area
     # --------------------------------------------------------------------------
     total_size = len(firmware_data)
-    print(f"\n[Step 2/5] Requesting Flash Erase (0x{app_address:08X}, size={total_size} B)...")
+    if step_cb:
+        step_cb(2, 5, f"Erasing Flash Area (0x{app_address:08X})")
+    step2_msg = f"[Step 2/5] Requesting Flash Erase (0x{app_address:08X}, size={total_size} B)..."
+    print(f"\n{step2_msg}")
+    _log("INFO", step2_msg)
+
     erase_pdu = bytes([CMD_ERASE_APP]) + struct.pack('<II', app_address, total_size)
     if not client.send_pdu(erase_pdu, timeout=2.0):
-        print("  [FAILED] Failed to send CMD_ERASE_APP command", file=sys.stderr)
+        fail_msg = "Failed to send CMD_ERASE_APP command"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=6.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Erase command failed or timeout (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Erase command failed or timeout: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     print("  [OK] Erase confirmed by device!")
+    _log("OK", "Flash erase confirmed by device!")
 
     # --------------------------------------------------------------------------
     # Step 3: Stream Firmware Blocks with Block-level CRC32 Verification
     # --------------------------------------------------------------------------
-    print(f"\n[Step 3/5] Streaming {total_size} bytes in blocks of {block_size} B...")
+    if step_cb:
+        step_cb(3, 5, f"Streaming {total_size} B in blocks of {block_size} B")
+    step3_msg = f"[Step 3/5] Streaming {total_size} bytes in blocks of {block_size} B..."
+    print(f"\n{step3_msg}")
+    _log("INFO", step3_msg)
+
     t_stream_start = time.time()
     offset = 0
     block_index = 0
+    total_retries = 0
 
     while offset < total_size:
+        if cancel_cb and cancel_cb():
+            abort_msg = "Update session cancelled by user!"
+            print(f"\n  [ABORT] {abort_msg}", file=sys.stderr)
+            _log("WARN", abort_msg)
+            return False
+
         if abort_after_blocks is not None and block_index >= abort_after_blocks:
-            print(f"\n  [ABORT] Fault-injection: Aborting update after {block_index} blocks as requested!", file=sys.stderr)
+            abort_msg = f"Fault-injection: Aborting update after {block_index} blocks as requested!"
+            print(f"\n  [ABORT] {abort_msg}", file=sys.stderr)
+            _log("WARN", abort_msg)
             return False
 
         chunk = firmware_data[offset : offset + block_size]
@@ -457,62 +579,103 @@ def run_update_session(bus: can.BusABC,
         # Transmit with retry logic (up to 3 retries)
         success = False
         for retry in range(3):
+            if cancel_cb and cancel_cb():
+                _log("WARN", "Update session cancelled by user during block transfer!")
+                return False
+
             if not client.send_pdu(write_pdu, timeout=1.0):
+                total_retries += 1
                 continue
 
             resp = client.recv_pdu(timeout=1.0)
             if resp and len(resp) >= 1 and resp[0] == OTA_RESP_ACK:
                 success = True
                 break
-            elif verbose:
-                print(f"\n  [RETRY] Block #{block_index} failed, retrying ({retry+1}/3)...")
+            else:
+                total_retries += 1
+                if verbose or log_cb:
+                    warn_msg = f"Block #{block_index} write retry ({retry+1}/3) - resp: {decode_nack(resp)}"
+                    if verbose:
+                        print(f"\n  [RETRY] {warn_msg}")
+                    _log("WARN", warn_msg)
 
         if not success:
-            print(f"\n  [FAILED] Error writing block at offset 0x{offset:X} after 3 retries!", file=sys.stderr)
+            fail_msg = f"Error writing block #{block_index} at offset 0x{offset:X} after 3 retries!"
+            print(f"\n  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         offset += chunk_len
         block_index += 1
+        elapsed = max(0.001, time.time() - t_stream_start)
+        speed_kb = (offset / 1024.0) / elapsed
+        rem_bytes = max(0, total_size - offset)
+        eta_sec = (rem_bytes / (speed_kb * 1024.0)) if speed_kb > 0 else 0.0
+
         print_progress_bar(offset, total_size, t_stream_start, prefix="Flashing:")
+        if progress_cb:
+            progress_cb(offset, total_size, speed_kb, eta_sec, total_retries)
 
     print("\n  [OK] All blocks successfully transmitted and verified!")
+    _log("OK", f"All {block_index} blocks transmitted successfully! Retries: {total_retries}")
 
     # --------------------------------------------------------------------------
     # Step 4: Verify Full Image CRC32
     # --------------------------------------------------------------------------
-    print(f"\n[Step 4/5] Verifying entire firmware checksum (CRC32: 0x{full_crc32:08X})...")
+    if step_cb:
+        step_cb(4, 5, f"Verifying Checksum (0x{full_crc32:08X})")
+    step4_msg = f"[Step 4/5] Verifying entire firmware checksum (CRC32: 0x{full_crc32:08X})..."
+    print(f"\n{step4_msg}")
+    _log("INFO", step4_msg)
+
     verify_pdu = bytes([CMD_VERIFY_FIRMWARE]) + struct.pack('<II', total_size, full_crc32)
     if not client.send_pdu(verify_pdu, timeout=2.0):
-        print("  [FAILED] Failed to send CMD_VERIFY_FIRMWARE command", file=sys.stderr)
+        fail_msg = "Failed to send CMD_VERIFY_FIRMWARE command"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=2.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Full image CRC32 verification rejected by device! (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Full image CRC32 verification rejected: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     print("  [OK] Full firmware integrity confirmed by target hardware!")
+    _log("OK", "Full firmware integrity confirmed by target hardware!")
 
     # --------------------------------------------------------------------------
     # Step 5: Execute / Jump to Application
     # --------------------------------------------------------------------------
-    print("\n[Step 5/5] Requesting execution / restart (CMD_GO_EXECUTE)...")
+    if step_cb:
+        step_cb(5, 5, "Executing / Jumping to Application")
+    step5_msg = "[Step 5/5] Requesting execution / restart (CMD_GO_EXECUTE)..."
+    print(f"\n{step5_msg}")
+    _log("INFO", step5_msg)
+
     go_pdu = bytes([CMD_GO_EXECUTE])
     client.send_pdu(go_pdu, timeout=1.0)
     resp = client.recv_pdu(timeout=1.0)
     if resp and resp[0] == OTA_RESP_ACK:
         print("  [OK] Device acknowledged jump command!")
+        _log("OK", "Device acknowledged jump command!")
     else:
         print("  [INFO] Device rebooted directly into new firmware.")
+        _log("INFO", "Device rebooted directly into new firmware.")
 
     total_time = max(0.001, time.time() - t_stream_start)
     avg_speed = (total_size / 1024.0) / total_time
+    if progress_cb:
+        progress_cb(total_size, total_size, avg_speed, 0.0, total_retries)
+
     print("\n" + "=" * 76)
     print(f"  [SUCCESS] {mode_label} COMPLETED SUCCESSFULLY!")
     print(f"  Total Data      : {total_size} bytes ({total_size/1024.0:.2f} KB)")
     print(f"  Transfer Time   : {total_time:.2f} seconds")
     print(f"  Effective Speed : {avg_speed:.2f} KB/s")
     print("=" * 76)
+    _log("OK", f"{mode_label} COMPLETED SUCCESSFULLY in {total_time:.2f}s ({avg_speed:.2f} KB/s)")
     return True
 
 def run_bootloader_update_session(bus: can.BusABC,
@@ -521,7 +684,11 @@ def run_bootloader_update_session(bus: can.BusABC,
                                   block_size: int = 256,
                                   verbose: bool = False,
                                   abort_after_blocks: Optional[int] = None,
-                                  force_crc: Optional[int] = None) -> bool:
+                                  force_crc: Optional[int] = None,
+                                  progress_cb: ProgressCallback = None,
+                                  step_cb: StepCallback = None,
+                                  log_cb: LogCallback = None,
+                                  cancel_cb: CancelCallback = None) -> bool:
     """
     Executes a complete Bootloader update sequence via the Flash Staging Slot:
     1. Select Target & verify/switch to APPLICATION mode.
@@ -531,7 +698,12 @@ def run_bootloader_update_session(bus: can.BusABC,
     5. Issue CMD_UPDATE_BOOTLOADER (0xA4) to validate Cortex-M33 vector table and install to 0x08000000.
     6. Issue CMD_GO_EXECUTE to reboot MCU into the new Bootloader.
     Supports fault-injection via abort_after_blocks and force_crc.
+    Notifies caller via progress_cb, step_cb, log_cb, and supports early cancellation via cancel_cb.
     """
+    def _log(level: str, msg: str):
+        if log_cb:
+            log_cb(level, msg)
+
     client = IsoTpClient(bus, tx_id=CAN_ID_ISOTP_REQ, rx_id=CAN_ID_ISOTP_RESP, verbose=verbose)
     uid_str = format_uid(target_uid)
     staging_address = BOOTLOADER_STAGING_BASE
@@ -547,28 +719,40 @@ def run_bootloader_update_session(bus: can.BusABC,
     print(f"  Block Size      : {block_size} bytes")
     print(f"  Full CRC32      : 0x{full_crc32:08X} (IEEE 802.3)")
     print("=" * 76)
+    _log("INFO", f"Starting BOOTLOADER UPDATE for {uid_str} ({total_size} B, CRC32=0x{full_crc32:08X})")
 
     # --------------------------------------------------------------------------
     # Step 1: Select Target by UID & Ensure APPLICATION mode
     # --------------------------------------------------------------------------
-    print("\n[Step 1/6] Selecting Target Device by 96-bit UID...")
+    if step_cb:
+        step_cb(1, 6, "Selecting Target Device & Checking Mode")
+    step1_msg = f"[Step 1/6] Selecting Target Device by 96-bit UID ({uid_str})..."
+    print(f"\n{step1_msg}")
+    _log("INFO", step1_msg)
+
     select_pdu = bytes([CMD_SELECT_TARGET]) + target_uid
     if not client.send_pdu(select_pdu, timeout=1.0):
-        print("  [FAILED] Failed to transmit CMD_SELECT_TARGET frame", file=sys.stderr)
+        fail_msg = "Failed to transmit CMD_SELECT_TARGET frame"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=1.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Target did not acknowledge selection (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Target did not acknowledge selection: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     mode = resp[1] if len(resp) > 1 else 0x01
-    print(f"  [OK] Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}")
+    ok_msg = f"Device acknowledged selection! Active mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}"
+    print(f"  [OK] {ok_msg}")
+    _log("OK", ok_msg)
 
     if mode == 0x00:  # BOOTLOADER mode -> Bootloader update must be done from APPLICATION
-        print("\n[Step 1b] Device is currently in BOOTLOADER mode.")
-        print("  --> Bootloader cannot overwrite itself while executing!")
-        print("  --> Requesting jump to APPLICATION mode...")
+        step1b_msg = "[Step 1b] Device is currently in BOOTLOADER mode. Requesting jump to APPLICATION..."
+        print(f"\n{step1b_msg}")
+        _log("INFO", step1b_msg)
         go_pdu = bytes([CMD_GO_EXECUTE])
         client.send_pdu(go_pdu, timeout=1.0)
         time.sleep(0.5)
@@ -576,47 +760,79 @@ def run_bootloader_update_session(bus: can.BusABC,
         # Re-select target in Application
         print("  --> Re-connecting to device in Application...")
         if not client.send_pdu(select_pdu, timeout=1.5):
-            print("  [FAILED] Failed to re-select target after jump", file=sys.stderr)
+            fail_msg = "Failed to re-select target after jump"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         resp = client.recv_pdu(timeout=1.5)
         if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-            print("  [FAILED] Device did not respond after booting Application", file=sys.stderr)
+            fail_msg = f"Device did not respond after booting Application: {decode_nack(resp)}"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         mode = resp[1] if len(resp) > 1 else 0x01
         if mode != 0x01:
-            print(f"  [FAILED] Expected APPLICATION mode, got: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}", file=sys.stderr)
+            fail_msg = f"Expected APPLICATION mode, got: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}"
+            print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
-        print(f"  [OK] Successfully switched to APPLICATION mode!")
+        app_sw_msg = "Successfully switched to APPLICATION mode!"
+        print(f"  [OK] {app_sw_msg}")
+        _log("OK", app_sw_msg)
 
     # --------------------------------------------------------------------------
     # Step 2: Erase Staging Slot (0x08038000)
     # --------------------------------------------------------------------------
-    print(f"\n[Step 2/6] Erasing Staging Slot (0x{staging_address:08X}, size={total_size} B)...")
+    if step_cb:
+        step_cb(2, 6, "Erasing Staging Slot (0x08038000)")
+    step2_msg = f"[Step 2/6] Erasing Staging Slot (0x{staging_address:08X}, size={total_size} B)..."
+    print(f"\n{step2_msg}")
+    _log("INFO", step2_msg)
+
     erase_pdu = bytes([CMD_ERASE_APP]) + struct.pack('<II', staging_address, total_size)
     if not client.send_pdu(erase_pdu, timeout=2.0):
-        print("  [FAILED] Failed to send erase staging command", file=sys.stderr)
+        fail_msg = "Failed to send erase staging command"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=6.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Staging erase rejected or timeout (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Staging erase rejected or timeout: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     print("  [OK] Staging Slot erased successfully!")
+    _log("OK", "Staging Slot erased successfully!")
 
     # --------------------------------------------------------------------------
     # Step 3: Stream Bootloader Blocks to Staging Slot
     # --------------------------------------------------------------------------
-    print(f"\n[Step 3/6] Streaming {total_size} bytes to Staging Slot in blocks of {block_size} B...")
+    if step_cb:
+        step_cb(3, 6, f"Streaming {total_size} B to Staging Slot")
+    step3_msg = f"[Step 3/6] Streaming {total_size} bytes to Staging Slot in blocks of {block_size} B..."
+    print(f"\n{step3_msg}")
+    _log("INFO", step3_msg)
+
     t_stream_start = time.time()
     offset = 0
     block_index = 0
+    total_retries = 0
 
     while offset < total_size:
+        if cancel_cb and cancel_cb():
+            abort_msg = "Bootloader update session cancelled by user!"
+            print(f"\n  [ABORT] {abort_msg}", file=sys.stderr)
+            _log("WARN", abort_msg)
+            return False
+
         if abort_after_blocks is not None and block_index >= abort_after_blocks:
-            print(f"\n  [ABORT] Fault-injection: Aborting staging upload after {block_index} blocks as requested!", file=sys.stderr)
+            abort_msg = f"Fault-injection: Aborting staging upload after {block_index} blocks as requested!"
+            print(f"\n  [ABORT] {abort_msg}", file=sys.stderr)
+            _log("WARN", abort_msg)
             return False
 
         chunk = bootloader_data[offset : offset + block_size]
@@ -629,75 +845,125 @@ def run_bootloader_update_session(bus: can.BusABC,
 
         success = False
         for retry in range(3):
+            if cancel_cb and cancel_cb():
+                _log("WARN", "Cancelled by user during staging write!")
+                return False
+
             if not client.send_pdu(write_pdu, timeout=1.0):
+                total_retries += 1
                 continue
             resp = client.recv_pdu(timeout=1.0)
             if resp and len(resp) >= 1 and resp[0] == OTA_RESP_ACK:
                 success = True
                 break
-            elif verbose:
-                print(f"\n  [RETRY] Block #{block_index} failed, retrying ({retry+1}/3)...")
+            else:
+                total_retries += 1
+                if verbose or log_cb:
+                    warn_msg = f"Staging block #{block_index} retry ({retry+1}/3) - resp: {decode_nack(resp)}"
+                    if verbose:
+                        print(f"\n  [RETRY] {warn_msg}")
+                    _log("WARN", warn_msg)
 
         if not success:
-            print(f"\n  [FAILED] Error writing staging block at offset 0x{offset:X} after 3 retries!", file=sys.stderr)
+            fail_msg = f"Error writing staging block at offset 0x{offset:X} after 3 retries!"
+            print(f"\n  [FAILED] {fail_msg}", file=sys.stderr)
+            _log("ERROR", fail_msg)
             return False
 
         offset += chunk_len
         block_index += 1
+        elapsed = max(0.001, time.time() - t_stream_start)
+        speed_kb = (offset / 1024.0) / elapsed
+        rem_bytes = max(0, total_size - offset)
+        eta_sec = (rem_bytes / (speed_kb * 1024.0)) if speed_kb > 0 else 0.0
+
         print_progress_bar(offset, total_size, t_stream_start, prefix="Staging: ")
+        if progress_cb:
+            progress_cb(offset, total_size, speed_kb, eta_sec, total_retries)
 
     print("\n  [OK] All Bootloader blocks successfully uploaded to Staging Slot!")
+    _log("OK", f"All {block_index} Bootloader blocks uploaded to Staging Slot! Retries: {total_retries}")
 
     # --------------------------------------------------------------------------
     # Step 4: Verify Full Staging CRC32
     # --------------------------------------------------------------------------
-    print(f"\n[Step 4/6] Verifying Staged Image Checksum (CRC32: 0x{full_crc32:08X})...")
+    if step_cb:
+        step_cb(4, 6, f"Verifying Staged Checksum (0x{full_crc32:08X})")
+    step4_msg = f"[Step 4/6] Verifying Staged Image Checksum (CRC32: 0x{full_crc32:08X})..."
+    print(f"\n{step4_msg}")
+    _log("INFO", step4_msg)
+
     verify_pdu = bytes([CMD_VERIFY_FIRMWARE]) + struct.pack('<II', total_size, full_crc32)
     if not client.send_pdu(verify_pdu, timeout=2.0):
-        print("  [FAILED] Failed to send CMD_VERIFY_FIRMWARE command", file=sys.stderr)
+        fail_msg = "Failed to send CMD_VERIFY_FIRMWARE command"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=2.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Staged image checksum verification rejected! (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Staged image checksum verification rejected: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     print("  [OK] Staged Bootloader integrity confirmed by target hardware!")
+    _log("OK", "Staged Bootloader integrity confirmed by target hardware!")
 
     # --------------------------------------------------------------------------
     # Step 5: Install & Commit Bootloader to 0x08000000 (CMD_UPDATE_BOOTLOADER)
     # --------------------------------------------------------------------------
-    print("\n[Step 5/6] Committing & Installing Bootloader into Flash (0x08000000)...")
+    if step_cb:
+        step_cb(5, 6, "Installing Bootloader to 0x08000000")
+    step5_msg = "[Step 5/6] Committing & Installing Bootloader into Flash (0x08000000)..."
+    print(f"\n{step5_msg}")
     print("  --> Target will validate Cortex-M33 vector table and flash 0x08000000...")
+    _log("INFO", step5_msg)
+
     install_pdu = bytes([CMD_UPDATE_BOOTLOADER]) + struct.pack('<II', total_size, full_crc32)
     if not client.send_pdu(install_pdu, timeout=3.0):
-        print("  [FAILED] Failed to send CMD_UPDATE_BOOTLOADER command", file=sys.stderr)
+        fail_msg = "Failed to send CMD_UPDATE_BOOTLOADER command"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     resp = client.recv_pdu(timeout=6.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
-        print(f"  [FAILED] Bootloader installation failed on device! (resp={resp.hex() if resp else 'None'})", file=sys.stderr)
+        fail_msg = f"Bootloader installation failed on device: {decode_nack(resp)}"
+        print(f"  [FAILED] {fail_msg}", file=sys.stderr)
+        _log("ERROR", fail_msg)
         return False
 
     print("  [OK] NEW BOOTLOADER SUCCESSFULLY INSTALLED AND VERIFIED AT 0x08000000!")
+    _log("OK", "NEW BOOTLOADER SUCCESSFULLY INSTALLED AND VERIFIED AT 0x08000000!")
 
     # --------------------------------------------------------------------------
     # Step 6: Reboot into New Bootloader
     # --------------------------------------------------------------------------
-    print("\n[Step 6/6] Requesting system reset to launch new Bootloader...")
+    if step_cb:
+        step_cb(6, 6, "Rebooting into New Bootloader")
+    step6_msg = "[Step 6/6] Requesting system reset to launch new Bootloader..."
+    print(f"\n{step6_msg}")
+    _log("INFO", step6_msg)
+
     go_pdu = bytes([CMD_GO_EXECUTE])
     client.send_pdu(go_pdu, timeout=1.0)
     time.sleep(0.3)
     print("  [OK] Reset command sent! Target is booting new Bootloader...")
+    _log("OK", "Reset command sent! Target is booting new Bootloader...")
 
     total_time = max(0.001, time.time() - t_stream_start)
     avg_speed = (total_size / 1024.0) / total_time
+    if progress_cb:
+        progress_cb(total_size, total_size, avg_speed, 0.0, total_retries)
+
     print("\n" + "=" * 76)
     print("  [SUCCESS] BOOTLOADER UPDATE COMPLETED SUCCESSFULLY!")
     print(f"  Total Data      : {total_size} bytes ({total_size/1024.0:.2f} KB)")
     print(f"  Transfer Time   : {total_time:.2f} seconds")
     print(f"  Effective Speed : {avg_speed:.2f} KB/s")
     print("=" * 76)
+    _log("OK", f"BOOTLOADER UPDATE COMPLETED SUCCESSFULLY in {total_time:.2f}s ({avg_speed:.2f} KB/s)")
     return True
 
 # ==============================================================================
