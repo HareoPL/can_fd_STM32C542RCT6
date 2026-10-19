@@ -97,7 +97,14 @@ The Docker container provides an identical, bit-for-bit reproducible build envir
 * **Bootloader Only (`0x08000000`):** Run task **`[Flash] Bootloader Only`**.
 * **Application Only (`0x08008000`):** Run task **`[Flash] MainApp Only`**.
 
-#### B. Firmware Updates over CAN Bus (`tools/can_updater.py` via CANable 2.0 on FDCAN2):
+#### B. Graphical Interface for OTA Updates & Diagnostics (`tools/can_updater_gui.py`):
+Launch the modern PyQt6/PyQt5 GUI studio via VS Code task **`[GUI] Launch CAN OTA Updater`** or from terminal:
+```bash
+python tools/can_updater_gui.py
+```
+* **Features:** Smart port classification (CANable 2.0 vs ST-Link VCP), real-time passive `0x7E9` / `0xEE` SOS alarm beacon monitor, fleet KPI cards, PC crash decoding (`addr2line`), Pre-Flight vector table inspector, repo-aware auto-build, visual 5-stage progress pipeline, and dual terminal console (CAN log + UART2 serial monitor).
+
+#### C. Command-Line Tools (`tools/can_updater.py` & `tools/test_ota_suite.py`):
 Connect a 3.3V CAN transceiver to **FDCAN2** (`PB5` = RX on CN10 pin 6 / D4, `PB6` = TX on CN10 pin 3 / D10) and attach a **CANable 2.0** adapter (500 kbps SLCAN):
 ```bash
 # 1. Install Python dependencies
@@ -119,6 +126,9 @@ python tools/test_ota_suite.py --port COM17
 ### 4. VS Code Tasks Overview
 | Task Label | Environment | Purpose |
 | :--- | :---: | :--- |
+| **`[GUI] Launch CAN OTA Updater`** | Host Win / Docker | Launches graphical Qt studio for CAN OTA flashing and diagnostics. |
+| **`[OTA] Scan CAN Bus (CLI)`** | Host Win / Docker | Scans CAN bus for connected STM32 nodes (UID, active mode, version). |
+| **`[OTA] Run Fault-Injection Test Suite`** | Host Win / Docker | Runs automated 6-stage fault-injection and recovery test suite. |
 | **`[Windows] Build`** *(Default `Ctrl+Shift+B`)* | Windows | Incremental build of `v_box_boot`, `v_box`, and merged `v_box_full.hex`. |
 | **`[Windows] Rebuild`** | Windows | Full clean and rebuild on host. |
 | **`[Windows] Build & Flash`** | Windows | Builds on host and flashes the full merged image via ST-Link. |
@@ -133,6 +143,7 @@ python tools/test_ota_suite.py --port COM17
 | **`[USB] Detach ST-Link from Docker`** | Host Win | Unbinds ST-Link from WSL and returns it to Windows Device Manager. |
 | **`[Docker] Export Image to Archive`** | Docker | Exports `vbox-builder` to `vbox-builder_stm32c542.tar` for long-term storage. |
 | **`[Docker] Import Image from Archive`** | Docker | Imports image from `.tar` archive on a new PC without internet. |
+
 
 ---
 

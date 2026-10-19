@@ -276,6 +276,69 @@
                 "clear": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "[GUI] Launch CAN OTA Updater",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "tools/can_updater_gui.py"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[OTA] Scan CAN Bus (CLI)",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "tools/can_updater.py",
+                "--port",
+                "COM17",
+                "--scan"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[OTA] Run Fault-Injection Test Suite",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "tools/test_ota_suite.py",
+                "--port",
+                "COM17"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
         }
     ]
 }
+

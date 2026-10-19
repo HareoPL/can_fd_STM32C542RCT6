@@ -4,6 +4,23 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
 ### Dodane
+- **Zaawansowana Aplikacja Okienkowa GUI do aktualizacji i diagnostyki CAN OTA (`tools/can_updater_gui.py`):**
+  - Implementacja kompletnej aplikacji graficznej opartej na PyQt6 (z automatycznym fallbackiem do PyQt5) i nowoczesnym motywie przemysłowym Dark Engineering Theme.
+  - Smart Connection Panel z inteligentnym rozróżnieniem adaptera CANable 2.0 SLCAN (VID `0x16D0`, PID `0x117E`) od portu ST-Link Virtual COM Port (VID `0x0483`), dynamicznym odświeżaniem portów i odpornością na odłączenie magistrali USB (`safe_open_or_reconnect_bus`).
+  - Pasywny i aktywny monitor magistrali w tle (`CanBusMonitorWorker` w `QThread`) nasłuchujący ramek `0x7E9` i automatycznie wykrywający ramki ratunkowe `0xEE` (`CRASH_RECOVERY_BEACON`) z natychmiastowym dopytaniem o pełne 96-bitowe UID (`0xA0` na `0x7DF`).
+  - Interaktywny pulpit floty z 3 klikalnymi kafelkami KPI i pulsującym alarmem wizualnym SOS (`DeviceSummaryCard`, `EmergencyBanner`) oraz przyciskiem natychmiastowego ratowania („Wybierz i Ratuj”).
+  - Dekoder adresu instrukcji awarii PC (`decode_pc_address`) wykorzystujący lokalny `arm-none-eabi-addr2line` z automatycznym fallbackiem do kontenera Docker `vbox-builder` i pliku `v_box.elf`.
+  - Świadomość repozytorium (`Repo-Aware`): automatyczne mapowanie artefaktów `build/debug_GCC_NUCLEO-C542RC/`, wykrywanie nieaktualnej kompilacji (`is_build_stale`) na podstawie znaczników czasu źródeł w `app/`, `generated/`, `linker/` oraz wbudowany kompilator tła (`BuildProjectWorker`).
+  - Strażnik Pre-Flight Binary Guard (`inspect_firmware_binary`): weryfikacja rozmiaru, sumy CRC32 oraz tablicy wektorów Cortex-M33 (`Initial_MSP` w `0x20000000..0x20010000` i `Reset_Handler` z bitem Thumb), uniemożliwiająca przypadkowe wgranie obrazu Bootloadera jako Aplikacji lub odwrotnie.
+  - 5-etapowy potok postępu (`PipelineStepperWidget`) z pomiarem KB/s, ETA, bloków i ponowień oraz przyciskiem bezpiecznego przerwania transmisji (`cancel_cb`).
+  - Podwójny terminal (`DualTerminalPanel`): log transmisji CAN/ISO-TP z opcją Verbose i zapisem do pliku oraz wbudowany monitor portu ST-Link VCP UART2 (115200 bps) w osobnym wątku `SerialUartWorker`.
+- **Rozszerzenie silnika backendu CLI (`tools/can_updater.py`):**
+  - Dodano opcjonalne funkcje zwrotne (`progress_cb`, `step_cb`, `log_cb`, `cancel_cb`) do funkcji `scan_nodes()`, `run_update_session()` oraz `run_bootloader_update_session()`.
+  - Obliczanie skrótu `uid_hash = zlib.crc32(uid_bytes) & 0xFF` oraz rejestrowanie alarmów `0xEE` do listy `beacons_out`.
+  - Obsługa bezpiecznego przerwania transmisji bloków w pętli.
+- **Konfiguracja środowiska i zadania VS Code (`tools/requirements_ota.txt`, `.vscode/tasks.json`):**
+  - Dodano zadania `[GUI] Launch CAN OTA Updater`, `[OTA] Scan CAN Bus (CLI)` oraz `[OTA] Run Fault-Injection Test Suite`.
+  - Zaktualizowano zależności o `PyQt6` dla środowiska Windows.
 - **Plan implementacyjny aplikacji okienkowej PyQt CAN OTA Updater GUI (`docs/bootloader/can_updater_gui_implementation_plan.md`):**
   - Szczegółowa specyfikacja architektury i UI/UX aplikacji okienkowej opartej na PyQt6/PyQt5 oraz silniku `tools/can_updater.py`.
   - Projekt interaktywnych kafelków floty (KPI Blocks), pasywnego detektora ramek ratunkowych `SOS 0xEE` (`BOOT_MODE_RECOVERY`) z pulsującym alarmem i dekodowaniem adresu awarii `PC` (`addr2line`), inteligentnej integracji z repozytorium i systemem budowania CMake/Ninja oraz inspektora nagłówków tablicy wektorów Cortex-M33 (Pre-Flight Check).

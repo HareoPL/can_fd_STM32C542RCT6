@@ -596,3 +596,83 @@ T6_APP_GOLDEN        | Application  | [PASS]   |   153.2s | Full Application OTA
 ========================================================================================
 ```
 
+---
+
+### 4.6. Zaawansowana Aplikacja Okienkowa GUI (`tools/can_updater_gui.py`)
+
+Dla zapewnienia maksymalnej wygody operatora na stanowisku produkcyjnym, serwisowym oraz laboratoryjnym wdrożono zaawansowaną aplikację graficzną w języku Python (**PyQt6** z automatycznym fallbackiem do **PyQt5**): [tools/can_updater_gui.py](file:///c:/WORK/5_v-box/tools/can_updater_gui.py).
+
+#### Uruchomienie aplikacji:
+1. **Z poziomu Visual Studio Code:**
+   Naciśnij `Ctrl+Shift+P` $\rightarrow$ `Tasks: Run Task` $\rightarrow$ wybierz **`[GUI] Launch CAN OTA Updater`**.
+2. **Z wiersza poleceń (CLI):**
+   ```bash
+   python tools/can_updater_gui.py
+   # Opcjonalnie z automatycznym wskazaniem portu i prędkości:
+   python tools/can_updater_gui.py --port COM17 --bitrate 500000
+   ```
+
+```text
++======================================================================================================+
+|  V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / FDCAN2)                                       |
++======================================================================================================+
+| [1. PASEK POŁĄCZENIA CANABLE 2.0]                                                                    |
+|  Interfejs: [slcan]  Port COM: [COM17 - Urządzenie USB (CANable 2.0 SLCAN)] [🔄]  Prędkość: [500000]  |
+|  Status: (● Połączono: COM17 @ 500000 bps)   [ 🔌 Rozłącz ]   [ 🔍 Skanuj (0x7DF) ]   [Auto-Scan ☑]  |
++------------------------------------------------------------------------------------------------------+
+| [2. KAFELKI STATUSU FLOTY (KLIKALNE BLOKI KPI) + BANER ALARMOWY SOS]                                 |
+| +-------------------------------+ +-------------------------------+ +------------------------------+ |
+| | 🖧 WYKRYTE URZĄDZENIA         | | ✅ GOTOWE DO PRACY            | | 🚨 WZYWA POMOCY (RECOVERY)   | |
+| |            1                  | |       1 App / 0 Boot          | |       0 błędów magistrali    | |
+| | Kliknij, aby pokazać wszystkie| | Application / Bootloader      | | [PULSUJĄCY ALARM GDY > 0]    | |
+| +-------------------------------+ +-------------------------------+ +------------------------------+ |
+| [!] ALARM SOS: Węzeł (Hash: 0x39) nadaje sygnał 0xEE! Powód: HARDFAULT @ app_fault_handler()         |
+|     Licznik restartów: 3/3 | PC: 0x080091A4                        [ 🚑 Wybierz i Ratuj (Rescue) ]   |
++------------------------------------------------------------------------------------------------------+
+| [3. TABELA WYKRYTYCH WĘZŁÓW STM32]                                                                   |
+|  Status     | 96-bitowy UID                 | Hash | Tryb Pracy  | Wersja FW | Diagnostyka / Info    |
+| ------------+-------------------------------+------+-------------+-----------+---------------------- |
+|  🟢 Zdrowy  | 46009900-19513531-31343039    | 0x39 | APPLICATION | v1.1      | Praca stabilna (OK)   |
++-------------------------------------------------+----------------------------------------------------+
+| [4A. KONFIGURACJA AKTUALIZACJI I WYBÓR WSADU]   | [4B. POTOK WYKONANIA (PIPELINE) I TELEMETRIA]      |
+|                                                 |                                                    |
+| Cel: [46009900-19513531-31343039]               |  (1) Cel UID -> (2) Reset Boot -> (3) Kasowanie    |
+|                                                 |  -> (4) Zapis Bloków -> (5) Weryfikacja            |
+| Co aktualizujemy:                               |                                                    |
+|  (●) Aplikacja Główna (0x08008000)              |  Postęp całkowity:                                 |
+|  ( ) Bootloader (Staging Slot)                  |  [██████████████████████░░░░░] 68.5%               |
+|  ( ) Test RAM (Dummy)                           |                                                    |
+|                                                 |  Prędkość: 0.43 KB/s  |  ETA: 45.2 s               |
+| Plik wsadowy (.bin):                            |  Bloki: 172 / 245     |  Ponowienia: 0             |
+|  [x] Użyj artefaktu z build/ (Auto-Path)        |                                                    |
+|  Ścieżka: [.../build/.../v_box.bin] [📂 Przegl.]|  [ 🚀 ROZPOCZNIJ AKTUALIZACJĘ ]   [ ⏹ Przerwij ]  |
+|  [🔨 Zbuduj Projekt (Docker/Ninja)]             |                                                    |
+|                                                 |  Szybkie akcje diagnostyczne:                      |
+| Pre-Flight Binary Guard:                        |  [ 📥 Wejdź w Bootloader ]  [ ▶️ Skocz do App ]    |
+|  ✔ Poprawny obraz (APP)! Gotowy do wgrania.     |  [ 🔎 Dekoduj PC błędu ]                           |
+|  Rozmiar: 62656 B | MSP: 0x200075A8             |                                                    |
+|  Reset: 0x08011895 | CRC32: 0x8592C677          |                                                    |
++-------------------------------------------------+----------------------------------------------------+
+| [5. KONSOLA LOGÓW I TERMINAL DIAGNOSTYCZNY]                                                          |
+| [ Zakładka 1: Log Transmisji CAN / ISO-TP ]  [ Zakładka 2: Terminal Szeregowy MCU UART2 (COM22) ]     |
++======================================================================================================+
+```
+
+#### Kluczowe Funkcjonalności Modułu GUI:
+1. **Inteligentna klasyfikacja portów COM (`ConnectionPanel`):**
+   Automatycznie rozróżnia adapter magistrali **CANable 2.0 (SLCAN, VID=0x16D0, PID=0x117E)** od interfejsu diagnostycznego **ST-Link Virtual COM Port (VID=0x0483)**. Proponuje właściwy port w selektorze magistrali CAN oraz automatycznie przypisuje port ST-Link do podglądu logów UART2.
+2. **Pasywny i aktywny monitor magistrali (`CanBusMonitorWorker` w `QThread`):**
+   Wątek tła ciągle nasłuchuje na identyfikatorze `0x7E9`. W przypadku odebrania cyklicznej ramki ratunkowej `0xEE` (`CRASH_RECOVERY_BEACON`) natychmiast uruchamia pulsujący czerwony alarm wizualny SOS, automatycznie odpytuje o pełny 96-bitowy UID (`CMD_DISCOVER_NODES 0xA0`) i paruje telemetrię awarii (`HARDFAULT`, `RTOS_ASSERT`, `WATCHDOG`, `NO_APP`) z wierszem w tabeli urządzeń.
+3. **Dekoder adresu awarii PC (`arm-none-eabi-addr2line` z fallbackiem Docker):**
+   Po odebraniu adresu instrukcji `PC` z ramki `0xEE`, GUI automatycznie tłumaczy adres sprzętowy na nazwę funkcji w języku C, plik źródłowy oraz numer linii (np. `Reset_Handler() [startup_stm32c542xx.c:256]`), korzystając z lokalnego kompilatora lub kontenera Docker `vbox-builder`.
+4. **Pre-Flight Binary Guard (Ochrona przed pomyłką wsadów):**
+   Przed wysłaniem jakiejkolwiek ramki CAN aplikacja analizuje pierwsze 8 bajtów tablicy wektorów Cortex-M33 (`Initial_MSP` w zakresie SRAM `0x20000000..0x20010000` oraz adres `Reset_Handler`). W przypadku próby wgrania pliku Bootloadera `v_box_boot.bin` w trybie aktualizacji Aplikacji (lub odwrotnie), GUI natychmiast blokuje transmisję i wyświetla komunikat ostrzegawczy z propozycją automatycznego przełączenia trybu.
+5. **Świadomość Repozytorium i Detekcja Nieaktualnego Buildu (`Repo-Aware`):**
+   Aplikacja wykrywa uruchomienie wewnątrz repozytorium `5_v-box`, automatycznie mapuje ścieżki do wygenerowanych plików `v_box.bin` / `v_box_boot.bin` w katalogu `build/debug_GCC_NUCLEO-C542RC/` oraz porównuje czasy modyfikacji plików źródłowych w `app/`, `generated/`, `linker/`. W razie modyfikacji kodu po ostatniej kompilacji ostrzega użytkownika i pozwala uruchomić kompilację projektu w tle bezpośrednio z poziomu GUI.
+6. **Wizualny Potok Postępu (Pipeline Stepper) i Telemetria Na Żywo:**
+   Wyświetla postęp poszczególnych kroków protokołu (1..5 dla App, 1..6 dla Bootloadera), prędkość transmisji w KB/s, szacowany czas do ukończenia (ETA), licznik przetransferowanych bloków oraz automatycznych retransmisji, a także umożliwia bezpieczne przerwanie wgrywania przyciskiem `[⏹ Przerwij]`.
+7. **Podwójny Terminal:**
+   * **Zakładka 1:** Pełny log ramek CAN / ISO-TP z kolorowaniem poziomów (`INFO`, `OK`, `WARN`, `ERROR`, `RECOVERY`, `STEP`), opcją Verbose, filtrowaniem, kopiowaniem i zapisem do pliku.
+   * **Zakładka 2:** Wbudowany terminal szeregowy czytający port ST-Link VCP UART2 (115200 bps), prezentujący logi z wnętrza mikrokontrolera równolegle z procesem aktualizacji.
+
+
