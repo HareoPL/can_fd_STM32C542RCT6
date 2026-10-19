@@ -4,6 +4,9 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
 ### Dodane
+- **Plan implementacyjny aplikacji okienkowej PyQt CAN OTA Updater GUI (`docs/bootloader/can_updater_gui_implementation_plan.md`):**
+  - Szczegółowa specyfikacja architektury i UI/UX aplikacji okienkowej opartej na PyQt6/PyQt5 oraz silniku `tools/can_updater.py`.
+  - Projekt interaktywnych kafelków floty (KPI Blocks), pasywnego detektora ramek ratunkowych `SOS 0xEE` (`BOOT_MODE_RECOVERY`) z pulsującym alarmem i dekodowaniem adresu awarii `PC` (`addr2line`), inteligentnej integracji z repozytorium i systemem budowania CMake/Ninja oraz inspektora nagłówków tablicy wektorów Cortex-M33 (Pre-Flight Check).
 - **Kompleksowa dokumentacja techniczna i instrukcja obsługi podsystemu CAN Bootloader & OTA (`docs/bootloader/can_bootloader_and_ota_guide.md`, `README.md`, `docs/project_documentation.md`):**
   - Szczegółowy opis architektury Dual-Target (`v_box_boot` + `v_box`), mapy pamięci Flash/SRAM, warstwy ISO-TP, protokołu OpenBootloader oraz mechanizmów Anti-Brick (Deferred Vector Table Commit, reset RCC przy skoku, Staging Slot).
   - Pełne diagramy przepływu programu (`Program Flow` w Mermaid) z podziałem na Bootloader (Fast-Boot < 2 ms, Stay-in-Boot, Recovery Mode `0xEE`) oraz Aplikację Główną (asynchroniczny `ota_worker_task`, 3s Healthy confirmation, `fault_recovery`).

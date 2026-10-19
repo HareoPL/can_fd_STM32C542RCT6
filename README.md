@@ -143,6 +143,9 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
 * 📖 **[docs/bootloader/can_bootloader_and_ota_guide.md](docs/bootloader/can_bootloader_and_ota_guide.md)**  
   **CAN Bootloader & OTA Complete Guide & Operating Manual:** Detailed methodology, Flash/RAM memory partitioning, ISO-TP & OpenBootloader protocol specification, Deferred Vector Commit, Bootloader vs. MainApp program flow diagrams, hardware wiring for **CANable 2.0** (`FDCAN2` on `PB5`/`PB6`), CLI manual for `tools/can_updater.py` and `tools/test_ota_suite.py`, and real UART2/PC logs.
 
+* 📖 **[docs/bootloader/can_updater_gui_implementation_plan.md](docs/bootloader/can_updater_gui_implementation_plan.md)**  
+  **PyQt CAN OTA Updater GUI Implementation Plan:** Architectural specification, UI/UX layout, interactive fleet KPI cards, passive `0xEE` SOS recovery beacon alerting, smart repository/build detection, pre-flight Cortex-M33 vector table inspector, and multi-threaded `QThread` blueprint.
+
 * 📖 **[docs/bootloader/bootloader_implementation_plan.md](docs/bootloader/bootloader_implementation_plan.md)**  
   **Bootloader Architectural Implementation Plan:** Phased engineering roadmap (Phases 1–6), design rationale, shared RAM IPC contract, and recovery beacon design.
 
