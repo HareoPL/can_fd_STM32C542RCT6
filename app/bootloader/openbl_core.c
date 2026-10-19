@@ -26,6 +26,16 @@ static uint32_t s_total_bytes_written = 0U;
 static uint32_t s_expected_addr = BOOT_APP_START_ADDR;
 
 /**
+ * @brief Deferred vector table block (0x08008000) buffer.
+ * @details Held in RAM and programmed to Flash only upon successful CMD_VERIFY_FIRMWARE.
+ *          Guarantees that an interrupted download leaves Flash at 0x08008000 in erased state
+ *          (0xFFFFFFFF), forcing the Bootloader into Recovery Mode instead of jumping to partial code.
+ */
+static uint8_t s_deferred_vector_block[512];
+static uint16_t s_deferred_vector_len = 0U;
+static bool s_deferred_vector_pending = false;
+
+/**
  * @brief Converts byte length (0..64) to FDCAN DLC enum.
  */
 static hal_fdcan_data_length_code_t bytes_to_fdcan_dlc(uint8_t len)
@@ -233,6 +243,8 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                 s_stream_crc = crc32_init();
                 s_total_bytes_written = 0U;
                 s_expected_addr = erase_addr;
+                s_deferred_vector_pending = false;
+                s_deferred_vector_len = 0U;
 
                 uint8_t ack[1] = {OTA_RESP_ACK};
                 (void)isotp_send_pdu(&s_boot_isotp, ack, sizeof(ack));
@@ -290,14 +302,42 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                 return;
             }
 
-            /* Flash programming */
-            hal_status_t st = openbl_flash_write(addr, &payload[7], blk_len);
-            if (st != HAL_OK)
+            /* Flash programming:
+             * If writing the first block at BOOT_APP_START_ADDR (vector table), buffer it in RAM
+             * and defer Flash programming until CMD_VERIFY_FIRMWARE succeeds. This ensures
+             * that an interrupted update leaves 0x08008000 in erased state (0xFFFFFFFF). */
+            if (addr == BOOT_APP_START_ADDR)
             {
-                safe_printf(TAG, "[WRITE] Flash write/verify failed at 0x%08lX (st=%d)\r\n", addr, (int)st);
-                uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
-                (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
-                return;
+                if (blk_len <= sizeof(s_deferred_vector_block))
+                {
+                    memcpy(s_deferred_vector_block, &payload[7], blk_len);
+                    s_deferred_vector_len = blk_len;
+                    s_deferred_vector_pending = true;
+                    safe_printf(TAG, "[WRITE] Deferred vector table at 0x%08lX (%u B) until verification\r\n",
+                                addr, (unsigned int)blk_len);
+                }
+                else
+                {
+                    hal_status_t st = openbl_flash_write(addr, &payload[7], blk_len);
+                    if (st != HAL_OK)
+                    {
+                        safe_printf(TAG, "[WRITE] Flash write/verify failed at 0x%08lX (st=%d)\r\n", addr, (int)st);
+                        uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                        (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
+                        return;
+                    }
+                }
+            }
+            else
+            {
+                hal_status_t st = openbl_flash_write(addr, &payload[7], blk_len);
+                if (st != HAL_OK)
+                {
+                    safe_printf(TAG, "[WRITE] Flash write/verify failed at 0x%08lX (st=%d)\r\n", addr, (int)st);
+                    uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                    (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
+                    return;
+                }
             }
 
             /* Accumulate into full stream CRC32 */
@@ -335,6 +375,22 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
 
             if ((s_total_bytes_written == exp_size) && (final_crc == exp_crc))
             {
+                /* Now commit the deferred vector table to 0x08008000 only after full integrity is confirmed */
+                if (s_deferred_vector_pending)
+                {
+                    hal_status_t st = openbl_flash_write(BOOT_APP_START_ADDR, s_deferred_vector_block, s_deferred_vector_len);
+                    if (st != HAL_OK)
+                    {
+                        safe_printf(TAG, "[VERIFY] Failed to commit vector table at 0x%08lX (st=%d)!\r\n",
+                                    BOOT_APP_START_ADDR, (int)st);
+                        uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
+                        (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
+                        return;
+                    }
+                    s_deferred_vector_pending = false;
+                    safe_printf(TAG, "[VERIFY] Vector table committed to 0x%08lX successfully!\r\n", BOOT_APP_START_ADDR);
+                }
+
                 safe_printf(TAG, "[VERIFY] Success! Size=%lu B, CRC32=0x%08lX\r\n", s_total_bytes_written, final_crc);
                 uint8_t ack[1] = {OTA_RESP_ACK};
                 (void)isotp_send_pdu(&s_boot_isotp, ack, sizeof(ack));
@@ -399,6 +455,8 @@ void openbl_core_init(bool session_selected_init)
 
     s_stream_crc = crc32_init();
     s_total_bytes_written = 0U;
+    s_deferred_vector_pending = false;
+    s_deferred_vector_len = 0U;
 
     (void)openbl_flash_init();
 

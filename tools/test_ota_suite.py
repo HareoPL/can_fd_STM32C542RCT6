@@ -323,7 +323,7 @@ def test_2_app_power_loss_recovery(bus_holder: List[can.BusABC],
         return TestResult("T2", "Application", title, "FAIL", time.time() - t_start, f"CAN reconnect failed: {e}")
 
     # Listen for device announcement or beacon
-    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=6.0)
+    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=12.0)
     if not dev:
         return TestResult("T2", "Application", title, "FAIL", time.time() - t_start,
                           "Device did not respond after power cycle!")
@@ -472,7 +472,7 @@ def test_4_boot_interrupted_staging(bus_holder: List[can.BusABC],
 
     # Check device online
     print("  [4/4] Checking device response after reset...")
-    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=6.0)
+    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=10.0)
     duration = time.time() - t_start
 
     if not dev:
@@ -701,39 +701,57 @@ def main():
     try:
         # TEST 1: Corrupted CRC32
         if 1 in tests_to_run:
-            res1 = test_1_app_corrupted_crc(bus_holder[0], target_uid_bytes, app_data, args.verbose)
+            try:
+                res1 = test_1_app_corrupted_crc(bus_holder[0], target_uid_bytes, app_data, args.verbose)
+            except Exception as e:
+                res1 = TestResult("T1", "Application", "Corrupted CRC32 Checksum Rejection", "FAIL", 0.0, f"Exception: {e}")
             results.append(res1)
             time.sleep(0.5)
 
         # TEST 2: Application Power-Loss Recovery
         if 2 in tests_to_run:
-            res2 = test_2_app_power_loss_recovery(bus_holder, args.interface, channel, args.bitrate,
-                                                 target_uid_bytes, app_data, not args.non_interactive, args.verbose)
+            try:
+                res2 = test_2_app_power_loss_recovery(bus_holder, args.interface, channel, args.bitrate,
+                                                     target_uid_bytes, app_data, not args.non_interactive, args.verbose)
+            except Exception as e:
+                res2 = TestResult("T2", "Application", "Flash Interruption & Power-Loss Recovery", "FAIL", 0.0, f"Exception: {e}")
             results.append(res2)
             time.sleep(0.5)
 
         # TEST 3: Bootloader Invalid Vector Table
         if 3 in tests_to_run:
-            res3 = test_3_boot_invalid_vector(bus_holder[0], target_uid_bytes, boot_data, app_data, args.verbose)
+            try:
+                res3 = test_3_boot_invalid_vector(bus_holder[0], target_uid_bytes, boot_data, app_data, args.verbose)
+            except Exception as e:
+                res3 = TestResult("T3", "Bootloader", "Invalid Cortex-M33 Vector Table Protection", "FAIL", 0.0, f"Exception: {e}")
             results.append(res3)
             time.sleep(0.5)
 
         # TEST 4: Bootloader Interrupted Staging
         if 4 in tests_to_run:
-            res4 = test_4_boot_interrupted_staging(bus_holder, args.interface, channel, args.bitrate,
-                                                   target_uid_bytes, boot_data, not args.non_interactive, args.verbose)
+            try:
+                res4 = test_4_boot_interrupted_staging(bus_holder, args.interface, channel, args.bitrate,
+                                                       target_uid_bytes, boot_data, not args.non_interactive, args.verbose)
+            except Exception as e:
+                res4 = TestResult("T4", "Bootloader", "Interrupted Bootloader Staging Upload", "FAIL", 0.0, f"Exception: {e}")
             results.append(res4)
             time.sleep(0.5)
 
         # TEST 5: Golden Path Application
         if 5 in tests_to_run:
-            res5 = test_5_golden_app(bus_holder[0], target_uid_bytes, app_data, args.verbose)
+            try:
+                res5 = test_5_golden_app(bus_holder[0], target_uid_bytes, app_data, args.verbose)
+            except Exception as e:
+                res5 = TestResult("T5", "Application", "Golden Path Application Update", "FAIL", 0.0, f"Exception: {e}")
             results.append(res5)
             time.sleep(0.5)
 
         # TEST 6: Golden Path Bootloader
         if 6 in tests_to_run:
-            res6 = test_6_golden_bootloader(bus_holder[0], target_uid_bytes, boot_data, args.verbose)
+            try:
+                res6 = test_6_golden_bootloader(bus_holder[0], target_uid_bytes, boot_data, args.verbose)
+            except Exception as e:
+                res6 = TestResult("T6", "Bootloader", "Golden Path Bootloader Update", "FAIL", 0.0, f"Exception: {e}")
             results.append(res6)
             time.sleep(0.5)
 

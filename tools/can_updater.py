@@ -58,10 +58,14 @@ BOOTLOADER_MAX_SIZE         = 32768
 OTA_RESP_ACK                = 0x79
 OTA_RESP_NACK               = 0x1F
 
+OTA_MODE_BOOTLOADER         = 0x00
+OTA_MODE_APPLICATION        = 0x01
+OTA_MODE_RECOVERY           = 0x02
+
 OTA_MODE_NAMES = {
-    0x00: "BOOTLOADER",
-    0x01: "APPLICATION",
-    0x02: "RECOVERY_MODE"
+    OTA_MODE_BOOTLOADER: "BOOTLOADER",
+    OTA_MODE_APPLICATION: "APPLICATION",
+    OTA_MODE_RECOVERY: "RECOVERY_MODE"
 }
 
 # ==============================================================================

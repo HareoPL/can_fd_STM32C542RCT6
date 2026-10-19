@@ -12,8 +12,15 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - **Test 4 (Bootloader - Interrupted Staging):** Symulacja przerwania wgrywania do slotu stagingowego przed rozkazem instalacji, weryfikacja nienaruszalności aktywnego Bootloadera i poprawnego startu aplikacji po resecie.
   - **Test 5 & 6 (Golden Path):** Pełna weryfikacja wzorcowego procesu aktualizacji Aplikacji (`v_box.bin`) oraz Bootloadera (`v_box_boot.bin`) ze 100% potwierdzeniem transferu, sum kontrolnych i poprawnego restartu.
   - **Końcowy raport:** Prezentacja czytelnej, sformatowanej tabeli podsumowującej wszystkie scenariusze testowe, statusy `[PASS]/[FAIL]`, czas wykonania i diagnozę.
-### Zmienione
-- `tools/can_updater.py`: Dodano opcjonalne parametry wstrzykiwania błędów `abort_after_blocks` oraz `force_crc` do funkcji `run_update_session` oraz `run_bootloader_update_session` dla integracji z automatycznymi skryptami testowymi bez naruszania kompatybilności wstecznej CLI.
+### Naprawione
+- **Ochrona przed przedwczesnym rozruchem niekompletnej Aplikacji po zaniku zasilania (`app/bootloader/openbl_core.c`):**
+  - Wdrożenie mechanizmu opóźnionego zapisu tablicy wektorów (Deferred Vector Table Commit): blok 0 (`0x08008000`) jest buforowany w pamięci RAM i programowany do pamięci Flash dopiero po pomyślnej weryfikacji sumy kontrolnej całego obrazu `CMD_VERIFY_FIRMWARE`.
+  - Zapobiega to sytuacji, w której przerwanie zasilania w trakcie zapisu pozostawiało poprawny nagłówek MSP/Reset_Handler przy braku reszty kodu, co powodowało natychmiastowe zawieszenie rdzenia w Cortex-M Lockup po restarcie.
+  - W przypadku przerwania zapisu sektor `0x08008000` pozostaje w stanie skasowanym (`0xFFFFFFFF`), dzięki czemu Bootloader przy pierwszym rozruchu wykrywa brak aplikacji, wchodzi w `BOOT_MODE_RECOVERY` i czeka na flash ratunkowy.
+- **Brakujące stałe trybów pracy OTA (`tools/can_updater.py`):**
+  - Zdefiniowano stałe `OTA_MODE_BOOTLOADER`, `OTA_MODE_APPLICATION`, `OTA_MODE_RECOVERY` importowane przez narzędzia testowe.
+- **Odporność pętli uruchomieniowej testów (`tools/test_ota_suite.py`):**
+  - Zwiększono limity czasu oczekiwania na re-enumerację portu USB po odłączeniu zasilania do 12 sekund oraz zabezpieczono każdy scenariusz testowy blokiem `try-except`, gwarantując wygenerowanie kompletnego raportu końcowego nawet w przypadku awarii pojedynczego testu.
 
 ## [2026-10-16]
 ### Dodane
