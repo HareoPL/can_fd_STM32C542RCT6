@@ -4,6 +4,11 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
 ### Zmienione
+- **Usunięcie efektu zagnieżdżonych obwódek („pętli”) w kafelkach i stonowanie alarmu SOS (`tools/can_updater_gui.py`):**
+  - Wyeliminowano kaskadowe dziedziczenie stylów `QFrame` przez widżety potomne `QLabel` wewnątrz kafelków `DeviceSummaryCard` oraz modułu `frame_preflight` (precyzyjne selektory ID `#summaryCard`, `#framePreflight` oraz reguła `border: none; background: transparent` dla `QLabel`), likwidując niepożądany efekt wielokrotnych obwódek/pętli.
+  - Usunięto inwazyjny, pełnoszerokościowy baner ratunkowy `EmergencyBanner` oraz migający stroboskop (`pulse_timer`).
+  - Kafelek `Wzywa Pomocy (Recovery)` w stanie spoczynku pozostaje stonowany i ciemny (`0 błędów / Brak awarii`), a w momencie nadejścia ramki ratunkowej `0xEE` elegancko i stabilnie „zapala się” w karminowym odcieniu (`#250C0E` / `#DC2626`) obok kafelka `Gotowe do Pracy`.
+  - Kliknięcie w kafelek pomocy lub wiersz węzła awaryjnego w tabeli natychmiast filtruje widok i podpowiada docelowy UID.
 - **Optymalizacja ergonomii i widoczności interfejsu CAN OTA Updater (`tools/can_updater_gui.py`):**
   - Wyczyszczono formatowanie listy portów szeregowych w panelu połączenia – usunięto nadmiarowe etykiety `[Zalecany dla CAN]`, zapobiegając kolizji z przyciskiem odświeżania portów, oraz naprawiono klasyfikację konwerterów (precyzyjna detekcja CANable po VID `0x16D0` / PID `0x117E` lub nazwach SLCAN/CANable).
   - Skompaktowano kafelki KPI floty (`DeviceSummaryCard`) do wysokości 66 px ze zoptymalizowanymi rozmiarami czcionek, co znacząco zredukowało zajmowaną przestrzeń wertykalną.

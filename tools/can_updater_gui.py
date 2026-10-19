@@ -98,6 +98,10 @@ QMainWindow, QWidget {
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
     font-size: 13px;
 }
+QLabel {
+    border: none;
+    background-color: transparent;
+}
 QGroupBox {
     border: 1px solid #2D3748;
     border-radius: 8px;
@@ -907,7 +911,7 @@ class SerialUartWorker(QThread):
 
 class DeviceSummaryCard(QFrame):
     """
-    Interactive KPI Tile with count, description, and pulsing alarm animation.
+    Interactive KPI Tile with count, description, and steady status highlighting.
     """
     clicked = pyqtSignal()
 
@@ -917,158 +921,89 @@ class DeviceSummaryCard(QFrame):
         self.subtitle = subtitle
         self.color_mode = color_mode
         self._count = 0
-        self._is_pulsing = False
-        self._pulse_state = False
 
+        self.setObjectName("summaryCard")
         self.setFrameShape(QFrame.Shape.StyledPanel if QT_VERSION == 6 else QFrame.StyledPanel)
         self.setCursor(Qt.CursorShape.PointingHandCursor if QT_VERSION == 6 else Qt.PointingHandCursor)
         self.setFixedHeight(66)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 5, 12, 5)
+        layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(1)
 
         self.lbl_title = QLabel(self.title)
-        self.lbl_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase;")
+        self.lbl_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase; border: none; background: transparent;")
 
         self.lbl_value = QLabel("0")
-        self.lbl_value.setStyleSheet("font-size: 18px; font-weight: 800; color: #F8FAFC;")
+        self.lbl_value.setStyleSheet("font-size: 18px; font-weight: 800; color: #F8FAFC; border: none; background: transparent;")
 
         self.lbl_sub = QLabel(self.subtitle)
-        self.lbl_sub.setStyleSheet("font-size: 10px; color: #64748B;")
+        self.lbl_sub.setStyleSheet("font-size: 10px; color: #64748B; border: none; background: transparent;")
 
         layout.addWidget(self.lbl_title)
         layout.addWidget(self.lbl_value)
         layout.addWidget(self.lbl_sub)
-
-        # Pulse animation timer
-        self.pulse_timer = QTimer(self)
-        self.pulse_timer.setInterval(500)
-        self.pulse_timer.timeout.connect(self._toggle_pulse)
 
         self._apply_style()
 
     def set_value(self, count: int, display_text: Optional[str] = None):
         self._count = count
         self.lbl_value.setText(display_text if display_text else str(count))
-        if self.color_mode == "alarm":
-            if count > 0 and not self._is_pulsing:
-                self._is_pulsing = True
-                self.pulse_timer.start()
-            elif count == 0 and self._is_pulsing:
-                self._is_pulsing = False
-                self.pulse_timer.stop()
-                self._apply_style()
-
-    def _toggle_pulse(self):
-        self._pulse_state = not self._pulse_state
-        if self._pulse_state:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #450A0A;
-                    border: 2px solid #EF4444;
-                    border-radius: 8px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #2A0808;
-                    border: 2px solid #991B1B;
-                    border-radius: 8px;
-                }
-            """)
+        self._apply_style()
 
     def _apply_style(self):
         if self.color_mode == "alarm":
-            border = "#7F1D1D" if self._count > 0 else "#2D3748"
-            bg = "#1F0C0C" if self._count > 0 else "#0F172A"
-            text_color = "#FCA5A5" if self._count > 0 else "#64748B"
+            if self._count > 0:
+                border = "#DC2626"
+                bg = "#250C0E"
+                text_color = "#F87171"
+                title_color = "#FCA5A5"
+                sub_color = "#FCA5A5"
+                self.lbl_title.setText("🚨 Wzywa Pomocy (Recovery)")
+                self.lbl_sub.setText("Kliknij, aby przefiltrować")
+            else:
+                border = "#2D3748"
+                bg = "#0B0F19"
+                text_color = "#64748B"
+                title_color = "#94A3B8"
+                sub_color = "#64748B"
+                self.lbl_title.setText("Wzywa Pomocy (Recovery)")
+                self.lbl_sub.setText("Brak awarii (OK)")
         elif self.color_mode == "success":
             border = "#065F46"
             bg = "#061A14"
             text_color = "#34D399"
+            title_color = "#94A3B8"
+            sub_color = "#64748B"
         else:
             border = "#2D3748"
             bg = "#0B0F19"
             text_color = "#38BDF8"
+            title_color = "#94A3B8"
+            sub_color = "#64748B"
+
+        self.lbl_title.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {title_color}; text-transform: uppercase; border: none; background: transparent;")
+        self.lbl_sub.setStyleSheet(f"font-size: 10px; color: {sub_color}; border: none; background: transparent;")
+        self.lbl_value.setStyleSheet(f"font-size: 18px; font-weight: 800; color: {text_color}; border: none; background: transparent;")
 
         self.setStyleSheet(f"""
-            QFrame {{
+            QFrame#summaryCard {{
                 background-color: {bg};
                 border: 1px solid {border};
                 border-radius: 8px;
             }}
-            QFrame:hover {{
+            QFrame#summaryCard:hover {{
                 border-color: #60A5FA;
             }}
+            QLabel {{
+                border: none;
+                background-color: transparent;
+            }}
         """)
-        self.lbl_value.setStyleSheet(f"font-size: 18px; font-weight: 800; color: {text_color};")
-
 
     def mousePressEvent(self, event):
         self.clicked.emit()
         super().mousePressEvent(event)
-
-
-class EmergencyBanner(QFrame):
-    """
-    Emergency SOS Alert Banner displayed when a node transmits CRASH_RECOVERY_BEACON (0xEE).
-    """
-    sig_rescue_clicked = pyqtSignal(dict)
-
-    def __init__(self):
-        super().__init__()
-        self.current_beacon: Optional[Dict] = None
-
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #3B0707;
-                border: 2px solid #EF4444;
-                border-radius: 8px;
-                padding: 4px;
-            }
-        """)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
-
-        self.lbl_icon = QLabel("🚨")
-        self.lbl_icon.setStyleSheet("font-size: 24px;")
-
-        self.lbl_text = QLabel("ALARM SOS: Wykryto urządzenie w trybie awaryjnym!")
-        self.lbl_text.setStyleSheet("font-size: 13px; font-weight: bold; color: #FEE2E2;")
-
-        self.btn_rescue = QPushButton("🚑 Wybierz i Ratuj (Rescue Flash)")
-        self.btn_rescue.setObjectName("btn_danger")
-        self.btn_rescue.setStyleSheet("padding: 7px 18px; font-weight: bold; font-size: 13px;")
-        self.btn_rescue.clicked.connect(self._on_rescue)
-
-        layout.addWidget(self.lbl_icon)
-        layout.addWidget(self.lbl_text, 1)
-        layout.addWidget(self.btn_rescue)
-
-        self.hide()
-
-    def show_alarm(self, beacon: Dict, decoded_pc: str):
-        self.current_beacon = beacon
-        hash_val = beacon.get("uid_hash", 0)
-        reason = beacon.get("reason_str", "UNKNOWN")
-        cnt = beacon.get("fail_cnt", 0)
-        pc_hex = f"0x{beacon.get('pc', 0):08X}"
-
-        msg = (f"ALARM SOS: Węzeł (Hash: 0x{hash_val:02X}) nadaje sygnał ratunkowy 0xEE!  |  "
-               f"Powód: {reason}  |  Licznik awarii: {cnt}/3  |  PC: {pc_hex} ({decoded_pc})")
-        self.lbl_text.setText(msg)
-        self.show()
-
-    def clear_alarm(self):
-        self.current_beacon = None
-        self.hide()
-
-    def _on_rescue(self):
-        if self.current_beacon:
-            self.sig_rescue_clicked.emit(self.current_beacon)
 
 
 class PipelineStepperWidget(QWidget):
@@ -1229,11 +1164,8 @@ class CanUpdaterMainWindow(QMainWindow):
         # Zone 1: Connection Panel
         main_vbox.addWidget(self._create_connection_panel())
 
-        # Zone 2: Fleet Dashboard (3 KPI Cards) + Emergency SOS Banner
+        # Zone 2: Fleet Dashboard (3 KPI Cards)
         main_vbox.addWidget(self._create_fleet_dashboard())
-        self.emergency_banner = EmergencyBanner()
-        self.emergency_banner.sig_rescue_clicked.connect(self._on_rescue_device)
-        main_vbox.addWidget(self.emergency_banner)
 
         # Zone 3 & 4: Splitter (Device Table & Update Config / Progress)
         mid_splitter = QSplitter(Qt.Orientation.Vertical if QT_VERSION == 6 else Qt.Vertical)
@@ -1349,7 +1281,7 @@ class CanUpdaterMainWindow(QMainWindow):
         self.card_ready = DeviceSummaryCard("✅ Gotowe do Pracy", "Application / Bootloader", "success")
         self.card_ready.clicked.connect(lambda: self._filter_devices("READY"))
 
-        self.card_alarm = DeviceSummaryCard("🚨 Wzywa Pomocy (Recovery)", "0 błędów magistrali", "alarm")
+        self.card_alarm = DeviceSummaryCard("Wzywa Pomocy (Recovery)", "Brak awarii (OK)", "alarm")
         self.card_alarm.clicked.connect(lambda: self._filter_devices("ALARM"))
 
         layout.addWidget(self.card_all, 1)
@@ -1499,12 +1431,16 @@ class CanUpdaterMainWindow(QMainWindow):
 
         # Pre-Flight Binary Guard Box
         self.frame_preflight = QFrame()
+        self.frame_preflight.setObjectName("framePreflight")
         self.frame_preflight.setStyleSheet("""
-            QFrame {
+            QFrame#framePreflight {
                 background-color: #0B0F19;
                 border: 1px solid #334155;
                 border-radius: 6px;
-                padding: 6px;
+            }
+            QLabel {
+                border: none;
+                background-color: transparent;
             }
         """)
         pf_vbox = QVBoxLayout(self.frame_preflight)
@@ -1512,9 +1448,9 @@ class CanUpdaterMainWindow(QMainWindow):
         pf_vbox.setSpacing(3)
 
         self.lbl_pf_status = QLabel("Pre-Flight Guard: Oczekiwanie na wybór pliku .bin...")
-        self.lbl_pf_status.setStyleSheet("font-weight: bold; color: #94A3B8;")
+        self.lbl_pf_status.setStyleSheet("font-weight: bold; color: #94A3B8; border: none; background: transparent;")
         self.lbl_pf_details = QLabel("Rozmiar: — | Wektory: — | CRC32: —")
-        self.lbl_pf_details.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748B;")
+        self.lbl_pf_details.setStyleSheet("font-family: monospace; font-size: 11px; color: #64748B; border: none; background: transparent;")
 
         pf_vbox.addWidget(self.lbl_pf_status)
         pf_vbox.addWidget(self.lbl_pf_details)
@@ -1782,9 +1718,15 @@ class CanUpdaterMainWindow(QMainWindow):
     def _on_recovery_beacon_received(self, beacon: Dict):
         # Update device table if node already present or add placeholder
         hash_val = beacon.get("uid_hash", 0)
+        existing = next((b for b in self.beacons_cache if b.get("uid_hash") == hash_val), None)
+        if existing:
+            existing.update(beacon)
+        else:
+            self.beacons_cache.append(beacon)
+
         pc = beacon.get("pc", 0)
         decoded_pc = decode_pc_address(pc, self.repo_root)
-        self.emergency_banner.show_alarm(beacon, decoded_pc)
+        self._append_can_log("WARN", f"Sygnał ratunkowy 0xEE (Hash: 0x{hash_val:02X}, Powód: {beacon.get('reason_str')}, Awarii: {beacon.get('fail_cnt')}/3) @ {decoded_pc}")
         self._refresh_device_table()
         self._update_kpi_cards()
 
@@ -1802,6 +1744,13 @@ class CanUpdaterMainWindow(QMainWindow):
     def _filter_devices(self, mode: str):
         self.current_filter_mode = mode
         self._refresh_device_table()
+        if mode == "ALARM" and self.beacons_cache:
+            # If user clicked the emergency tile, try auto-filling target UID if matched
+            b = self.beacons_cache[0]
+            hash_val = b.get("uid_hash", 0)
+            matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val), None)
+            if matched and matched.get("uid_str"):
+                self.txt_target_uid.setText(matched["uid_str"])
 
     def _refresh_device_table(self):
         self.table_devices.setRowCount(0)
@@ -1876,6 +1825,20 @@ class CanUpdaterMainWindow(QMainWindow):
             uid_text = uid_item.text()
             if not uid_text.startswith("["):
                 self.txt_target_uid.setText(uid_text)
+            else:
+                # Emergency node row without full 96-bit UID yet: resolve from hash or trigger scan
+                hash_item = self.table_devices.item(row, 2)
+                hash_str = hash_item.text() if hash_item else ""
+                try:
+                    hash_val = int(hash_str, 16)
+                    matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val), None)
+                    if matched and matched.get("uid_str"):
+                        self.txt_target_uid.setText(matched["uid_str"])
+                    else:
+                        self._append_can_log("INFO", f"Wybrano węzeł awaryjny (Hash: {hash_str}). Zapytanie o pełny UID na magistrali...")
+                        self._request_bus_scan()
+                except Exception:
+                    self._request_bus_scan()
 
     def _on_rescue_device(self, beacon: Dict):
         hash_val = beacon.get("uid_hash", 0)
