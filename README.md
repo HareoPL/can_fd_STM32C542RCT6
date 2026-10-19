@@ -102,7 +102,8 @@ Launch the modern PyQt6/PyQt5 GUI studio via VS Code task **`[GUI] Launch CAN OT
 ```bash
 python tools/can_updater_gui.py
 ```
-* **Features:** Smart port classification (CANable 2.0 vs ST-Link VCP), real-time passive `0x7E9` / `0xEE` SOS alarm beacon monitor, fleet KPI cards, PC crash decoding (`addr2line`), Pre-Flight vector table inspector, repo-aware auto-build, visual 5-stage progress pipeline, and dual terminal console (CAN log + UART2 serial monitor).
+* **Features:** Smart USB port classification (CANable 2.0 vs ST-Link VCP), real-time passive `0x7E9` / `0xEE` SOS alarm beacon monitor with 3.5s TTL expiry, interactive fleet KPI cards, asynchronous PC crash decoding (`addr2line`), Pre-Flight Cortex-M33 vector table inspector, repo-aware stale-build detector & one-click Docker/Ninja compiler, visual 5-stage / 6-stage progress pipeline, and dual terminal console (CAN log + UART2 serial monitor).
+* 👉 **Full User Manual:** [docs/bootloader/can_updater_gui_manual.md](docs/bootloader/can_updater_gui_manual.md)
 
 #### C. Command-Line Tools (`tools/can_updater.py` & `tools/test_ota_suite.py`):
 Connect a 3.3V CAN transceiver to **FDCAN2** (`PB5` = RX on CN10 pin 6 / D4, `PB6` = TX on CN10 pin 3 / D10) and attach a **CANable 2.0** adapter (500 kbps SLCAN):
@@ -150,6 +151,9 @@ python tools/test_ota_suite.py --port COM17
 ## Detailed Documentation Directory (`docs/`)
 
 Comprehensive technical and developer documentation is organized in the `docs/` folder:
+
+* 📖 **[docs/bootloader/can_updater_gui_manual.md](docs/bootloader/can_updater_gui_manual.md)**  
+  **V-BOX CAN OTA Updater & Diagnostic Studio – User Manual:** Complete guide to the graphical PyQt6/PyQt5 interface, detailed breakdown of all 6 UI zones, smart USB port classification (CANable 2.0 vs ST-Link VCP), interactive KPI fleet filters, SOS recovery diagnostics & asynchronous PC address decoding, Pre-Flight Binary Guard, 5-step/6-step execution pipelines, and step-by-step operating scenarios.
 
 * 📖 **[docs/bootloader/can_bootloader_and_ota_guide.md](docs/bootloader/can_bootloader_and_ota_guide.md)**  
   **CAN Bootloader & OTA Complete Guide & Operating Manual:** Detailed methodology, Flash/RAM memory partitioning, ISO-TP & OpenBootloader protocol specification, Deferred Vector Commit, Bootloader vs. MainApp program flow diagrams, hardware wiring for **CANable 2.0** (`FDCAN2` on `PB5`/`PB6`), CLI manual for `tools/can_updater.py` and `tools/test_ota_suite.py`, and real UART2/PC logs.

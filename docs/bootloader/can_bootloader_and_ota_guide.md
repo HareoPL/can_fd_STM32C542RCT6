@@ -1,9 +1,10 @@
 # Dokumentacja Techniczna i Instrukcja Obsługi: CAN Bootloader & OTA Update (FDCAN2)
 
 > **Powiązane dokumenty:**
+> * Instrukcja obsługi programu GUI (OTA Studio): [docs/bootloader/can_updater_gui_manual.md](file:///c:/WORK/5_v-box/docs/bootloader/can_updater_gui_manual.md)
 > * Plan wdrożenia i podział na fazy: [docs/bootloader/bootloader_implementation_plan.md](file:///c:/WORK/5_v-box/docs/bootloader/bootloader_implementation_plan.md)
 > * Główna dokumentacja architektury projektu: [docs/project_documentation.md](file:///c:/WORK/5_v-box/docs/project_documentation.md)
-> * Skrypt aktualizatora CLI: [tools/can_updater.py](file:///c:/WORK/5_v-box/tools/can_updater.py)
+> * Aplikacja GUI / Skrypt CLI: [tools/can_updater_gui.py](file:///c:/WORK/5_v-box/tools/can_updater_gui.py) / [tools/can_updater.py](file:///c:/WORK/5_v-box/tools/can_updater.py)
 > * Pakiet testów odpornościowych (Fault Injection): [tools/test_ota_suite.py](file:///c:/WORK/5_v-box/tools/test_ota_suite.py)
 
 ---

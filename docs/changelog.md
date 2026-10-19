@@ -37,6 +37,9 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Obok przycisku dodano przycisk pomocy `[ℹ️]`, otwierający czytelne okno z instrukcją krok po kroku konfiguracji środowiska Docker Desktop oraz natywnego Ninja/GCC, przypominający również, że wgrywanie gotowych plików `.bin` z dysku nie wymaga żadnego środowiska kompilacji.
 
 ### Dodane
+- **Kompletna instrukcja obsługi i dokumentacja funkcjonalna aplikacji GUI (`docs/bootloader/can_updater_gui_manual.md`, `README.md`):**
+  - Utworzono podręcznik użytkownika opisujący wszystkie 6 stref interfejsu `V-BOX CAN OTA Updater & Diagnostic Studio`, zasady automatycznej klasyfikacji portów USB (CANable 2.0 vs ST-Link VCP), kafelki filtrujące KPI, obsługę trybu awaryjnego SOS z dekodowaniem `PC`, działanie strażnika binarnego *Pre-Flight Binary Guard*, potoki 5/6-krokowe oraz scenariusze serwisowe krok po kroku wraz ze zrzutem ekranu (`docs/bootloader/can_updater_gui_screen.png`).
+  - Zaktualizowano główny plik `README.md` oraz `docs/bootloader/can_bootloader_and_ota_guide.md` o bezpośrednie odnośniki do nowej instrukcji.
 - **Dymki podpowiedzi (Tooltips) dla kluczowych kontrolek diagnostycznych i konfiguracyjnych (`tools/can_updater_gui.py`):**
   - Wyjaśnienie opcji `Użyj artefaktu z build/ (Auto-Path)` – automatyczne śledzenie `v_box.bin` / `v_box_boot.bin` w `build/debug_GCC_NUCLEO-C542RC/`.
   - Wyjaśnienie flagi `Verbose ISO-TP` – podgląd pojedynczych surowych ramek CAN vs raportowanie postępu na poziomie bloków pamięci.
