@@ -3,6 +3,14 @@
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
+### Zmienione
+- **Optymalizacja ergonomii i widoczności interfejsu CAN OTA Updater (`tools/can_updater_gui.py`):**
+  - Wyczyszczono formatowanie listy portów szeregowych w panelu połączenia – usunięto nadmiarowe etykiety `[Zalecany dla CAN]`, zapobiegając kolizji z przyciskiem odświeżania portów, oraz naprawiono klasyfikację konwerterów (precyzyjna detekcja CANable po VID `0x16D0` / PID `0x117E` lub nazwach SLCAN/CANable).
+  - Skompaktowano kafelki KPI floty (`DeviceSummaryCard`) do wysokości 66 px ze zoptymalizowanymi rozmiarami czcionek, co znacząco zredukowało zajmowaną przestrzeń wertykalną.
+  - Dodano wyeksponowany, dedykowany przycisk `[🔍 Skanuj Magistralę CAN (0x7DF)]` bezpośrednio w nagłówku tabeli urządzeń.
+  - Powiększony panel tabeli urządzeń (minimalna wysokość 140 px, wysokość wierszy 28 px) z implementacją kontrastowego stylu pasków przewijania QSS (`QScrollBar`), zapewniający czytelną prezentację i wygodne przewijanie wykrytych węzłów STM32.
+  - Pełna synchronizacja stanu aktywności (`setEnabled`) obu przycisków skanowania w cyklu życia połączenia magistrali CAN i sesji programowania Flash.
+
 ### Dodane
 - **Zaawansowana Aplikacja Okienkowa GUI do aktualizacji i diagnostyki CAN OTA (`tools/can_updater_gui.py`):**
   - Implementacja kompletnej aplikacji graficznej opartej na PyQt6 (z automatycznym fallbackiem do PyQt5) i nowoczesnym motywie przemysłowym Dark Engineering Theme.

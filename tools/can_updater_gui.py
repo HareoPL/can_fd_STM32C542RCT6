@@ -247,16 +247,39 @@ QCheckBox {
 }
 QScrollBar:vertical {
     background: #0B0F19;
-    width: 10px;
+    width: 12px;
     margin: 0px;
+    border: 1px solid #1E293B;
+    border-radius: 4px;
 }
 QScrollBar::handle:vertical {
-    background: #334155;
-    min-height: 20px;
+    background: #475569;
+    min-height: 24px;
     border-radius: 4px;
 }
 QScrollBar::handle:vertical:hover {
+    background: #64748B;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: #0B0F19;
+    height: 12px;
+    margin: 0px;
+    border: 1px solid #1E293B;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal {
     background: #475569;
+    min-width: 24px;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #64748B;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
 }
 """
 
@@ -266,7 +289,7 @@ QScrollBar::handle:vertical:hover {
 
 def find_serial_ports() -> List[Dict]:
     """
-    Enumerates serial ports with classification (CANable 2.0 vs ST-Link VCP).
+    Enumerates serial ports with accurate classification (CANable 2.0 vs ST-Link VCP).
     Returns a list of dicts with port metadata.
     """
     ports = []
@@ -281,7 +304,7 @@ def find_serial_ports() -> List[Dict]:
         vid = p.vid
         pid = p.pid
 
-        # Classify device
+        # Classify device accurately without false positives
         is_stlink = False
         is_canable = False
 
@@ -289,11 +312,13 @@ def find_serial_ports() -> List[Dict]:
             is_stlink = True
         elif (vid == 0x16D0 and pid == 0x117E) or "CANABLE" in desc.upper() or "SLCAN" in desc.upper():
             is_canable = True
-        elif "USB SERIAL" in desc.upper() and not is_stlink:
-            is_canable = True
 
-        tag = "CANable 2.0 / SLCAN (Zalecany dla CAN)" if is_canable else ("STLink VCP (Terminal UART2)" if is_stlink else "Port Szeregowy USB")
-        label = f"{p.device} - {desc} [{tag}]"
+        if is_canable:
+            label = f"{p.device} - CANable 2.0 (SLCAN)"
+        elif is_stlink:
+            label = f"{p.device} - ST-Link VCP (UART2)"
+        else:
+            label = f"{p.device} - {desc}" if desc else p.device
 
         ports.append({
             "device": p.device,
@@ -306,6 +331,7 @@ def find_serial_ports() -> List[Dict]:
             "label": label
         })
     return ports
+
 
 
 def get_vbox_repo_root() -> Optional[str]:
@@ -896,19 +922,20 @@ class DeviceSummaryCard(QFrame):
 
         self.setFrameShape(QFrame.Shape.StyledPanel if QT_VERSION == 6 else QFrame.StyledPanel)
         self.setCursor(Qt.CursorShape.PointingHandCursor if QT_VERSION == 6 else Qt.PointingHandCursor)
+        self.setFixedHeight(66)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 5, 12, 5)
+        layout.setSpacing(1)
 
         self.lbl_title = QLabel(self.title)
-        self.lbl_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94A3B8; text-transform: uppercase;")
+        self.lbl_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94A3B8; text-transform: uppercase;")
 
         self.lbl_value = QLabel("0")
-        self.lbl_value.setStyleSheet("font-size: 26px; font-weight: 800; color: #F8FAFC;")
+        self.lbl_value.setStyleSheet("font-size: 18px; font-weight: 800; color: #F8FAFC;")
 
         self.lbl_sub = QLabel(self.subtitle)
-        self.lbl_sub.setStyleSheet("font-size: 11px; color: #64748B;")
+        self.lbl_sub.setStyleSheet("font-size: 10px; color: #64748B;")
 
         layout.addWidget(self.lbl_title)
         layout.addWidget(self.lbl_value)
@@ -976,7 +1003,8 @@ class DeviceSummaryCard(QFrame):
                 border-color: #60A5FA;
             }}
         """)
-        self.lbl_value.setStyleSheet(f"font-size: 26px; font-weight: 800; color: {text_color};")
+        self.lbl_value.setStyleSheet(f"font-size: 18px; font-weight: 800; color: {text_color};")
+
 
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -1223,10 +1251,11 @@ class CanUpdaterMainWindow(QMainWindow):
         lower_hbox.addWidget(self._create_progress_pipeline_panel(), 1)
 
         mid_splitter.addWidget(lower_widget)
-        mid_splitter.setStretchFactor(0, 2)
-        mid_splitter.setStretchFactor(1, 3)
+        mid_splitter.setStretchFactor(0, 3)
+        mid_splitter.setStretchFactor(1, 4)
+        mid_splitter.setSizes([170, 240])
 
-        main_vbox.addWidget(mid_splitter, 3)
+        main_vbox.addWidget(mid_splitter, 4)
 
         # Zone 5: Dual Terminal Panel (CAN ISO-TP Log + UART2 Serial Monitor)
         main_vbox.addWidget(self._create_dual_terminal_panel(), 2)
@@ -1234,45 +1263,68 @@ class CanUpdaterMainWindow(QMainWindow):
     def _create_connection_panel(self) -> QGroupBox:
         grp = QGroupBox("POŁĄCZENIE MAGISTRALI CAN (CANable 2.0 / SLCAN)")
         layout = QHBoxLayout(grp)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
 
         # Interface
         layout.addWidget(QLabel("Interfejs:"))
         self.combo_iface = QComboBox()
         self.combo_iface.addItems(["slcan", "socketcan"])
+        self.combo_iface.setFixedWidth(95)
         layout.addWidget(self.combo_iface)
 
         # COM Port
         layout.addWidget(QLabel("Port COM:"))
         self.combo_port = QComboBox()
-        self.combo_port.setMinimumWidth(260)
+        self.combo_port.setMinimumWidth(240)
         layout.addWidget(self.combo_port, 1)
 
         self.btn_refresh_ports = QPushButton("🔄")
         self.btn_refresh_ports.setToolTip("Odśwież listę portów szeregowych")
+        self.btn_refresh_ports.setFixedSize(32, 28)
         self.btn_refresh_ports.clicked.connect(self._refresh_com_ports)
         layout.addWidget(self.btn_refresh_ports)
 
         # Bitrate
         layout.addWidget(QLabel("Prędkość:"))
         self.combo_bitrate = QComboBox()
-        self.combo_bitrate.addItems(["500000 bps (Standard)", "250000 bps", "1000000 bps", "125000 bps"])
+        self.combo_bitrate.addItems(["500000 bps", "250000 bps", "1000000 bps", "125000 bps"])
+        self.combo_bitrate.setFixedWidth(115)
         layout.addWidget(self.combo_bitrate)
 
         # Connect / Disconnect Button
         self.btn_connect = QPushButton("🔌 Połącz")
         self.btn_connect.setObjectName("btn_primary")
+        self.btn_connect.setMinimumWidth(95)
         self.btn_connect.clicked.connect(self._toggle_can_connection)
         layout.addWidget(self.btn_connect)
 
         # Status Badge
         self.lbl_bus_status = QLabel("(● ROZŁĄCZONO)")
-        self.lbl_bus_status.setStyleSheet("color: #94A3B8; font-weight: bold; margin-left: 6px;")
+        self.lbl_bus_status.setStyleSheet("color: #94A3B8; font-weight: bold; margin-left: 4px;")
         layout.addWidget(self.lbl_bus_status)
 
         # Manual Scan Button
         self.btn_scan = QPushButton("🔍 Skanuj (0x7DF)")
+        self.btn_scan.setObjectName("btn_scan_top")
+        self.btn_scan.setStyleSheet("""
+            QPushButton#btn_scan_top {
+                background-color: #0369A1;
+                border: 1px solid #0284C7;
+                color: #FFFFFF;
+                font-weight: bold;
+                padding: 5px 12px;
+            }
+            QPushButton#btn_scan_top:hover {
+                background-color: #0284C7;
+                border-color: #38BDF8;
+            }
+            QPushButton#btn_scan_top:disabled {
+                background-color: #0F172A;
+                border-color: #1E293B;
+                color: #475569;
+            }
+        """)
         self.btn_scan.setEnabled(False)
         self.btn_scan.clicked.connect(self._request_bus_scan)
         layout.addWidget(self.btn_scan)
@@ -1307,9 +1359,44 @@ class CanUpdaterMainWindow(QMainWindow):
         return widget
 
     def _create_device_table_panel(self) -> QGroupBox:
-        grp = QGroupBox("TABELA WYKRYTYCH WĘZŁÓW STM32 (Kliknij wiersz, aby wybrać cel aktualizacji)")
+        grp = QGroupBox("TABELA WYKRYTYCH WĘZŁÓW STM32")
         layout = QVBoxLayout(grp)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # Action bar right above table
+        header_bar = QHBoxLayout()
+        lbl_hint = QLabel("Wybierz urządzenie z tabeli poniżej, aby ustawić jako cel aktualizacji:")
+        lbl_hint.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        header_bar.addWidget(lbl_hint, 1)
+
+        # Prominent scan button
+        self.btn_scan_table = QPushButton("🔍 Skanuj Magistralę CAN (0x7DF)")
+        self.btn_scan_table.setObjectName("btn_scan_table")
+        self.btn_scan_table.setStyleSheet("""
+            QPushButton#btn_scan_table {
+                background-color: #0284C7;
+                border: 1px solid #38BDF8;
+                color: #FFFFFF;
+                font-weight: 700;
+                font-size: 12px;
+                padding: 5px 16px;
+                border-radius: 6px;
+            }
+            QPushButton#btn_scan_table:hover {
+                background-color: #0369A1;
+                border-color: #7DD3FC;
+            }
+            QPushButton#btn_scan_table:disabled {
+                background-color: #0F172A;
+                border-color: #1E293B;
+                color: #475569;
+            }
+        """)
+        self.btn_scan_table.setEnabled(False)
+        self.btn_scan_table.clicked.connect(self._request_bus_scan)
+        header_bar.addWidget(self.btn_scan_table)
+        layout.addLayout(header_bar)
 
         self.table_devices = QTableWidget(0, 6)
         self.table_devices.setHorizontalHeaderLabels([
@@ -1318,6 +1405,15 @@ class CanUpdaterMainWindow(QMainWindow):
         self.table_devices.setSelectionBehavior(TABLE_SELECT_ROWS)
         self.table_devices.setSelectionMode(TABLE_SINGLE_SELECTION)
         self.table_devices.verticalHeader().setVisible(False)
+        self.table_devices.verticalHeader().setDefaultSectionSize(28)
+        self.table_devices.setMinimumHeight(140)
+        if QT_VERSION == 6:
+            self.table_devices.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.table_devices.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.table_devices.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.table_devices.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
         self.table_devices.horizontalHeader().setSectionResizeMode(0, HEADER_RESIZE_TO_CONTENTS)
         self.table_devices.horizontalHeader().setSectionResizeMode(1, HEADER_RESIZE_TO_CONTENTS)
         self.table_devices.horizontalHeader().setSectionResizeMode(2, HEADER_RESIZE_TO_CONTENTS)
@@ -1328,6 +1424,7 @@ class CanUpdaterMainWindow(QMainWindow):
 
         layout.addWidget(self.table_devices)
         return grp
+
 
     def _create_firmware_config_panel(self) -> QGroupBox:
         grp = QGroupBox("KONFIGURACJA AKTUALIZACJI I WYBÓR WSADU")
@@ -1621,6 +1718,8 @@ class CanUpdaterMainWindow(QMainWindow):
             self.btn_connect.setText("🔌 Połącz")
             self.btn_connect.setObjectName("btn_primary")
             self.btn_scan.setEnabled(False)
+            if hasattr(self, "btn_scan_table"):
+                self.btn_scan_table.setEnabled(False)
             self.lbl_bus_status.setText("(● ROZŁĄCZONO)")
             self.lbl_bus_status.setStyleSheet("color: #94A3B8; font-weight: bold;")
         else:
@@ -1647,6 +1746,8 @@ class CanUpdaterMainWindow(QMainWindow):
         self.btn_connect.setText("🔌 Rozłącz")
         self.btn_connect.setObjectName("btn_danger")
         self.btn_scan.setEnabled(True)
+        if hasattr(self, "btn_scan_table"):
+            self.btn_scan_table.setEnabled(True)
 
     def _on_bus_status_changed(self, connected: bool, msg: str):
         if connected:
@@ -1658,6 +1759,8 @@ class CanUpdaterMainWindow(QMainWindow):
             self.btn_connect.setText("🔌 Połącz")
             self.btn_connect.setObjectName("btn_primary")
             self.btn_scan.setEnabled(False)
+            if hasattr(self, "btn_scan_table"):
+                self.btn_scan_table.setEnabled(False)
 
     def _request_bus_scan(self):
         if self.monitor_worker:
@@ -1978,6 +2081,8 @@ class CanUpdaterMainWindow(QMainWindow):
         self.btn_start_flash.setEnabled(False)
         self.btn_cancel_flash.setEnabled(True)
         self.btn_scan.setEnabled(False)
+        if hasattr(self, "btn_scan_table"):
+            self.btn_scan_table.setEnabled(False)
         self.stepper_widget.reset()
         self.progress_bar.setValue(0)
 
@@ -2021,6 +2126,8 @@ class CanUpdaterMainWindow(QMainWindow):
         self.btn_start_flash.setEnabled(True)
         self.btn_cancel_flash.setEnabled(False)
         self.btn_scan.setEnabled(True)
+        if hasattr(self, "btn_scan_table"):
+            self.btn_scan_table.setEnabled(True)
 
         if success:
             self.progress_bar.setValue(100)
