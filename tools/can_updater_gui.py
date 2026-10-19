@@ -22,6 +22,7 @@ import struct
 import shutil
 import argparse
 import subprocess
+import threading
 from typing import Optional, List, Dict, Tuple
 
 # Local import from tools directory
@@ -105,8 +106,8 @@ QLabel {
 QGroupBox {
     border: 1px solid #2D3748;
     border-radius: 8px;
-    margin-top: 14px;
-    padding-top: 14px;
+    margin-top: 10px;
+    padding: 12px 10px 8px 10px;
     font-weight: 600;
     color: #94A3B8;
 }
@@ -133,10 +134,14 @@ QPushButton:hover {
 QPushButton:pressed {
     background-color: #0F172A;
 }
-QPushButton:disabled {
+QPushButton:disabled,
+QPushButton#btn_primary:disabled,
+QPushButton#btn_success:disabled,
+QPushButton#btn_danger:disabled,
+QPushButton#btn_scan_table:disabled {
     background-color: #0F172A;
     color: #475569;
-    border-color: #1E293B;
+    border: 1px solid #1E293B;
 }
 QPushButton#btn_primary {
     background-color: #2563EB;
@@ -469,13 +474,21 @@ def inspect_firmware_binary(data: bytes, target_type: str = "APP") -> Tuple[bool
     return True, "Weryfikacja Pre-Flight zakończona sukcesem", result
 
 
-def decode_pc_address(pc_addr: int, repo_root: Optional[str] = None) -> str:
+_PC_DECODE_CACHE: Dict[int, str] = {}
+_PC_DECODING_IN_PROGRESS: set = set()
+
+
+def decode_pc_address(pc_addr: int, repo_root: Optional[str] = None, on_decoded_cb=None, force_sync_docker: bool = False) -> str:
     """
     Decodes MCU program counter (PC) using arm-none-eabi-addr2line and v_box.elf.
-    Supports native toolchain and Docker container (vbox-builder) fallback.
+    Uses in-memory caching for 0ms repeated lookups.
+    Non-blocking: if Docker is needed, it runs asynchronously in background to prevent GUI freeze.
     """
     if pc_addr == 0 or pc_addr == 0xFFFFFFFF:
         return "Adres nieustalony (0xFFFFFFFF)"
+
+    if pc_addr in _PC_DECODE_CACHE:
+        return _PC_DECODE_CACHE[pc_addr]
 
     if not repo_root:
         repo_root = get_vbox_repo_root()
@@ -492,27 +505,33 @@ def decode_pc_address(pc_addr: int, repo_root: Optional[str] = None) -> str:
             break
 
     if not elf_path:
-        return f"0x{pc_addr:08X} (Brak v_box.elf)"
+        res = f"0x{pc_addr:08X} (Brak v_box.elf)"
+        _PC_DECODE_CACHE[pc_addr] = res
+        return res
 
-    # 1. Try local native addr2line
+    # 1. Try local native addr2line (fast, ~1-3 ms)
     addr_tool = shutil.which("arm-none-eabi-addr2line") or shutil.which("addr2line")
     if addr_tool:
         try:
             cmd = [addr_tool, "-f", "-C", "-e", elf_path, f"0x{pc_addr:08X}"]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.0)
             if res.returncode == 0:
                 lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
                 if len(lines) >= 2:
                     func_name = lines[0]
                     loc = os.path.basename(lines[1])
-                    return f"{func_name}() [{loc}]"
+                    result = f"{func_name}() [{loc}]"
+                    _PC_DECODE_CACHE[pc_addr] = result
+                    return result
                 elif len(lines) == 1:
-                    return f"{lines[0]} (0x{pc_addr:08X})"
+                    result = f"{lines[0]} (0x{pc_addr:08X})"
+                    _PC_DECODE_CACHE[pc_addr] = result
+                    return result
         except Exception:
             pass
 
-    # 2. Try Docker fallback if vbox-builder container is available
-    if repo_root and shutil.which("docker"):
+    # 2. Synchronous Docker (only if explicitly requested by manual button click)
+    if force_sync_docker and repo_root and shutil.which("docker"):
         try:
             rel_elf = os.path.relpath(elf_path, repo_root).replace("\\", "/")
             cmd = [
@@ -522,20 +541,109 @@ def decode_pc_address(pc_addr: int, repo_root: Optional[str] = None) -> str:
                 "vbox-builder",
                 "arm-none-eabi-addr2line", "-f", "-C", "-e", rel_elf, f"0x{pc_addr:08X}"
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2.5)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3.0)
             if res.returncode == 0:
                 lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
                 if len(lines) >= 2:
                     func_name = lines[0]
                     loc = os.path.basename(lines[1])
-                    return f"{func_name}() [{loc}]"
+                    result = f"{func_name}() [{loc}]"
+                    _PC_DECODE_CACHE[pc_addr] = result
+                    return result
                 elif len(lines) == 1:
-                    return f"{lines[0]} (0x{pc_addr:08X})"
+                    result = f"{lines[0]} (0x{pc_addr:08X})"
+                    _PC_DECODE_CACHE[pc_addr] = result
+                    return result
         except Exception:
             pass
 
-    return f"0x{pc_addr:08X}"
+    # 3. Asynchronous background Docker resolution (prevents GUI thread freezing)
+    if repo_root and shutil.which("docker") and pc_addr not in _PC_DECODING_IN_PROGRESS:
+        _PC_DECODING_IN_PROGRESS.add(pc_addr)
 
+        def _bg_resolver():
+            try:
+                rel_elf = os.path.relpath(elf_path, repo_root).replace("\\", "/")
+                cmd = [
+                    "docker", "run", "--rm",
+                    "-v", f"{repo_root}:/workspaces/5_v-box",
+                    "-w", "/workspaces/5_v-box",
+                    "vbox-builder",
+                    "arm-none-eabi-addr2line", "-f", "-C", "-e", rel_elf, f"0x{pc_addr:08X}"
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5.0)
+                if res.returncode == 0:
+                    lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+                    if len(lines) >= 2:
+                        func_name = lines[0]
+                        loc = os.path.basename(lines[1])
+                        res_str = f"{func_name}() [{loc}]"
+                    elif len(lines) == 1:
+                        res_str = f"{lines[0]} (0x{pc_addr:08X})"
+                    else:
+                        res_str = f"0x{pc_addr:08X}"
+                    _PC_DECODE_CACHE[pc_addr] = res_str
+                    if on_decoded_cb:
+                        on_decoded_cb(pc_addr, res_str)
+            except Exception:
+                pass
+            finally:
+                _PC_DECODING_IN_PROGRESS.discard(pc_addr)
+
+        t = threading.Thread(target=_bg_resolver, daemon=True)
+        t.start()
+
+    # Fast default return without blocking GUI
+    default_res = f"0x{pc_addr:08X}"
+    _PC_DECODE_CACHE[pc_addr] = default_res
+    return default_res
+
+
+
+def check_build_environment(repo_root: Optional[str]) -> Tuple[bool, str, str]:
+    """
+    Checks if a firmware build tool (Native Ninja + ARM GCC or Docker + vbox-builder) is available.
+    Returns:
+        can_build (bool): True if project can be built.
+        engine_name (str): 'NINJA', 'DOCKER', or 'NONE'.
+        status_desc (str): Concise description and guidance.
+    """
+    if not repo_root or not os.path.isdir(repo_root):
+        return False, "NONE", "Brak repozytorium projektu 5_v-box."
+
+    # 1. Native Ninja + arm-none-eabi-gcc check
+    ninja_tool = shutil.which("ninja")
+    gcc_tool = shutil.which("arm-none-eabi-gcc")
+    if ninja_tool and gcc_tool:
+        return True, "NINJA", "Lokalny kompilator Ninja z toolchainem arm-none-eabi-gcc jest dostępny."
+
+    # 2. Docker + vbox-builder image check
+    docker_tool = shutil.which("docker")
+    if docker_tool:
+        try:
+            r_info = subprocess.run(
+                ["docker", "info"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1.5
+            )
+            if r_info.returncode == 0:
+                r_img = subprocess.run(
+                    ["docker", "image", "inspect", "vbox-builder"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=1.5
+                )
+                if r_img.returncode == 0:
+                    return True, "DOCKER", "Środowisko Docker Desktop i obraz vbox-builder są gotowe do kompilacji."
+                else:
+                    return False, "DOCKER_NO_IMAGE", "Usługa Docker działa, lecz obraz 'vbox-builder' nie został zbudowany."
+            else:
+                return False, "DOCKER_NOT_RUNNING", "Wykryto narzędzie Docker, lecz aplikacja Docker Desktop nie jest uruchomiona."
+        except Exception:
+            pass
+
+    return False, "NONE", "Brak środowiska Docker Desktop oraz lokalnego kompilatora arm-none-eabi-gcc z ninja."
 
 
 # ==============================================================================
@@ -561,11 +669,55 @@ class CanBusMonitorWorker(QThread):
         self._running = True
         self._flashing_active = False
         self._scan_requested = False
-        self.auto_scan_enabled = True
+        self.auto_scan_enabled = False
         self._last_auto_scan = 0.0
         self._devices: List[Dict] = []
         self._beacons: List[Dict] = []
         self._seen_beacon_hashes = set()
+        self._last_beacon_prune = 0.0
+
+    def clear_all_beacons(self):
+        """Clears all cached recovery beacons."""
+        self._beacons = []
+        self._seen_beacon_hashes.clear()
+        self.sig_devices_updated.emit(self._devices, self._beacons)
+
+    def clear_beacons_for_uid(self, uid_bytes: Optional[bytes]):
+        """Clears recovery beacons matching the specified device UID."""
+        if not uid_bytes:
+            self.clear_all_beacons()
+            return
+        h_xor = can_updater.compute_mcu_uid_hash(uid_bytes)
+        h_crc = zlib.crc32(uid_bytes) & 0xFF
+        orig_len = len(self._beacons)
+        self._beacons = [b for b in self._beacons if b.get("uid_hash") not in (h_xor, h_crc)]
+        self._seen_beacon_hashes.discard(h_xor)
+        self._seen_beacon_hashes.discard(h_crc)
+        if len(self._devices) <= 1:
+            self._beacons.clear()
+        if len(self._beacons) != orig_len:
+            self.sig_devices_updated.emit(self._devices, self._beacons)
+
+    def _prune_stale_beacons(self):
+        """
+        Prunes expired beacons (no 0xEE frame seen in > 3.5s) and removes
+        beacons for any devices currently confirmed in APPLICATION mode.
+        """
+        now = time.time()
+        app_hashes = {d.get("uid_hash") for d in self._devices if d.get("mode") == "APPLICATION"}
+        app_hashes.update({d.get("uid_crc_hash") for d in self._devices if d.get("mode") == "APPLICATION"})
+
+        orig_len = len(self._beacons)
+        if len(self._devices) == 1 and self._devices[0].get("mode") == "APPLICATION":
+            self._beacons = []
+        else:
+            self._beacons = [
+                b for b in self._beacons
+                if (now - b.get("timestamp", 0.0)) < 3.5 and b.get("uid_hash") not in app_hashes
+            ]
+
+        if len(self._beacons) != orig_len:
+            self.sig_devices_updated.emit(self._devices, self._beacons)
 
     def request_scan(self):
         """Triggers an active 0x7DF discovery scan on next loop cycle."""
@@ -611,21 +763,31 @@ class CanBusMonitorWorker(QThread):
                 time.sleep(0.1)
                 continue
 
-            # Check if active discovery scan is requested
             now = time.time()
+
+            # Periodic pruning of stale/expired recovery beacons (every 1.0s)
+            if now - self._last_beacon_prune > 1.0:
+                self._last_beacon_prune = now
+                self._prune_stale_beacons()
+
+            # Check if active discovery scan is requested
             if self._scan_requested or (self.auto_scan_enabled and (now - self._last_auto_scan) > 3.0):
+                is_manual = self._scan_requested
                 self._scan_requested = False
                 self._last_auto_scan = now
                 try:
                     new_beacons: List[Dict] = []
+                    log_fn = self._emit_log if is_manual else None
                     found_devs = can_updater.scan_nodes(self.bus, timeout=0.35, verbose=False,
-                                                         log_cb=self._emit_log, beacons_out=new_beacons)
+                                                         log_cb=log_fn, beacons_out=new_beacons)
                     self._devices = found_devs
                     for b in new_beacons:
                         self._process_beacon(b)
+                    self._prune_stale_beacons()
                     self.sig_devices_updated.emit(self._devices, self._beacons)
                 except Exception as e:
-                    self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
+                    if is_manual:
+                        self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
 
             # Passive reception of 0x7E9 frames
             try:
@@ -672,17 +834,40 @@ class CanBusMonitorWorker(QThread):
     def _process_beacon(self, beacon_dict: Dict):
         """Registers beacon and queries full 96-bit UID if needed."""
         uid_hash = beacon_dict["uid_hash"]
-        self.sig_recovery_beacon.emit(beacon_dict)
+
+        # Drop beacon if matching device is already confirmed in APPLICATION mode
+        matched_app = next(
+            (d for d in self._devices if d.get("mode") == "APPLICATION" and (d.get("uid_hash") == uid_hash or d.get("uid_crc_hash") == uid_hash)),
+            None
+        )
+        if matched_app or (len(self._devices) == 1 and self._devices[0].get("mode") == "APPLICATION"):
+            return
 
         # Add or update in list
         existing = next((b for b in self._beacons if b["uid_hash"] == uid_hash), None)
+        is_changed = False
         if existing:
+            if (existing.get("reason_code") != beacon_dict.get("reason_code") or
+                existing.get("fail_cnt") != beacon_dict.get("fail_cnt") or
+                existing.get("pc") != beacon_dict.get("pc")):
+                is_changed = True
             existing.update(beacon_dict)
         else:
+            is_changed = True
             self._beacons.append(beacon_dict)
 
+        # Rate-limit emission of sig_recovery_beacon (emit immediately on change, otherwise at most once every 2s)
+        now = time.time()
+        attr_name = f"_last_emit_{uid_hash}"
+        last_emit = getattr(self, attr_name, 0.0)
+        if is_changed or (now - last_emit > 2.0):
+            setattr(self, attr_name, now)
+            self.sig_recovery_beacon.emit(beacon_dict)
+
         # If full 96-bit UID not yet in devices, trigger discovery
-        matched_dev = next((d for d in self._devices if d.get("uid_hash") == uid_hash), None)
+        matched_dev = next((d for d in self._devices if d.get("uid_hash") == uid_hash or d.get("uid_crc_hash") == uid_hash), None)
+        if not matched_dev and len(self._devices) == 1:
+            matched_dev = self._devices[0]
         if not matched_dev and uid_hash not in self._seen_beacon_hashes:
             self._seen_beacon_hashes.add(uid_hash)
             # Broadcast discover to get full UID
@@ -1031,25 +1216,32 @@ class PipelineStepperWidget(QWidget):
         self.total_steps = 5
         self.step_labels: List[QLabel] = []
         self.step_circles: List[QLabel] = []
+        self.step_lines: List[QFrame] = []
 
         self.main_layout = QHBoxLayout(self)
-        self.main_layout.setContentsMargins(4, 8, 4, 8)
-        self.main_layout.setSpacing(6)
+        self.main_layout.setContentsMargins(4, 4, 4, 4)
+        self.main_layout.setSpacing(4)
 
         self.build_ui(is_bootloader=False)
 
     def build_ui(self, is_bootloader: bool = False):
-        # Clear existing layout
+        # Deep clear existing layout and widgets
         while self.main_layout.count():
             item = self.main_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                child = item.layout()
+                while child.count():
+                    c_item = child.takeAt(0)
+                    if c_item.widget():
+                        c_item.widget().deleteLater()
 
         steps = self.steps_boot if is_bootloader else self.steps_app
         self.total_steps = len(steps)
         self.step_circles = []
         self.step_labels = []
+        self.step_lines = []
 
         for idx, title in enumerate(steps, 1):
             box = QVBoxLayout()
@@ -1080,11 +1272,17 @@ class PipelineStepperWidget(QWidget):
             self.step_labels.append(label)
 
             if idx < len(steps):
+                line_box = QVBoxLayout()
+                line_box.setContentsMargins(0, 0, 0, 0)
+                line_box.setSpacing(0)
+                line_box.addSpacing(12)  # Align with center of 26px circle
                 line = QFrame()
-                line.setFrameShape(QFrame.Shape.HLine if QT_VERSION == 6 else QFrame.HLine)
                 line.setFixedHeight(2)
-                line.setStyleSheet("background-color: #334155; margin-bottom: 14px;")
-                self.main_layout.addWidget(line, 1)
+                line.setStyleSheet("background-color: #334155;")
+                line_box.addWidget(line)
+                line_box.addStretch(1)
+                self.main_layout.addLayout(line_box, 1)
+                self.step_lines.append(line)
 
     def set_step(self, step_idx: int, total_steps: int):
         self.current_step = step_idx
@@ -1102,12 +1300,21 @@ class PipelineStepperWidget(QWidget):
                 c.setStyleSheet("background-color: #1E293B; color: #64748B; border: 2px solid #334155; border-radius: 13px;")
                 l.setStyleSheet("font-size: 10px; color: #475569; font-weight: 500;")
 
+        # Update connecting lines
+        for idx, line in enumerate(self.step_lines, 1):
+            if idx < step_idx:
+                line.setStyleSheet("background-color: #10B981;")
+            else:
+                line.setStyleSheet("background-color: #334155;")
+
     def reset(self):
         self.current_step = 0
         for i, (c, l) in enumerate(zip(self.step_circles, self.step_labels), 1):
             c.setText(str(i))
             c.setStyleSheet("background-color: #1E293B; color: #94A3B8; border: 2px solid #334155; border-radius: 13px; font-weight: bold;")
             l.setStyleSheet("font-size: 10px; color: #64748B; font-weight: 500;")
+        for line in self.step_lines:
+            line.setStyleSheet("background-color: #334155;")
 
 
 # ==============================================================================
@@ -1118,6 +1325,8 @@ class CanUpdaterMainWindow(QMainWindow):
     """
     Main application window implementing the 5 logical zones from the architecture plan.
     """
+    sig_pc_decoded = pyqtSignal(int, str)
+
     def __init__(self, init_port: Optional[str] = None, init_bitrate: int = 500000):
         super().__init__()
         self.init_port = init_port
@@ -1135,16 +1344,20 @@ class CanUpdaterMainWindow(QMainWindow):
         self.loaded_firmware_data: Optional[bytes] = None
         self.current_firmware_path: Optional[str] = None
         self.current_filter_mode = "ALL"  # "ALL", "READY", "ALARM"
+        self._last_logged_beacon_key = None
+
+        self.sig_pc_decoded.connect(self._on_pc_async_decoded)
 
         self.setWindowTitle("V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / FDCAN2)")
         self.resize(1200, 860)
-        self.setMinimumSize(1020, 740)
+        self.setMinimumSize(1180, 840)
         self.setStyleSheet(DARK_ENGINEERING_THEME)
 
         # Enable Drag and Drop
         self.setAcceptDrops(True)
 
         self._init_ui()
+        self._update_build_system_state()
         self._refresh_com_ports()
 
         # Auto-connect if initial port provided
@@ -1158,8 +1371,8 @@ class CanUpdaterMainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_vbox = QVBoxLayout(central_widget)
-        main_vbox.setContentsMargins(16, 12, 16, 12)
-        main_vbox.setSpacing(10)
+        main_vbox.setContentsMargins(14, 8, 14, 8)
+        main_vbox.setSpacing(6)
 
         # Zone 1: Connection Panel
         main_vbox.addWidget(self._create_connection_panel())
@@ -1167,53 +1380,46 @@ class CanUpdaterMainWindow(QMainWindow):
         # Zone 2: Fleet Dashboard (3 KPI Cards)
         main_vbox.addWidget(self._create_fleet_dashboard())
 
-        # Zone 3 & 4: Splitter (Device Table & Update Config / Progress)
-        mid_splitter = QSplitter(Qt.Orientation.Vertical if QT_VERSION == 6 else Qt.Vertical)
+        # Zone 3: Device Table Panel
+        main_vbox.addWidget(self._create_device_table_panel())
 
-        # Upper sub-zone: Device Table
-        mid_splitter.addWidget(self._create_device_table_panel())
-
-        # Lower sub-zone: 2 Columns (Config & Pipeline Stepper)
+        # Zone 4: Lower sub-zone (Config & Pipeline Stepper side by side)
         lower_widget = QWidget()
         lower_hbox = QHBoxLayout(lower_widget)
         lower_hbox.setContentsMargins(0, 0, 0, 0)
-        lower_hbox.setSpacing(12)
+        lower_hbox.setSpacing(10)
 
         lower_hbox.addWidget(self._create_firmware_config_panel(), 1)
         lower_hbox.addWidget(self._create_progress_pipeline_panel(), 1)
-
-        mid_splitter.addWidget(lower_widget)
-        mid_splitter.setStretchFactor(0, 3)
-        mid_splitter.setStretchFactor(1, 4)
-        mid_splitter.setSizes([170, 240])
-
-        main_vbox.addWidget(mid_splitter, 4)
+        main_vbox.addWidget(lower_widget)
 
         # Zone 5: Dual Terminal Panel (CAN ISO-TP Log + UART2 Serial Monitor)
-        main_vbox.addWidget(self._create_dual_terminal_panel(), 2)
+        terminal_panel = self._create_dual_terminal_panel()
+        terminal_panel.setMinimumHeight(140)
+        main_vbox.addWidget(terminal_panel, 1)
 
     def _create_connection_panel(self) -> QGroupBox:
         grp = QGroupBox("POŁĄCZENIE MAGISTRALI CAN (CANable 2.0 / SLCAN)")
         layout = QHBoxLayout(grp)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
 
         # Interface
         layout.addWidget(QLabel("Interfejs:"))
         self.combo_iface = QComboBox()
         self.combo_iface.addItems(["slcan", "socketcan"])
-        self.combo_iface.setFixedWidth(95)
+        self.combo_iface.setFixedWidth(85)
         layout.addWidget(self.combo_iface)
 
         # COM Port
         layout.addWidget(QLabel("Port COM:"))
         self.combo_port = QComboBox()
-        self.combo_port.setMinimumWidth(240)
+        self.combo_port.setMinimumWidth(180)
         layout.addWidget(self.combo_port, 1)
 
         self.btn_refresh_ports = QPushButton("🔄")
         self.btn_refresh_ports.setToolTip("Odśwież listę portów szeregowych")
-        self.btn_refresh_ports.setFixedSize(32, 28)
+        self.btn_refresh_ports.setFixedSize(28, 26)
         self.btn_refresh_ports.clicked.connect(self._refresh_com_ports)
         layout.addWidget(self.btn_refresh_ports)
 
@@ -1221,49 +1427,24 @@ class CanUpdaterMainWindow(QMainWindow):
         layout.addWidget(QLabel("Prędkość:"))
         self.combo_bitrate = QComboBox()
         self.combo_bitrate.addItems(["500000 bps", "250000 bps", "1000000 bps", "125000 bps"])
-        self.combo_bitrate.setFixedWidth(115)
+        self.combo_bitrate.setFixedWidth(105)
         layout.addWidget(self.combo_bitrate)
 
         # Connect / Disconnect Button
         self.btn_connect = QPushButton("🔌 Połącz")
         self.btn_connect.setObjectName("btn_primary")
-        self.btn_connect.setMinimumWidth(95)
+        self.btn_connect.setFixedWidth(90)
         self.btn_connect.clicked.connect(self._toggle_can_connection)
         layout.addWidget(self.btn_connect)
 
         # Status Badge
         self.lbl_bus_status = QLabel("(● ROZŁĄCZONO)")
-        self.lbl_bus_status.setStyleSheet("color: #94A3B8; font-weight: bold; margin-left: 4px;")
+        self.lbl_bus_status.setStyleSheet("color: #94A3B8; font-weight: bold; margin-left: 2px; margin-right: 6px;")
         layout.addWidget(self.lbl_bus_status)
-
-        # Manual Scan Button
-        self.btn_scan = QPushButton("🔍 Skanuj (0x7DF)")
-        self.btn_scan.setObjectName("btn_scan_top")
-        self.btn_scan.setStyleSheet("""
-            QPushButton#btn_scan_top {
-                background-color: #0369A1;
-                border: 1px solid #0284C7;
-                color: #FFFFFF;
-                font-weight: bold;
-                padding: 5px 12px;
-            }
-            QPushButton#btn_scan_top:hover {
-                background-color: #0284C7;
-                border-color: #38BDF8;
-            }
-            QPushButton#btn_scan_top:disabled {
-                background-color: #0F172A;
-                border-color: #1E293B;
-                color: #475569;
-            }
-        """)
-        self.btn_scan.setEnabled(False)
-        self.btn_scan.clicked.connect(self._request_bus_scan)
-        layout.addWidget(self.btn_scan)
 
         # Auto-scan Checkbox
         self.chk_auto_scan = QCheckBox("Auto-Scan (3s)")
-        self.chk_auto_scan.setChecked(True)
+        self.chk_auto_scan.setChecked(False)
         self.chk_auto_scan.toggled.connect(self._on_auto_scan_toggled)
         layout.addWidget(self.chk_auto_scan)
 
@@ -1292,18 +1473,21 @@ class CanUpdaterMainWindow(QMainWindow):
 
     def _create_device_table_panel(self) -> QGroupBox:
         grp = QGroupBox("TABELA WYKRYTYCH WĘZŁÓW STM32")
+        grp.setMinimumHeight(135)
+        grp.setMaximumHeight(160)
         layout = QVBoxLayout(grp)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
 
         # Action bar right above table
         header_bar = QHBoxLayout()
-        lbl_hint = QLabel("Wybierz urządzenie z tabeli poniżej, aby ustawić jako cel aktualizacji:")
+        header_bar.setSpacing(6)
+        lbl_hint = QLabel("Wybierz urządzenie z tabeli poniżej:")
         lbl_hint.setStyleSheet("color: #94A3B8; font-size: 11px;")
         header_bar.addWidget(lbl_hint, 1)
 
         # Prominent scan button
-        self.btn_scan_table = QPushButton("🔍 Skanuj Magistralę CAN (0x7DF)")
+        self.btn_scan_table = QPushButton("🔍 Skanuj (0x7DF)")
         self.btn_scan_table.setObjectName("btn_scan_table")
         self.btn_scan_table.setStyleSheet("""
             QPushButton#btn_scan_table {
@@ -1311,23 +1495,44 @@ class CanUpdaterMainWindow(QMainWindow):
                 border: 1px solid #38BDF8;
                 color: #FFFFFF;
                 font-weight: 700;
-                font-size: 12px;
-                padding: 5px 16px;
+                font-size: 11px;
+                padding: 4px 12px;
                 border-radius: 6px;
             }
             QPushButton#btn_scan_table:hover {
                 background-color: #0369A1;
                 border-color: #7DD3FC;
             }
-            QPushButton#btn_scan_table:disabled {
-                background-color: #0F172A;
-                border-color: #1E293B;
-                color: #475569;
-            }
         """)
         self.btn_scan_table.setEnabled(False)
         self.btn_scan_table.clicked.connect(self._request_bus_scan)
         header_bar.addWidget(self.btn_scan_table)
+
+        # Quick Diagnostic Actions placed alongside table
+        self.btn_quick_boot = QPushButton("📥 Do Bootloadera")
+        self.btn_quick_boot.setEnabled(False)
+        self.btn_quick_boot.setStyleSheet("font-size: 11px; padding: 4px 10px;")
+        self.btn_quick_boot.setToolTip("Wskaż urządzenie z tabeli poniżej, aby wymusić przejście w tryb Bootloadera.")
+        self.btn_quick_boot.clicked.connect(self._quick_enter_bootloader)
+        header_bar.addWidget(self.btn_quick_boot)
+
+        self.btn_quick_app = QPushButton("▶️ Skocz do App")
+        self.btn_quick_app.setEnabled(False)
+        self.btn_quick_app.setStyleSheet("font-size: 11px; padding: 4px 10px;")
+        self.btn_quick_app.setToolTip("Wskaż urządzenie z tabeli poniżej, aby zrestartować MCU i uruchomić Aplikację.")
+        self.btn_quick_app.clicked.connect(self._quick_jump_app)
+        header_bar.addWidget(self.btn_quick_app)
+
+        self.btn_quick_addr2line = QPushButton("🔎 Dekoduj PC")
+        self.btn_quick_addr2line.setStyleSheet("font-size: 11px; padding: 4px 10px;")
+        self.btn_quick_addr2line.setToolTip(
+            "Tłumaczy szesnastkowy adres rejestru PC (Program Counter) mikrokontrolera\n"
+            "(np. 0x08008124) na dokładną nazwę funkcji w języku C oraz plik i numer linii\n"
+            "(np. HardFault_Handler() [stm32c5xx_it.c:54]) przy użyciu narzędzia addr2line i symboli v_box.elf."
+        )
+        self.btn_quick_addr2line.clicked.connect(self._quick_decode_selected_pc)
+        header_bar.addWidget(self.btn_quick_addr2line)
+
         layout.addLayout(header_bar)
 
         self.table_devices = QTableWidget(0, 6)
@@ -1337,8 +1542,9 @@ class CanUpdaterMainWindow(QMainWindow):
         self.table_devices.setSelectionBehavior(TABLE_SELECT_ROWS)
         self.table_devices.setSelectionMode(TABLE_SINGLE_SELECTION)
         self.table_devices.verticalHeader().setVisible(False)
-        self.table_devices.verticalHeader().setDefaultSectionSize(28)
-        self.table_devices.setMinimumHeight(140)
+        self.table_devices.verticalHeader().setDefaultSectionSize(26)
+        self.table_devices.setMinimumHeight(75)
+        self.table_devices.setMaximumHeight(105)
         if QT_VERSION == 6:
             self.table_devices.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self.table_devices.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -1353,6 +1559,7 @@ class CanUpdaterMainWindow(QMainWindow):
         self.table_devices.horizontalHeader().setSectionResizeMode(4, HEADER_RESIZE_TO_CONTENTS)
         self.table_devices.horizontalHeader().setSectionResizeMode(5, HEADER_STRETCH)
         self.table_devices.itemClicked.connect(self._on_table_row_clicked)
+        self.table_devices.itemSelectionChanged.connect(self._on_table_selection_changed)
 
         layout.addWidget(self.table_devices)
         return grp
@@ -1360,30 +1567,40 @@ class CanUpdaterMainWindow(QMainWindow):
 
     def _create_firmware_config_panel(self) -> QGroupBox:
         grp = QGroupBox("KONFIGURACJA AKTUALIZACJI I WYBÓR WSADU")
+        grp.setMinimumHeight(200)
+        grp.setMaximumHeight(225)
         layout = QVBoxLayout(grp)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
 
         # Target selection row
         row_target = QHBoxLayout()
+        row_target.setSpacing(6)
         row_target.addWidget(QLabel("Docelowy UID:"))
         self.txt_target_uid = QLineEdit()
+        self.txt_target_uid.setFixedHeight(26)
         self.txt_target_uid.setPlaceholderText("Wybierz urządzenie z tabeli powyżej...")
         self.txt_target_uid.textChanged.connect(self._on_target_uid_changed)
         row_target.addWidget(self.txt_target_uid, 1)
 
         self.btn_clear_uid = QPushButton("✕")
-        self.btn_clear_uid.setFixedWidth(28)
+        self.btn_clear_uid.setFixedSize(26, 26)
         self.btn_clear_uid.clicked.connect(lambda: self.txt_target_uid.clear())
         row_target.addWidget(self.btn_clear_uid)
         layout.addLayout(row_target)
 
         # Update Target Radio Buttons
-        layout.addWidget(QLabel("Co aktualizujemy:"))
         row_radio = QHBoxLayout()
-        self.rad_app = QRadioButton("Aplikacja Główna (0x08008000)")
-        self.rad_boot = QRadioButton("Bootloader (Staging Slot)")
+        row_radio.setSpacing(10)
+        lbl_target_type = QLabel("Wsad:")
+        lbl_target_type.setStyleSheet("font-weight: 600; color: #94A3B8;")
+        row_radio.addWidget(lbl_target_type)
+        self.rad_app = QRadioButton("Aplikacja (App)")
+        self.rad_app.setToolTip("Główna aplikacja w pamięci Flash pod adresem 0x08008000")
+        self.rad_boot = QRadioButton("Bootloader")
+        self.rad_boot.setToolTip("Aktualizacja bootloadera przez Staging Slot (0x08038000 -> 0x08000000)")
         self.rad_dummy = QRadioButton("Test RAM (Dummy)")
+        self.rad_dummy.setToolTip("Bezpieczny test transmisji magistrali CAN w pamięci RAM")
         self.rad_app.setChecked(True)
 
         self.btn_group_target = QButtonGroup(self)
@@ -1395,10 +1612,12 @@ class CanUpdaterMainWindow(QMainWindow):
         row_radio.addWidget(self.rad_app)
         row_radio.addWidget(self.rad_boot)
         row_radio.addWidget(self.rad_dummy)
+        row_radio.addStretch(1)
         layout.addLayout(row_radio)
 
         # File Selection Row
         row_file_label = QHBoxLayout()
+        row_file_label.setSpacing(6)
         row_file_label.addWidget(QLabel("Plik wsadowy (.bin):"))
         self.lbl_stale_warning = QLabel("")
         self.lbl_stale_warning.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 11px;")
@@ -1406,12 +1625,15 @@ class CanUpdaterMainWindow(QMainWindow):
         layout.addLayout(row_file_label)
 
         row_file = QHBoxLayout()
+        row_file.setSpacing(6)
         self.txt_file_path = QLineEdit()
+        self.txt_file_path.setFixedHeight(26)
         self.txt_file_path.setPlaceholderText("Przeciągnij plik .bin tutaj lub wybierz z dysku...")
         self.txt_file_path.textChanged.connect(self._on_file_path_changed)
         row_file.addWidget(self.txt_file_path, 1)
 
         self.btn_browse = QPushButton("📂 Przeglądaj...")
+        self.btn_browse.setFixedHeight(26)
         self.btn_browse.clicked.connect(self._browse_firmware_file)
         row_file.addWidget(self.btn_browse)
         layout.addLayout(row_file)
@@ -1419,19 +1641,36 @@ class CanUpdaterMainWindow(QMainWindow):
         # Repo-Aware options (build buttons)
         if self.repo_root:
             row_repo = QHBoxLayout()
+            row_repo.setSpacing(6)
             self.chk_use_repo_artifact = QCheckBox("Użyj artefaktu z build/ (Auto-Path)")
             self.chk_use_repo_artifact.setChecked(True)
+            self.chk_use_repo_artifact.setToolTip(
+                "Automatycznie wskazuje najnowszy plik binarny (.bin) skompilowany w repozytorium:\n"
+                "• Dla Aplikacji: build/debug_GCC_NUCLEO-C542RC/v_box.bin\n"
+                "• Dla Bootloadera: build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin\n\n"
+                "Gdy ta opcja jest włączona, po każdej nowej kompilacji ścieżka i wsad\n"
+                "są natychmiast odświeżane bez konieczności ręcznego szukania pliku na dysku."
+            )
             self.chk_use_repo_artifact.toggled.connect(self._on_use_repo_artifact_toggled)
-            row_repo.addWidget(self.chk_use_repo_artifact)
+            row_repo.addWidget(self.chk_use_repo_artifact, 1)
 
-            self.btn_build_project = QPushButton("🔨 Zbuduj Projekt (Docker/Ninja)")
+            self.btn_build_project = QPushButton("🔨 Zbuduj Projekt")
+            self.btn_build_project.setFixedHeight(26)
             self.btn_build_project.clicked.connect(self._build_project_now)
             row_repo.addWidget(self.btn_build_project)
+
+            self.btn_build_help = QPushButton("ℹ️")
+            self.btn_build_help.setFixedSize(26, 26)
+            self.btn_build_help.setToolTip("Instrukcja konfiguracji środowiska kompilacji (Docker Desktop / Ninja)")
+            self.btn_build_help.clicked.connect(self._show_build_instructions)
+            row_repo.addWidget(self.btn_build_help)
+
             layout.addLayout(row_repo)
 
         # Pre-Flight Binary Guard Box
         self.frame_preflight = QFrame()
         self.frame_preflight.setObjectName("framePreflight")
+        self.frame_preflight.setMinimumHeight(48)
         self.frame_preflight.setStyleSheet("""
             QFrame#framePreflight {
                 background-color: #0B0F19;
@@ -1444,8 +1683,8 @@ class CanUpdaterMainWindow(QMainWindow):
             }
         """)
         pf_vbox = QVBoxLayout(self.frame_preflight)
-        pf_vbox.setContentsMargins(8, 6, 8, 6)
-        pf_vbox.setSpacing(3)
+        pf_vbox.setContentsMargins(8, 4, 8, 4)
+        pf_vbox.setSpacing(2)
 
         self.lbl_pf_status = QLabel("Pre-Flight Guard: Oczekiwanie na wybór pliku .bin...")
         self.lbl_pf_status.setStyleSheet("font-weight: bold; color: #94A3B8; border: none; background: transparent;")
@@ -1456,14 +1695,15 @@ class CanUpdaterMainWindow(QMainWindow):
         pf_vbox.addWidget(self.lbl_pf_details)
         layout.addWidget(self.frame_preflight)
 
-        layout.addStretch(1)
         return grp
 
     def _create_progress_pipeline_panel(self) -> QGroupBox:
         grp = QGroupBox("POTOK WYKONANIA (PIPELINE) I TELEMETRIA")
+        grp.setMinimumHeight(200)
+        grp.setMaximumHeight(225)
         layout = QVBoxLayout(grp)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
         # Stepper Widget
         self.stepper_widget = PipelineStepperWidget()
@@ -1507,22 +1747,6 @@ class CanUpdaterMainWindow(QMainWindow):
         row_actions.addWidget(self.btn_cancel_flash, 1)
         layout.addLayout(row_actions)
 
-        # Quick Diagnostic Actions Row
-        row_diag = QHBoxLayout()
-        self.btn_quick_boot = QPushButton("📥 Wejdź w Bootloader")
-        self.btn_quick_boot.clicked.connect(self._quick_enter_bootloader)
-        row_diag.addWidget(self.btn_quick_boot)
-
-        self.btn_quick_app = QPushButton("▶️ Skocz do App")
-        self.btn_quick_app.clicked.connect(self._quick_jump_app)
-        row_diag.addWidget(self.btn_quick_app)
-
-        self.btn_quick_addr2line = QPushButton("🔎 Dekoduj PC błędu")
-        self.btn_quick_addr2line.clicked.connect(self._quick_decode_selected_pc)
-        row_diag.addWidget(self.btn_quick_addr2line)
-
-        layout.addLayout(row_diag)
-        layout.addStretch(1)
         return grp
 
     def _create_dual_terminal_panel(self) -> QTabWidget:
@@ -1543,6 +1767,11 @@ class CanUpdaterMainWindow(QMainWindow):
         row_can_ctrl.addWidget(self.chk_auto_scroll_can)
 
         self.chk_verbose_can = QCheckBox("Verbose ISO-TP")
+        self.chk_verbose_can.setToolTip(
+            "Włącza szczegółowy podgląd niskopoziomowych ramek CAN (SF, FF, CF, FC) protokołu ISO-TP (ISO 15765-2).\n\n"
+            "• Zaznaczone: w terminalu widać każdy pojedynczy bajt i ramkę magistrali CAN.\n"
+            "• Odznaczone (zalecane): wyświetlane są tylko etapy i podsumowania bloków, co zapobiega zalewaniu logów tysiącami linii."
+        )
         row_can_ctrl.addWidget(self.chk_verbose_can)
 
         row_can_ctrl.addStretch(1)
@@ -1653,7 +1882,6 @@ class CanUpdaterMainWindow(QMainWindow):
             self.monitor_worker = None
             self.btn_connect.setText("🔌 Połącz")
             self.btn_connect.setObjectName("btn_primary")
-            self.btn_scan.setEnabled(False)
             if hasattr(self, "btn_scan_table"):
                 self.btn_scan_table.setEnabled(False)
             self.lbl_bus_status.setText("(● ROZŁĄCZONO)")
@@ -1681,7 +1909,6 @@ class CanUpdaterMainWindow(QMainWindow):
 
         self.btn_connect.setText("🔌 Rozłącz")
         self.btn_connect.setObjectName("btn_danger")
-        self.btn_scan.setEnabled(True)
         if hasattr(self, "btn_scan_table"):
             self.btn_scan_table.setEnabled(True)
 
@@ -1694,7 +1921,6 @@ class CanUpdaterMainWindow(QMainWindow):
             self.lbl_bus_status.setStyleSheet("color: #EF4444; font-weight: bold;")
             self.btn_connect.setText("🔌 Połącz")
             self.btn_connect.setObjectName("btn_primary")
-            self.btn_scan.setEnabled(False)
             if hasattr(self, "btn_scan_table"):
                 self.btn_scan_table.setEnabled(False)
 
@@ -1710,36 +1936,87 @@ class CanUpdaterMainWindow(QMainWindow):
     # Device Table & Fleet Telemetry Handling
     # --------------------------------------------------------------------------
     def _on_devices_updated(self, devices: List[Dict], beacons: List[Dict]):
+        # Prune beacons against devices confirmed in APPLICATION mode
+        app_hashes = {d.get("uid_hash") for d in devices if d.get("mode") == "APPLICATION"}
+        app_hashes.update({d.get("uid_crc_hash") for d in devices if d.get("mode") == "APPLICATION"})
+
+        if devices and all(d.get("mode") == "APPLICATION" for d in devices):
+            beacons = []
+        elif app_hashes:
+            beacons = [b for b in beacons if b.get("uid_hash") not in app_hashes]
+
         self.devices_cache = devices
         self.beacons_cache = beacons
         self._refresh_device_table()
         self._update_kpi_cards()
+        if len(devices) == 1 and not self.selected_target_uid:
+            d = devices[0]
+            uid_str = d.get("uid_str") or (can_updater.format_uid(d["uid"]) if d.get("uid") else None)
+            if uid_str:
+                self.txt_target_uid.setText(uid_str)
 
     def _on_recovery_beacon_received(self, beacon: Dict):
         # Update device table if node already present or add placeholder
         hash_val = beacon.get("uid_hash", 0)
+
+        # Drop beacon if device is already confirmed running APPLICATION mode
+        matched_dev = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val or d.get("uid_crc_hash") == hash_val), None)
+        if (matched_dev and matched_dev.get("mode") == "APPLICATION") or (len(self.devices_cache) == 1 and self.devices_cache[0].get("mode") == "APPLICATION"):
+            return
+
         existing = next((b for b in self.beacons_cache if b.get("uid_hash") == hash_val), None)
+        is_changed = False
         if existing:
+            if (existing.get("reason_code") != beacon.get("reason_code") or
+                existing.get("fail_cnt") != beacon.get("fail_cnt") or
+                existing.get("pc") != beacon.get("pc")):
+                is_changed = True
             existing.update(beacon)
         else:
+            is_changed = True
             self.beacons_cache.append(beacon)
 
         pc = beacon.get("pc", 0)
-        decoded_pc = decode_pc_address(pc, self.repo_root)
-        self._append_can_log("WARN", f"Sygnał ratunkowy 0xEE (Hash: 0x{hash_val:02X}, Powód: {beacon.get('reason_str')}, Awarii: {beacon.get('fail_cnt')}/3) @ {decoded_pc}")
-        self._refresh_device_table()
-        self._update_kpi_cards()
+        decoded_pc = decode_pc_address(pc, self.repo_root, on_decoded_cb=self.sig_pc_decoded.emit)
+
+        current_key = (hash_val, beacon.get("reason_code"), beacon.get("fail_cnt"), pc)
+        if getattr(self, "_last_logged_beacon_key", None) != current_key:
+            self._last_logged_beacon_key = current_key
+            self._append_can_log("WARN", f"Sygnał ratunkowy 0xEE (Hash: 0x{hash_val:02X}, Powód: {beacon.get('reason_str')}, Awarii: {beacon.get('fail_cnt')}/3) @ {decoded_pc}")
+
+        if is_changed:
+            self._refresh_device_table()
+            self._update_kpi_cards()
+
+    def _on_pc_async_decoded(self, pc_addr: int, decoded_str: str):
+        # Safely update table cell when background PC decoder finishes
+        hex_target = f"0x{pc_addr:08X}"
+        for row in range(self.table_devices.rowCount()):
+            item_diag = self.table_devices.item(row, 5)
+            if item_diag and hex_target in item_diag.text():
+                new_text = item_diag.text().replace(hex_target, decoded_str)
+                item_diag.setText(new_text)
 
     def _update_kpi_cards(self):
-        total_nodes = len(self.devices_cache)
+        # Exclude beacons that belong to nodes confirmed in APPLICATION mode
+        app_hashes = {d.get("uid_hash") for d in self.devices_cache if d.get("mode") == "APPLICATION"}
+        app_hashes.update({d.get("uid_crc_hash") for d in self.devices_cache if d.get("mode") == "APPLICATION"})
+
+        valid_beacons = [b for b in self.beacons_cache if b.get("uid_hash") not in app_hashes]
+        if len(self.devices_cache) == 1 and self.devices_cache[0].get("mode") == "APPLICATION":
+            valid_beacons = []
+
+        total_nodes = max(len(self.devices_cache), len(valid_beacons))
+        alarm_nodes = len(valid_beacons)
+
+        alarm_hashes = {b.get("uid_hash", 0) for b in valid_beacons}
         ready_app = sum(1 for d in self.devices_cache if d.get("mode") == "APPLICATION")
-        ready_boot = sum(1 for d in self.devices_cache if d.get("mode") == "BOOTLOADER")
+        ready_boot = sum(1 for d in self.devices_cache if d.get("mode") == "BOOTLOADER" and d.get("uid_hash") not in alarm_hashes and d.get("uid_crc_hash") not in alarm_hashes)
         ready_count = ready_app + ready_boot
-        alarm_count = len(self.beacons_cache)
 
         self.card_all.set_value(total_nodes, str(total_nodes))
-        self.card_ready.set_value(ready_count, f"{ready_app} App / {ready_boot} Boot")
-        self.card_alarm.set_value(alarm_count, f"{alarm_count} W TRYBIE SOS" if alarm_count > 0 else "0 błędów")
+        self.card_ready.set_value(ready_count, f"{ready_app} App / {ready_boot} Boot" if ready_count > 0 else "0")
+        self.card_alarm.set_value(alarm_nodes, f"{alarm_nodes} W TRYBIE SOS" if alarm_nodes > 0 else "Brak awarii (OK)")
 
     def _filter_devices(self, mode: str):
         self.current_filter_mode = mode
@@ -1748,26 +2025,43 @@ class CanUpdaterMainWindow(QMainWindow):
             # If user clicked the emergency tile, try auto-filling target UID if matched
             b = self.beacons_cache[0]
             hash_val = b.get("uid_hash", 0)
-            matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val), None)
+            matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val or d.get("uid_crc_hash") == hash_val), None)
+            if not matched and len(self.devices_cache) == 1:
+                matched = self.devices_cache[0]
             if matched and matched.get("uid_str"):
                 self.txt_target_uid.setText(matched["uid_str"])
 
     def _refresh_device_table(self):
         self.table_devices.setRowCount(0)
         display_list = []
+        matched_beacon_indices = set()
 
-        # Build combined list of regular devices and beacons
-        seen_hashes = set()
         for d in self.devices_cache:
-            h = d.get("uid_hash", 0)
-            seen_hashes.add(h)
-            beacon = next((b for b in self.beacons_cache if b.get("uid_hash") == h), None)
-            display_list.append((d, beacon))
+            h_xor = d.get("uid_hash", 0)
+            h_crc = d.get("uid_crc_hash", 0)
+
+            # Find matching beacon ONLY if device is NOT running APPLICATION
+            matched_b = None
+            if d.get("mode") != "APPLICATION":
+                for idx, b in enumerate(self.beacons_cache):
+                    if idx in matched_beacon_indices:
+                        continue
+                    bh = b.get("uid_hash", 0)
+                    if bh == h_xor or bh == h_crc:
+                        matched_b = b
+                        matched_beacon_indices.add(idx)
+                        break
+
+                # 1-device fallback on CAN bus ONLY if not in APPLICATION mode
+                if matched_b is None and len(self.devices_cache) == 1 and len(self.beacons_cache) == 1 and 0 not in matched_beacon_indices:
+                    matched_b = self.beacons_cache[0]
+                    matched_beacon_indices.add(0)
+
+            display_list.append((d, matched_b))
 
         # Include orphan beacons (nodes where full 96-bit UID is not yet discovered)
-        for b in self.beacons_cache:
-            h = b.get("uid_hash", 0)
-            if h not in seen_hashes:
+        for idx, b in enumerate(self.beacons_cache):
+            if idx not in matched_beacon_indices:
                 display_list.append((None, b))
 
         # Apply KPI filter
@@ -1785,31 +2079,38 @@ class CanUpdaterMainWindow(QMainWindow):
         self.table_devices.setRowCount(len(filtered))
 
         for row, (dev, beacon) in enumerate(filtered):
-            if beacon:
-                status_item = QTableWidgetItem("🔴 SOS RECOVERY")
-                status_item.setForeground(QBrush(QColor("#EF4444")))
-            elif dev and dev.get("mode") == "APPLICATION":
+            pc = beacon.get("pc", 0) if beacon else 0
+            decoded_pc = decode_pc_address(pc, self.repo_root, on_decoded_cb=self.sig_pc_decoded.emit) if beacon else ""
+
+            if dev and dev.get("mode") == "APPLICATION":
                 status_item = QTableWidgetItem("🟢 Zdrowy (App)")
                 status_item.setForeground(QBrush(QColor("#10B981")))
+                mode_str = "APPLICATION"
+                diag_str = "Praca stabilna (OK)"
+            elif beacon or (dev and dev.get("mode") == "RECOVERY_MODE"):
+                status_item = QTableWidgetItem("🔴 SOS (AWARIA APP)")
+                status_item.setForeground(QBrush(QColor("#EF4444")))
+                mode_str = "BOOTLOADER [RECOVERY]"
+                reason_str = beacon.get('reason_str', 'RECOVERY') if beacon else 'RECOVERY'
+                fail_cnt = beacon.get('fail_cnt', 0) if beacon else 0
+                diag_str = f"Awaria App: {reason_str} ({fail_cnt}/3) @ {decoded_pc} | Bootloader stabilny (gotowy do wgrania)"
             elif dev and dev.get("mode") == "BOOTLOADER":
                 status_item = QTableWidgetItem("🟡 Bootloader")
                 status_item.setForeground(QBrush(QColor("#F59E0B")))
+                mode_str = "BOOTLOADER"
+                diag_str = "Tryb serwisowy / Programowanie Flash (OK)"
             else:
                 status_item = QTableWidgetItem("⚪ Nieznany")
-
-            uid_str = dev.get("uid_str", "[Oczekiwanie na pełny UID]") if dev else "[Wykryto z Beaconu 0xEE]"
-            hash_str = f"0x{dev.get('uid_hash', 0):02X}" if dev else (f"0x{beacon.get('uid_hash', 0):02X}" if beacon else "—")
-            mode_str = dev.get("mode", "RECOVERY_MODE") if dev else "RECOVERY_MODE"
-            ver_str = dev.get("version", "—") if dev else "—"
-
-            if beacon:
-                pc = beacon.get("pc", 0)
-                decoded_pc = decode_pc_address(pc, self.repo_root)
-                diag_str = f"AWARYJNY: {beacon.get('reason_str')} (Awarii: {beacon.get('fail_cnt')}/3) @ {decoded_pc}"
-            elif dev:
-                diag_str = "Praca stabilna (OK)"
-            else:
+                mode_str = "NIEZNANY"
                 diag_str = "—"
+
+            if dev:
+                uid_str = dev.get("uid_str") or (can_updater.format_uid(dev["uid"]) if dev.get("uid") else "[Oczekiwanie na pełny UID]")
+            else:
+                uid_str = "[Wykryto z Beaconu 0xEE]"
+            hash_val = dev.get('uid_hash', 0) if dev else (beacon.get('uid_hash', 0) if beacon else 0)
+            hash_str = f"0x{hash_val:02X}"
+            ver_str = dev.get("version", "—") if dev else "—"
 
             self.table_devices.setItem(row, 0, status_item)
             self.table_devices.setItem(row, 1, QTableWidgetItem(uid_str))
@@ -1817,6 +2118,8 @@ class CanUpdaterMainWindow(QMainWindow):
             self.table_devices.setItem(row, 3, QTableWidgetItem(mode_str))
             self.table_devices.setItem(row, 4, QTableWidgetItem(ver_str))
             self.table_devices.setItem(row, 5, QTableWidgetItem(diag_str))
+
+        self._update_quick_action_buttons_state()
 
     def _on_table_row_clicked(self, item: QTableWidgetItem):
         row = item.row()
@@ -1826,12 +2129,13 @@ class CanUpdaterMainWindow(QMainWindow):
             if not uid_text.startswith("["):
                 self.txt_target_uid.setText(uid_text)
             else:
-                # Emergency node row without full 96-bit UID yet: resolve from hash or trigger scan
                 hash_item = self.table_devices.item(row, 2)
                 hash_str = hash_item.text() if hash_item else ""
                 try:
                     hash_val = int(hash_str, 16)
-                    matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val), None)
+                    matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val or d.get("uid_crc_hash") == hash_val), None)
+                    if not matched and len(self.devices_cache) == 1:
+                        matched = self.devices_cache[0]
                     if matched and matched.get("uid_str"):
                         self.txt_target_uid.setText(matched["uid_str"])
                     else:
@@ -1839,6 +2143,69 @@ class CanUpdaterMainWindow(QMainWindow):
                         self._request_bus_scan()
                 except Exception:
                     self._request_bus_scan()
+
+        self._update_quick_action_buttons_state()
+
+    def _on_table_selection_changed(self):
+        row = self.table_devices.currentRow()
+        if row < 0:
+            return
+        uid_item = self.table_devices.item(row, 1)
+        if uid_item:
+            uid_text = uid_item.text().strip()
+            if not uid_text.startswith("["):
+                self.txt_target_uid.setText(uid_text)
+            else:
+                hash_item = self.table_devices.item(row, 2)
+                hash_str = hash_item.text().strip() if hash_item else ""
+                try:
+                    hash_val = int(hash_str, 16)
+                    matched = next((d for d in self.devices_cache if d.get("uid_hash") == hash_val or d.get("uid_crc_hash") == hash_val), None)
+                    if not matched and len(self.devices_cache) == 1:
+                        matched = self.devices_cache[0]
+                    if matched and matched.get("uid_str"):
+                        self.txt_target_uid.setText(matched["uid_str"])
+                except Exception:
+                    pass
+        self._update_quick_action_buttons_state()
+
+    def _is_target_in_recovery(self, uid_bytes: Optional[bytes]) -> bool:
+        if not uid_bytes:
+            return False
+        # If target device is discovered and running APPLICATION, it is NOT in recovery
+        for d in self.devices_cache:
+            if d.get("uid") == uid_bytes and d.get("mode") == "APPLICATION":
+                return False
+        if len(self.devices_cache) == 1 and self.devices_cache[0].get("mode") == "APPLICATION":
+            return False
+
+        h_xor = can_updater.compute_mcu_uid_hash(uid_bytes)
+        h_crc = zlib.crc32(uid_bytes) & 0xFF
+        for b in self.beacons_cache:
+            bh = b.get("uid_hash", 0)
+            if bh == h_xor or bh == h_crc:
+                return True
+        if len(self.devices_cache) == 1 and len(self.beacons_cache) >= 1:
+            return True
+        return False
+
+    def _update_quick_action_buttons_state(self):
+        if not self.selected_target_uid:
+            self.btn_quick_boot.setEnabled(False)
+            self.btn_quick_app.setEnabled(False)
+            self.btn_quick_boot.setToolTip("Wskaż urządzenie z tabeli powyżej, aby wymusić przejście w tryb Bootloadera.")
+            self.btn_quick_app.setToolTip("Wskaż urządzenie z tabeli powyżej, aby zrestartować MCU i uruchomić Aplikację.")
+            return
+
+        self.btn_quick_boot.setEnabled(True)
+        self.btn_quick_boot.setToolTip("Wysyła polecenie CMD_ENTER_BOOTLOADER (0xA2), aby przejść do Bootloadera.")
+
+        if self._is_target_in_recovery(self.selected_target_uid):
+            self.btn_quick_app.setEnabled(False)
+            self.btn_quick_app.setToolTip("Zablokowane: Urządzenie zgłasza awarię Aplikacji (Recovery / SOS). Wgraj poprawny wsad Aplikacji przed jej uruchomieniem.")
+        else:
+            self.btn_quick_app.setEnabled(True)
+            self.btn_quick_app.setToolTip("Wysyła polecenie CMD_GO_EXECUTE (0x21), aby zrestartować mikrokontroler i uruchomić Aplikację.")
 
     def _on_rescue_device(self, beacon: Dict):
         hash_val = beacon.get("uid_hash", 0)
@@ -1963,11 +2330,70 @@ class CanUpdaterMainWindow(QMainWindow):
             self.selected_target_uid = None
             self.txt_target_uid.setStyleSheet("")
 
+        self._update_quick_action_buttons_state()
+
+    def _update_build_system_state(self):
+        """Validates build capabilities (Docker / Ninja) and sets button state and tooltip."""
+        if not hasattr(self, 'btn_build_project') or not self.repo_root:
+            return
+
+        can_build, engine_type, desc = check_build_environment(self.repo_root)
+        if can_build:
+            self.btn_build_project.setEnabled(True)
+            if engine_type == "DOCKER":
+                self.btn_build_project.setText("🔨 Zbuduj Projekt (Docker)")
+                self.btn_build_project.setToolTip(f"Kompiluj w kontenerze Docker (vbox-builder):\n{desc}")
+            else:
+                self.btn_build_project.setText("🔨 Zbuduj Projekt (Ninja)")
+                self.btn_build_project.setToolTip(f"Kompiluj lokalnym kompilatorem Ninja (arm-none-eabi-gcc):\n{desc}")
+        else:
+            self.btn_build_project.setEnabled(False)
+            self.btn_build_project.setText("🔨 Zbuduj Projekt (Niedostępny)")
+            self.btn_build_project.setToolTip(
+                f"Kompilacja niedostępna: {desc}\n\n"
+                "Kliknij przycisk [ℹ️] obok, aby wyświetlić instrukcję jak odblokować kompilację.\n"
+                "Pamiętaj: jeśli posiadasz gotowy plik .bin, możesz go wgrać przyciskiem '📂 Przeglądaj...' bez kompilowania!"
+            )
+
+    def _show_build_instructions(self):
+        can_build, engine_type, desc = check_build_environment(self.repo_root)
+        status_line = f"Aktualny stan systemu: {desc}"
+
+        msg = (
+            f"<b>{status_line}</b><br><br>"
+            "Aby kompilować projekt mikrokontrolera STM32C542 bezpośrednio z aplikacji, "
+            "wymagane jest jedno z poniższych środowisk:<br><br>"
+            "<b>1. Środowisko Docker (Zalecane na Windows):</b><br>"
+            "&nbsp;&nbsp;• Zainstaluj i uruchom aplikację <b>Docker Desktop</b>.<br>"
+            "&nbsp;&nbsp;• Upewnij się, że silnik Docker działa (zielona ikona w zasobniku).<br>"
+            "&nbsp;&nbsp;• Zbuduj obraz kontenera, uruchamiając w terminalu skrypt:<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;<code>.devcontainer\\docker_build.bat</code><br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;lub polecenie: <code>docker build -t vbox-builder .devcontainer</code><br><br>"
+            "<b>2. Środowisko Natywne (Bez Dockera):</b><br>"
+            "&nbsp;&nbsp;• Zainstaluj <b>Arm GNU Toolchain</b> (<code>arm-none-eabi-gcc</code>) oraz <b>Ninja</b>.<br>"
+            "&nbsp;&nbsp;• Dodaj ścieżki do plików wykonywalnych do zmiennej środowiskowej <code>PATH</code>.<br><br>"
+            "<b>Wskazówka:</b> Kompilacja nie jest wymagana do wgrania oprogramowania po CAN! "
+            "Jeśli posiadasz gotowy plik <code>.bin</code> z zewnętrznego IDE (np. STM32CubeIDE), "
+            "po prostu wskaż go przyciskiem <b>'📂 Przeglądaj...'</b>. Wgrywanie działa w 100% natywnie bez Dockera."
+        )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Instrukcja konfiguracji środowiska kompilacji")
+        box.setTextFormat(Qt.TextFormat.RichText if QT_VERSION == 6 else Qt.RichText)
+        box.setText(msg)
+        box.setIcon(QMessageBox.Icon.Information if QT_VERSION == 6 else QMessageBox.Information)
+        box.exec()
+
     def _build_project_now(self):
         if not self.repo_root:
             return
         if self.build_worker and self.build_worker.isRunning():
             QMessageBox.information(self, "Budowanie w toku", "Kompilacja jest już uruchomiona w tle!")
+            return
+
+        can_build, engine_type, desc = check_build_environment(self.repo_root)
+        if not can_build:
+            self._show_build_instructions()
             return
 
         self.tabs_terminal.setCurrentIndex(0)
@@ -1978,7 +2404,7 @@ class CanUpdaterMainWindow(QMainWindow):
         self.build_worker.start()
 
     def _on_build_finished(self, success: bool, msg: str):
-        self.btn_build_project.setEnabled(True)
+        self._update_build_system_state()
         if success:
             self._append_can_log("OK", f"[BUILD] {msg}")
             self._reinspect_current_binary()
@@ -1995,13 +2421,27 @@ class CanUpdaterMainWindow(QMainWindow):
 
         # Check target UID
         if not self.selected_target_uid:
-            if len(self.devices_cache) == 1:
+            if self.txt_target_uid.text().strip():
+                clean = self.txt_target_uid.text().replace("-", "").replace(" ", "").strip()
+                if len(clean) == 24:
+                    try:
+                        self.selected_target_uid = bytes.fromhex(clean)
+                    except ValueError:
+                        pass
+            if not self.selected_target_uid and len(self.devices_cache) == 1:
                 self.selected_target_uid = self.devices_cache[0]["uid"]
                 self.txt_target_uid.setText(self.devices_cache[0]["uid_str"])
-            elif len(self.devices_cache) == 0:
+            elif not self.selected_target_uid and self.table_devices.rowCount() == 1:
+                uid_item = self.table_devices.item(0, 1)
+                if uid_item and not uid_item.text().startswith("["):
+                    clean = uid_item.text().replace("-", "").replace(" ", "").strip()
+                    if len(clean) == 24:
+                        self.selected_target_uid = bytes.fromhex(clean)
+                        self.txt_target_uid.setText(uid_item.text().strip())
+            elif not self.selected_target_uid and len(self.devices_cache) == 0:
                 QMessageBox.warning(self, "Brak celu", "Nie wykryto żadnego urządzenia na magistrali. Wskaż UID ręcznie.")
                 return
-            else:
+            elif not self.selected_target_uid:
                 QMessageBox.warning(self, "Wskaż urządzenie", "Wykryto wiele urządzeń na magistrali. Wybierz docelowy węzeł z tabeli.")
                 return
 
@@ -2043,11 +2483,13 @@ class CanUpdaterMainWindow(QMainWindow):
         # Switch UI state
         self.btn_start_flash.setEnabled(False)
         self.btn_cancel_flash.setEnabled(True)
-        self.btn_scan.setEnabled(False)
         if hasattr(self, "btn_scan_table"):
             self.btn_scan_table.setEnabled(False)
         self.stepper_widget.reset()
+        tot_steps = 6 if target_mode == "BOOTLOADER" else 5
+        self.stepper_widget.set_step(1, tot_steps)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat(f"[1/{tot_steps}] Wybór urządzenia docelowego... (0%)")
 
         # Start flash worker
         self.flash_worker = OtaFlashWorker(
@@ -2088,7 +2530,6 @@ class CanUpdaterMainWindow(QMainWindow):
     def _on_flash_finished(self, success: bool, msg: str):
         self.btn_start_flash.setEnabled(True)
         self.btn_cancel_flash.setEnabled(False)
-        self.btn_scan.setEnabled(True)
         if hasattr(self, "btn_scan_table"):
             self.btn_scan_table.setEnabled(True)
 
@@ -2096,6 +2537,20 @@ class CanUpdaterMainWindow(QMainWindow):
             self.progress_bar.setValue(100)
             self.progress_bar.setFormat("100% - AKTUALIZACJA ZAKOŃCZONA SUKCESEM!")
             self.stepper_widget.set_step(self.stepper_widget.total_steps + 1, self.stepper_widget.total_steps)
+
+            # Clear recovery / SOS beacon caches since firmware was successfully written and launched
+            self.beacons_cache.clear()
+            if self.monitor_worker:
+                self.monitor_worker.clear_all_beacons()
+                if self.monitor_worker.bus:
+                    try:
+                        while self.monitor_worker.bus.recv(timeout=0.02) is not None:
+                            pass
+                    except Exception:
+                        pass
+            self._refresh_device_table()
+            self._update_kpi_cards()
+
             QMessageBox.information(self, "Sukces", f"Aktualizacja oprogramowania układowego powiodła się!\n\n{msg}")
         else:
             self.progress_bar.setFormat("BŁĄD AKTUALIZACJI!")
@@ -2145,6 +2600,16 @@ class CanUpdaterMainWindow(QMainWindow):
             return
         if not self.selected_target_uid:
             QMessageBox.warning(self, "Wybierz cel", "Wskaż urządzenie z tabeli powyżej.")
+            return
+
+        if self._is_target_in_recovery(self.selected_target_uid):
+            QMessageBox.warning(
+                self,
+                "Aplikacja w stanie awarii (Recovery Mode)",
+                "To urządzenie zgłasza błąd i pracuje w trybie ratunkowym (Recovery Mode).\n\n"
+                "Uruchomienie uszkodzonej aplikacji spowoduje natychmiastowy ponowny błąd mikrokontrolera.\n"
+                "Najpierw wgraj poprawne oprogramowanie (Aplikacja Główna)."
+            )
             return
 
         self._append_can_log("INFO", f"Wysyłanie CMD_GO_EXECUTE (0x21) do {can_updater.format_uid(self.selected_target_uid)}...")

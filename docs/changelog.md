@@ -3,6 +3,71 @@
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-19]
+### Naprawione
+- **Wyrównanie numeracji kroków potoku wykonania podczas wgrywania (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
+  - Rozwiązano problem podświetlania kroku 3 („3. Kasowanie”) zamiast kroku 4 („4. Zapis Bloków”) w widżecie potoku `PipelineStepperWidget` podczas strumieniowania bloków pamięci.
+  - Wyemitowano brakujący krok 2 (`step_cb(2, 5, "Connecting / Resetting to Bootloader")`) podczas nawiązywania sesji z bootloaderem, krok 3 (`step_cb(3, 5, ...)`) dla kasowania Flash, krok 4 (`step_cb(4, 5, ...)`) dla aktywnego przesyłania bloków pamięci oraz krok 5 (`step_cb(5, 5, ...)`) dla weryfikacji CRC32 i restartu, co doprowadziło do 100% spójności CLI i GUI.
+- **Eliminacja zawieszonego statusu SOS po poprawnym wgraniu i uruchomieniu aplikacji (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
+  - Rozwiązano problem utrzymywania się statusu `🔴 SOS (AWARIA APP)` oraz `1 W TRYBIE SOS` po pomyślnym wgraniu `v_box.bin` i rozruchu aplikacji (`APPLICATION`).
+  - Zaimplementowano mechanizm czyszczenia i wygaszania (TTL = 3.5s) ramek ratunkowych `0xEE` w `CanBusMonitorWorker`: urządzenia raportujące tryb `APPLICATION` natychmiast usuwają powiązane beacony awaryjne z pamięci podręcznej.
+  - W `_refresh_device_table()` oraz `_update_kpi_cards()` nadano nadrzędny priorytet trybowi `dev.get("mode") == "APPLICATION"`, blokując przypisywanie archiwalnych sygnałów awarii do poprawnie działającej aplikacji i aktualizując kafelki KPI do `1 Gotowe do Pracy (1 App / 0 Boot) | Brak awarii (OK)`.
+  - W `_on_flash_finished()` po udanej aktualizacji wprowadzono automatyczne opróżnianie buforów magistrali CAN oraz wyczyszczenie pamięci podręcznej beaconów (`clear_all_beacons()`), odblokowując natychmiast przyciski diagnostyczne i przywracając zielony status węzła `🟢 Zdrowy (App)`.
+- **Eliminacja obcinania ramek i zaokrągleń paneli oraz optymalizacja potoku wykonania (`tools/can_updater_gui.py`):**
+  - Zlikwidowano pionowy `mid_splitter` rozcinający panel tabeli i panel konfiguracji/potoku, który powodował obcinanie dolnych i bocznych krawędzi `QGroupBox`, ukrywanie narożników `border-radius` i zniekształcenia przy zmianie wysokości.
+  - Wprowadzono stabilny układ pionowy `QVBoxLayout` ze zbalansowanymi wysokościami sekcji (tabela 135-160 px, wiersz konfiguracji i potoku 200-225 px, terminal ze współczynnikiem rozciągania stretch=1 wypełniający dół okna).
+  - Poprawiono style QSS dla stanu `:disabled` w `QPushButton#btn_danger`, `btn_success`, `btn_primary`, eliminując mylące, jaskrawe świecenie przycisku „Przerwij” na czerwono przed rozpoczęciem aktualizacji.
+  - Przeprojektowano widżet potoku `PipelineStepperWidget`: wyśrodkowano linie łączące kroki (dokładnie w osi kółek 26 px), dodano dynamiczne zaznaczanie aktywnych i ukończonych linii na zielono (`#10B981`) oraz zaimplementowano głębokie czyszczenie layoutu przy przełączaniu kroków App (5) / Bootloader (6).
+  - Przeniesiono przyciski szybkiej diagnostyki (`[📥 Do Bootloadera]`, `[▶️ Skocz do App]`, `[🔎 Dekoduj PC]`) z panelu potoku do paska akcji tabeli wykrytych węzłów obok `[🔍 Skanuj]`, uwalniając przestrzeń w potoku wykonania i grupując akcje na urządzeniu w jednym logicznym miejscu.
+  - Zaimplementowano automatyczne uzupełnianie docelowego UID (`txt_target_uid`) przy wykryciu pojedynczego urządzenia oraz przy zmianie zaznaczenia wiersza tabeli (`itemSelectionChanged`), zabezpieczając sesję przed brakiem wskazanego celu.
+- **Scalenie wierszy urządzenia i eliminacja duplikacji w trybie awaryjnym (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
+  - Rozwiązano problem powstawania dwóch osobnych wierszy dla tego samego urządzenia STM32 w tabeli węzłów, gdy mikrokontroler nadawał ramkę ratunkową `0xEE` (`CRASH_RECOVERY_BEACON`):
+    - W firmware C (`app/bootloader/openbl_core.c`) skrót `uid_hash` jest liczony jako suma XOR wszystkich 12 bajtów UID (`s_mcu_uid[i]`), podczas gdy narzędzie Python dotychczas liczyło `zlib.crc32(uid_bytes) & 0xFF`, co powodowało rozbieżność skrótów (np. `0x0C` vs `0x55`) i brak dopasowania do odebranego beaconu.
+    - Dodano funkcję `compute_mcu_uid_hash(uid_bytes)` w `tools/can_updater.py` wyliczającą poprawny skrót XOR identyczny z mikrokontrolerem oraz dostosowano `scan_nodes()` do zwracania zarówno `uid_hash` (XOR), jak i pomocniczego `uid_crc_hash`.
+    - W `tools/can_updater_gui.py` wprowadzono scalanie danych wiersza: jeśli urządzenie zgłasza błąd aplikacji, tabela prezentuje dokładnie jeden wiersz ze statusem `🔴 SOS (AWARIA APP)`, trybem `BOOTLOADER [RECOVERY]` oraz pełnym opisem diagnostycznym: `Awaria App: {reason} ({fail_cnt}/3) @ {decoded_pc} | Bootloader stabilny (gotowy do wgrania)`.
+- **Blokada niebezpiecznego skoku do uszkodzonej aplikacji (`tools/can_updater_gui.py`):**
+  - Wprowadzono automatyczne blokowanie (`setEnabled(False)`) szybkiej akcji `[▶️ Skocz do App]` (`btn_quick_app`), gdy wskazany węzeł docelowy znajduje się w trybie ratunkowym (`BOOT_MODE_RECOVERY`).
+  - Dodano prewencyjne ostrzeżenie modalne (`QMessageBox.warning`) oraz dymek podpowiedzi wyjaśniający, że skok do uszkodzonej lub brakującej aplikacji spowoduje ponowną pętlę restartów i natychmiastowy błąd MCU (wymagane jest uprzednie wgranie poprawnego wsadu).
+
+### Zmienione
+- **Ergonomia skanowania i usunięcie zduplikowanego przycisku (`tools/can_updater_gui.py`):**
+  - Usunięto nadmiarowy przycisk `Skanuj` z górnego panelu połączenia (`POŁĄCZENIE MAGISTRALI CAN`), pozostawiając jedno, logiczne i wyeksponowane miejsce skanowania: przycisk `[🔍 Skanuj Magistralę CAN (0x7DF)]` w nagłówku tabeli wykrytych węzłów.
+- **Dynamiczna weryfikacja gotowości środowiska budowania (`tools/can_updater_gui.py`):**
+  - Dodano funkcję `check_build_environment(repo_root)` weryfikującą obecność i sprawność środowiska (narzędzia natywne: `ninja` + `arm-none-eabi-gcc` lub kontener Docker: `docker` + obraz `vbox-builder`).
+  - Przycisk `[🔨 Zbuduj Projekt]` automatycznie adaptuje etykietę i stan aktywności (`Zbuduj Projekt (Docker)`, `Zbuduj Projekt (Ninja)` lub zablokowany `Zbuduj Projekt (Niedostępny)`).
+  - Obok przycisku dodano przycisk pomocy `[ℹ️]`, otwierający czytelne okno z instrukcją krok po kroku konfiguracji środowiska Docker Desktop oraz natywnego Ninja/GCC, przypominający również, że wgrywanie gotowych plików `.bin` z dysku nie wymaga żadnego środowiska kompilacji.
+
+### Dodane
+- **Dymki podpowiedzi (Tooltips) dla kluczowych kontrolek diagnostycznych i konfiguracyjnych (`tools/can_updater_gui.py`):**
+  - Wyjaśnienie opcji `Użyj artefaktu z build/ (Auto-Path)` – automatyczne śledzenie `v_box.bin` / `v_box_boot.bin` w `build/debug_GCC_NUCLEO-C542RC/`.
+  - Wyjaśnienie flagi `Verbose ISO-TP` – podgląd pojedynczych surowych ramek CAN vs raportowanie postępu na poziomie bloków pamięci.
+  - Wyjaśnienie przycisku `[🔍 Dekoduj PC błędu]` – tłumaczenie adresu instrukcji awarii mikrokontrolera na plik źródłowy C, funkcję i numer linii przez `arm-none-eabi-addr2line` oraz plik ELF.
+  - Wyjaśnienie przycisków szybkiej diagnostyki: `[⚡ Wejdź w Bootloader]` oraz `[▶️ Skocz do App]`.
+- **Trwała blokada minimalnego rozmiaru okna i ochrona przed zniekształcaniem sekcji GUI (`tools/can_updater_gui.py`):**
+  - Ustalono stały minimalny rozmiar okna na poziomie `1180 x 840 px` (`self.setMinimumSize(1180, 840)`), uniemożliwiając użytkownikowi zwężenie okna do rozmiarów zniekształcających widżety.
+  - Wyłączono zwijanie widżetów poniżej limitów w suwaku podziału (`mid_splitter.setChildrenCollapsible(False)`) oraz ustawiono gwarantowane wysokości minimalne: tabela (130 px), panel konfiguracji/potoku (270 px) oraz terminal (160 px), dzięki czemu ręczne przesuwanie suwaka nigdy nie utnie przycisków akcji ani strażnika Pre-Flight.
+  - Przeprojektowano i skompaktowano panel połączenia CAN (`POŁĄCZENIE MAGISTRALI CAN`): dopasowano stałe szerokości kontrolek, skrócono etykietę przycisku do zwięzłego `🔍 Skanuj`, eliminując nachodzenie na siebie elementów przy zmianie szerokości.
+  - Skrócono opisy radiowe w wierszu wyboru wsadu (`Aplikacja (App)`, `Bootloader`, `Test RAM (Dummy)`), przenosząc pełne adresy pamięci Flash i specyfikację do dymków podpowiedzi (tooltip), co zabezpieczyło kontrolki przed obcinaniem tekstu.
+- **Eliminacja ucinania sekcji „KONFIGURACJA AKTUALIZACJI I WYBÓR WSADU” (`tools/can_updater_gui.py`):**
+  - Skompaktowano układ pionowy panelu konfiguracji (marginesy 10x8 px, odstępy 5 px, stała wysokość kontrolek 26 px, umieszczenie selektorów typu wsadu `rad_app`/`rad_boot`/`rad_dummy` w jednym wierszu z etykietą `Wsad:`).
+  - Nadano gwarantowaną wysokość minimalną dla kontenera `lower_widget` (265 px) oraz modułu strażnika binarnego `frame_preflight` (48 px), usuwając niepożądane rozpychanie `addStretch(1)`.
+  - Zoptymalizowano podział wertykalny w `mid_splitter` (współczynnik rozciągania 1:4 na korzyść panelu konfiguracji/potoku, domyślne rozmiary 130x290 px), co gwarantuje pełną i czystą widoczność weryfikacji Pre-Flight (rozmiar, wektory MSP/Reset, suma CRC32) bez konieczności powiększania okna aplikacji.
+- **Całkowite wyeliminowanie zamrażania i lagowania GUI po wykryciu trybu ratunkowego 0xEE (`tools/can_updater_gui.py`):**
+  - Zidentyfikowano przyczynę blokowania głównego wątku GUI (`QApplication` event loop): funkcja `decode_pc_address()` przy braku lokalnego `arm-none-eabi-addr2line` wykonywała synchroniczne wywołanie `docker run` (~600 ms) w wątku interfejsu przy każdej odebranej ramce `0xEE` oraz podwójnie przy odrysowaniu tabeli (ponad 1,2 s blokady co sekundę).
+  - Wprowadzono pamięć podręczną `_PC_DECODE_CACHE`: zredukowano czas sprawdzania znanego adresu PC do 0,001 ms.
+  - Asynchroniczne dekodowanie Docker w tle: translacja adresu PC w kontenerze `vbox-builder` odbywa się w dedykowanym wątku w tle i aktualizuje tabelę przez sygnał `sig_pc_decoded`, gwarantując natychmiastową responsywność okna i płynne przesuwanie (60 FPS).
+  - Dławienie ramek i strażnik `is_changed`: wstrzymano niepotrzebne, ciągłe przebudowywanie widżetów tabeli i powtarzające się wpisy do terminala przy identycznych, cyklicznych ramkach ratunkowych.
+
+### Zmienione
+- **Domyślne wyłączenie opcji `Auto-Scan (3s)` na rzecz cichej magistrali CAN (`tools/can_updater_gui.py`):**
+  - Ustawiono domyślny stan pola wyboru `Auto-Scan (3s)` na odznaczony (`False`) w interfejsie użytkownika oraz w wątku monitora `CanBusMonitorWorker` (`self.auto_scan_enabled = False`).
+  - Zapewniono cichą pracę magistrali CAN bez wysyłania cyklicznych zapytań discovery co 3 sekundy, pozostawiając natychmiastowe pojedyncze skanowanie po kliknięciu „Połącz” oraz manualne wyzwalanie przyciskiem `[🔍 Skanuj Magistralę CAN (0x7DF)]`.
+  - Zweryfikowano architekturę wyłączności magistrali CAN: potwierdzono, że mechanizm `pause_for_flashing()` bezpiecznie wstrzymuje monitorowanie magistrali w tle na czas wgrywania oprogramowania przez `OtaFlashWorker`.
+
+### Dodane
+- **Zabezpieczenie i asystent środowiska Docker Desktop (`tools/can_updater_gui.py`):**
+  - Wprowadzono walidację dostępności narzędzia `docker` oraz responsywności demona `docker info` przed uruchomieniem kompilacji projektu przyciskiem `[🔨 Zbuduj Projekt (Docker/Ninja)]`.
+  - W przypadku braku Dockera w systemie lub wyłączonej usługi Docker Desktop wyświetlane jest czytelne okno dialogowe z instrukcją odblokowania funkcji oraz wyjaśnieniem, że wgrywanie oprogramowania i diagnostyka CAN działają w 100% natywnie w Pythonie (wystarczy wybrać plik przyciskiem `📂 Przeglądaj...`).
+
 ### Zmienione
 - **Usunięcie efektu zagnieżdżonych obwódek („pętli”) w kafelkach i stonowanie alarmu SOS (`tools/can_updater_gui.py`):**
   - Wyeliminowano kaskadowe dziedziczenie stylów `QFrame` przez widżety potomne `QLabel` wewnątrz kafelków `DeviceSummaryCard` oraz modułu `frame_preflight` (precyzyjne selektory ID `#summaryCard`, `#framePreflight` oraz reguła `border: none; background: transparent` dla `QLabel`), likwidując niepożądany efekt wielokrotnych obwódek/pętli.

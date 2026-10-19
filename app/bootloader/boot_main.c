@@ -40,7 +40,7 @@ int main(void)
     (void)mx_usart2_uart_init();
 
     safe_printf(TAG, "\r\n==============================================\r\n");
-    safe_printf(TAG, "  STM32C542 CAN Bootloader (v_box_boot v2.0)-OTA  \r\n");
+    safe_printf(TAG, "  STM32C542 CAN Bootloader (v_box_boot v1.1)-OTA  \r\n");
     safe_printf(TAG, "==============================================\r\n");
 
     /* Inspect Shared RAM structure */

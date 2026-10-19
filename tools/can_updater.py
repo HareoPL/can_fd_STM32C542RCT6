@@ -275,6 +275,13 @@ def format_uid(uid_bytes: bytes) -> str:
     g3 = uid_bytes[8:12].hex().upper()
     return f"{g1}-{g2}-{g3}"
 
+def compute_mcu_uid_hash(uid_bytes: bytes) -> int:
+    """Computes XOR hash matching STM32 openbl_core_send_recovery_beacon (byte 3)."""
+    h = 0
+    for b in uid_bytes:
+        h ^= b
+    return h & 0xFF
+
 def parse_uid(raw_uid: str) -> bytes:
     """Parses user-entered UID string into 12 raw bytes."""
     clean = raw_uid.replace("-", "").replace(" ", "").strip()
@@ -289,7 +296,7 @@ def scan_nodes(bus: can.BusABC,
                beacons_out: Optional[List[Dict]] = None) -> List[Dict]:
     """
     Broadcasts CMD_DISCOVER_NODES (0xA0) on 0x7DF and collects announcements from 0x7E9.
-    Computes 8-bit UID hash (CRC32 & 0xFF) and captures 0xEE CRASH_RECOVERY_BEACON frames.
+    Computes 8-bit UID hash (XOR & 0xFF matching firmware beacon) and captures 0xEE CRASH_RECOVERY_BEACON frames.
     """
     scan_msg = "Scanning CAN bus (500 kbps) for STM32 devices..."
     print(f"\n[INFO] {scan_msg}")
@@ -330,11 +337,13 @@ def scan_nodes(bus: can.BusABC,
                 if uid_bytes not in seen_uids:
                     seen_uids.add(uid_bytes)
                     mode_str = OTA_MODE_NAMES.get(mode_byte, f"UNKNOWN(0x{mode_byte:02X})")
-                    uid_hash = zlib.crc32(uid_bytes) & 0xFF
+                    uid_hash = compute_mcu_uid_hash(uid_bytes)
+                    uid_crc = zlib.crc32(uid_bytes) & 0xFF
                     dev_entry = {
                         "uid": uid_bytes,
                         "uid_str": format_uid(uid_bytes),
                         "uid_hash": uid_hash,
+                        "uid_crc_hash": uid_crc,
                         "mode": mode_str,
                         "mode_byte": mode_byte,
                         "version": f"v{v_major}.{v_minor}"
@@ -469,10 +478,17 @@ def run_update_session(bus: can.BusABC,
     print(f"  [OK] {ok_msg}")
     _log("OK", ok_msg)
 
+    # --------------------------------------------------------------------------
+    # Step 2: Confirm Bootloader / Switch from Application
+    # --------------------------------------------------------------------------
+    if step_cb:
+        step_cb(2, 5, "Connecting / Resetting to Bootloader")
+    step2_msg = "[Step 2/5] Preparing Bootloader session..."
+    print(f"\n{step2_msg}")
+    _log("INFO", step2_msg)
+
     if not is_dummy and mode == 0x01:  # APPLICATION mode -> request switch to Bootloader
-        step1b_msg = "[Step 1b] Device is currently running APPLICATION. Requesting switch to BOOTLOADER..."
-        print(f"\n{step1b_msg}")
-        _log("INFO", step1b_msg)
+        print("  --> Device is currently running APPLICATION. Requesting switch to BOOTLOADER...")
         enter_pdu = bytes([CMD_ENTER_BOOTLOADER])
         if not client.send_pdu(enter_pdu, timeout=1.5):
             fail_msg = "Failed to transmit CMD_ENTER_BOOTLOADER frame"
@@ -511,16 +527,19 @@ def run_update_session(bus: can.BusABC,
         boot_conn_msg = f"Connected to Bootloader! Mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}"
         print(f"  [OK] {boot_conn_msg}")
         _log("OK", boot_conn_msg)
+    else:
+        print(f"  [OK] Target is in Bootloader (Mode: {OTA_MODE_NAMES.get(mode, 'UNKNOWN')}).")
+        _log("OK", f"Target is in Bootloader ({OTA_MODE_NAMES.get(mode, 'UNKNOWN')}).")
 
     # --------------------------------------------------------------------------
-    # Step 2: Erase Application Flash Area
+    # Step 3: Erase Application Flash Area
     # --------------------------------------------------------------------------
     total_size = len(firmware_data)
     if step_cb:
-        step_cb(2, 5, f"Erasing Flash Area (0x{app_address:08X})")
-    step2_msg = f"[Step 2/5] Requesting Flash Erase (0x{app_address:08X}, size={total_size} B)..."
-    print(f"\n{step2_msg}")
-    _log("INFO", step2_msg)
+        step_cb(3, 5, f"Erasing Flash Area (0x{app_address:08X})")
+    step3_msg = f"[Step 3/5] Requesting Flash Erase (0x{app_address:08X}, size={total_size} B)..."
+    print(f"\n{step3_msg}")
+    _log("INFO", step3_msg)
 
     erase_pdu = bytes([CMD_ERASE_APP]) + struct.pack('<II', app_address, total_size)
     if not client.send_pdu(erase_pdu, timeout=2.0):
@@ -540,13 +559,13 @@ def run_update_session(bus: can.BusABC,
     _log("OK", "Flash erase confirmed by device!")
 
     # --------------------------------------------------------------------------
-    # Step 3: Stream Firmware Blocks with Block-level CRC32 Verification
+    # Step 4: Stream Firmware Blocks with Block-level CRC32 Verification
     # --------------------------------------------------------------------------
     if step_cb:
-        step_cb(3, 5, f"Streaming {total_size} B in blocks of {block_size} B")
-    step3_msg = f"[Step 3/5] Streaming {total_size} bytes in blocks of {block_size} B..."
-    print(f"\n{step3_msg}")
-    _log("INFO", step3_msg)
+        step_cb(4, 5, f"Streaming {total_size} B in blocks of {block_size} B")
+    step4_msg = f"[Step 4/5] Streaming {total_size} bytes in blocks of {block_size} B..."
+    print(f"\n{step4_msg}")
+    _log("INFO", step4_msg)
 
     t_stream_start = time.time()
     offset = 0
@@ -620,13 +639,13 @@ def run_update_session(bus: can.BusABC,
     _log("OK", f"All {block_index} blocks transmitted successfully! Retries: {total_retries}")
 
     # --------------------------------------------------------------------------
-    # Step 4: Verify Full Image CRC32
+    # Step 5: Verify Full Image CRC32 & Launch Application
     # --------------------------------------------------------------------------
     if step_cb:
-        step_cb(4, 5, f"Verifying Checksum (0x{full_crc32:08X})")
-    step4_msg = f"[Step 4/5] Verifying entire firmware checksum (CRC32: 0x{full_crc32:08X})..."
-    print(f"\n{step4_msg}")
-    _log("INFO", step4_msg)
+        step_cb(5, 5, f"Verifying Checksum (0x{full_crc32:08X}) & Rebooting")
+    step5_msg = f"[Step 5/5] Verifying entire firmware checksum (CRC32: 0x{full_crc32:08X})..."
+    print(f"\n{step5_msg}")
+    _log("INFO", step5_msg)
 
     verify_pdu = bytes([CMD_VERIFY_FIRMWARE]) + struct.pack('<II', total_size, full_crc32)
     if not client.send_pdu(verify_pdu, timeout=2.0):
@@ -645,15 +664,9 @@ def run_update_session(bus: can.BusABC,
     print("  [OK] Full firmware integrity confirmed by target hardware!")
     _log("OK", "Full firmware integrity confirmed by target hardware!")
 
-    # --------------------------------------------------------------------------
-    # Step 5: Execute / Jump to Application
-    # --------------------------------------------------------------------------
-    if step_cb:
-        step_cb(5, 5, "Executing / Jumping to Application")
-    step5_msg = "[Step 5/5] Requesting execution / restart (CMD_GO_EXECUTE)..."
-    print(f"\n{step5_msg}")
-    _log("INFO", step5_msg)
-
+    # Request execution / reboot
+    print("  --> Requesting execution / restart (CMD_GO_EXECUTE)...")
+    _log("INFO", "Requesting execution / restart (CMD_GO_EXECUTE)...")
     go_pdu = bytes([CMD_GO_EXECUTE])
     client.send_pdu(go_pdu, timeout=1.0)
     resp = client.recv_pdu(timeout=1.0)
