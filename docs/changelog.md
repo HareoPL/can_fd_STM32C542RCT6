@@ -2,6 +2,19 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-19]
+### Dodane
+- **Interaktywny i zautomatyzowany pakiet testowy awarii i mechanizmów odporności OTA (`tools/test_ota_suite.py`):**
+  - Implementacja dedykowanego narzędzia testowego weryfikującego odporność Bootloadera i Aplikacji Głównej na wstrzykiwane błędy i awarie zasilania.
+  - **Test 1 (Application - Corrupted CRC32):** Weryfikacja odrzucenia uszkodzonej sumy kontrolnej weryfikacji aplikacji (`OTA_RESP_NACK, OTA_ERR_CRC`) i braku skoku do uszkodzonego kodu.
+  - **Test 2 (Application - Power-Loss Recovery):** Symulacja nagłego odcięcia zasilania podczas zapisu pamięci Flash aplikacji, interaktywna instrukcja odłączenia i podłączenia zasilania (`TERAZ ODŁĄCZ ZASILANIE PŁYTKI...`), detekcja wejścia Bootloadera w tryb ratunkowy `BOOT_MODE_RECOVERY` (emisja ramki alarmowej `0xEE`) oraz automatyczne przeprowadzenie procedury ratunkowej (Rescue Flash) z przywróceniem działania aplikacji.
+  - **Test 3 (Bootloader - Invalid Vector Table):** Próba wgrania Bootloadera ze zmanipulowanym wskaźnikiem MSP (`0xDEADBEEF`) i weryfikacja sprzętowego strażnika tablicy wektorów Cortex-M33 odrzucającego commit do sektora `0x08000000`.
+  - **Test 4 (Bootloader - Interrupted Staging):** Symulacja przerwania wgrywania do slotu stagingowego przed rozkazem instalacji, weryfikacja nienaruszalności aktywnego Bootloadera i poprawnego startu aplikacji po resecie.
+  - **Test 5 & 6 (Golden Path):** Pełna weryfikacja wzorcowego procesu aktualizacji Aplikacji (`v_box.bin`) oraz Bootloadera (`v_box_boot.bin`) ze 100% potwierdzeniem transferu, sum kontrolnych i poprawnego restartu.
+  - **Końcowy raport:** Prezentacja czytelnej, sformatowanej tabeli podsumowującej wszystkie scenariusze testowe, statusy `[PASS]/[FAIL]`, czas wykonania i diagnozę.
+### Zmienione
+- `tools/can_updater.py`: Dodano opcjonalne parametry wstrzykiwania błędów `abort_after_blocks` oraz `force_crc` do funkcji `run_update_session` oraz `run_bootloader_update_session` dla integracji z automatycznymi skryptami testowymi bez naruszania kompatybilności wstecznej CLI.
+
 ## [2026-10-16]
 ### Dodane
 - **Zdalna aktualizacja samego Bootloadera z poziomu Aplikacji Głównej przez Flash Staging Slot (Faza 6):**

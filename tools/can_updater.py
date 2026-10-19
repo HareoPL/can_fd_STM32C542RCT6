@@ -343,9 +343,12 @@ def run_update_session(bus: can.BusABC,
                        app_address: int = 0x08008000,
                        block_size: int = 256,
                        is_dummy: bool = True,
-                       verbose: bool = False) -> bool:
+                       verbose: bool = False,
+                       abort_after_blocks: Optional[int] = None,
+                       force_crc: Optional[int] = None) -> bool:
     """
     Executes a complete update sequence (Target Select -> Erase -> Stream Blocks -> Verify CRC32 -> Execute).
+    Supports fault-injection via abort_after_blocks and force_crc.
     """
     client = IsoTpClient(bus, tx_id=CAN_ID_ISOTP_REQ, rx_id=CAN_ID_ISOTP_RESP, verbose=verbose)
     uid_str = format_uid(target_uid)
@@ -357,7 +360,7 @@ def run_update_session(bus: can.BusABC,
     print(f"  Flash Target    : 0x{app_address:08X}")
     print(f"  Payload Size    : {len(firmware_data)} bytes ({len(firmware_data)/1024.0:.1f} KB)")
     print(f"  Block Size      : {block_size} bytes")
-    full_crc32 = zlib.crc32(firmware_data) & 0xFFFFFFFF
+    full_crc32 = force_crc if force_crc is not None else (zlib.crc32(firmware_data) & 0xFFFFFFFF)
     print(f"  Full CRC32      : 0x{full_crc32:08X} (IEEE 802.3)")
     print("=" * 76)
 
@@ -433,6 +436,10 @@ def run_update_session(bus: can.BusABC,
     block_index = 0
 
     while offset < total_size:
+        if abort_after_blocks is not None and block_index >= abort_after_blocks:
+            print(f"\n  [ABORT] Fault-injection: Aborting update after {block_index} blocks as requested!", file=sys.stderr)
+            return False
+
         chunk = firmware_data[offset : offset + block_size]
         curr_addr = app_address + offset
         chunk_len = len(chunk)
@@ -508,7 +515,9 @@ def run_bootloader_update_session(bus: can.BusABC,
                                   target_uid: bytes,
                                   bootloader_data: bytes,
                                   block_size: int = 256,
-                                  verbose: bool = False) -> bool:
+                                  verbose: bool = False,
+                                  abort_after_blocks: Optional[int] = None,
+                                  force_crc: Optional[int] = None) -> bool:
     """
     Executes a complete Bootloader update sequence via the Flash Staging Slot:
     1. Select Target & verify/switch to APPLICATION mode.
@@ -517,12 +526,13 @@ def run_bootloader_update_session(bus: can.BusABC,
     4. Verify Full Staging Image CRC32.
     5. Issue CMD_UPDATE_BOOTLOADER (0xA4) to validate Cortex-M33 vector table and install to 0x08000000.
     6. Issue CMD_GO_EXECUTE to reboot MCU into the new Bootloader.
+    Supports fault-injection via abort_after_blocks and force_crc.
     """
     client = IsoTpClient(bus, tx_id=CAN_ID_ISOTP_REQ, rx_id=CAN_ID_ISOTP_RESP, verbose=verbose)
     uid_str = format_uid(target_uid)
     staging_address = BOOTLOADER_STAGING_BASE
     total_size = len(bootloader_data)
-    full_crc32 = zlib.crc32(bootloader_data) & 0xFFFFFFFF
+    full_crc32 = force_crc if force_crc is not None else (zlib.crc32(bootloader_data) & 0xFFFFFFFF)
 
     print("=" * 76)
     print("  Starting BOOTLOADER FIRMWARE UPDATE (via Staging Slot)")
@@ -601,6 +611,10 @@ def run_bootloader_update_session(bus: can.BusABC,
     block_index = 0
 
     while offset < total_size:
+        if abort_after_blocks is not None and block_index >= abort_after_blocks:
+            print(f"\n  [ABORT] Fault-injection: Aborting staging upload after {block_index} blocks as requested!", file=sys.stderr)
+            return False
+
         chunk = bootloader_data[offset : offset + block_size]
         curr_addr = staging_address + offset
         chunk_len = len(chunk)

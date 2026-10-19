@@ -299,7 +299,49 @@ Kontener zawiera kompletny stos bibliotek graficznych X11/OpenGL kompatybilny z 
 
 ---
 
-## 10. Rozwiązywanie Problemów (Troubleshooting & FAQ)
+## 10. Narzędzia Narzędziowe OTA i Pakiet Testowy Awarii w Pythonie
+
+W katalogu `tools/` znajdują się dedykowane narzędzia do aktualizacji, diagnostyki oraz weryfikacji mechanizmów odporności na awarie po magistrali CAN:
+
+### A. Narzędzie Aktualizatora i Skanera: `tools/can_updater.py`
+Uniwersalne narzędzie CLI oparte o `python-can` z wbudowanym stosem transportowym ISO 15765-2 (ISO-TP) operujące na prędkości 500 kbps:
+```bash
+# 1. Skanowanie magistrali i identyfikacja podłączonych węzłów (UID 96-bit, tryb, wersja)
+python tools/can_updater.py --port COM5 --scan
+
+# 2. Aktualizacja Aplikacji Głównej (v_box.bin) pod adres 0x08008000
+python tools/can_updater.py --port COM5 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
+
+# 3. Zdalna aktualizacja Bootloadera (v_box_boot.bin) przez Staging Slot (0x08038000)
+python tools/can_updater.py --port COM5 --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin
+
+# 4. Test symulacji przepustowości stosu ISO-TP (Dummy Update 32 KB)
+python tools/can_updater.py --port COM5 --dummy --size 32768
+```
+
+### B. Pakiet Testowy Wstrzykiwania Awarii i Ochrony: `tools/test_ota_suite.py`
+Dedykowane narzędzie weryfikujące mechanizmy Fail-Safe, walidację sum kontrolnych oraz odzyskiwanie sprawności po zaniku zasilania:
+```bash
+# Uruchomienie pełnego zestawu testów interaktywnych (z promptami "teraz odłącz zasilanie"):
+python tools/test_ota_suite.py --port COM5
+
+# Uruchomienie pojedynczego testu (np. Test 2: Symulacja odcięcia zasilania):
+python tools/test_ota_suite.py --port COM5 --test 2
+
+# Tryb bezobsługowy / automatyczny (dla środowisk CI / bez obecności operatora):
+python tools/test_ota_suite.py --port COM5 --non-interactive
+```
+
+#### Scenariusze weryfikowane w pakiecie:
+1. **T1 (Application - Corrupted CRC):** Odrzucenie błędnej sumy kontrolnej weryfikacji aplikacji (`OTA_ERR_CRC`) i utrzymanie stabilności węzła.
+2. **T2 (Application - Power-Loss Recovery):** Przerwanie programowania aplikacji, instrukcja odłączenia zasilania dla operatora, automatyczna detekcja trybu awaryjnego `BOOT_MODE_RECOVERY` oraz ratunkowe przywrócenie sprawności (Rescue Flash).
+3. **T3 (Bootloader - Invalid Vector Table):** Próba wgrania Bootloadera ze zmanipulowanym wskaźnikiem MSP (`0xDEADBEEF`), detekcja i zablokowanie instalacji przez strażnika wektorów Cortex-M33 w `bootloader_updater`.
+4. **T4 (Bootloader - Interrupted Staging):** Przerwanie uploadu do slotu stagingowego, zresetowanie płytki i weryfikacja nienaruszalności aktywnego sektora `0x08000000`.
+5. **T5 & T6 (Golden Path):** Pełny wzorcowy proces flashowania Aplikacji i Bootloadera.
+
+---
+
+## 11. Rozwiązywanie Problemów (Troubleshooting & FAQ)
 
 ### Q: Kompilacja w Windowsie zgłasza: `Error: not a CMake build directory (missing CMakeCache.txt)`
 **Przyczyna:** Katalog `build/` został ręcznie skasowany lub projekt został świeżo sklonowany z repozytorium Git.  
