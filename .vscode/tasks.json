@@ -302,8 +302,6 @@
             "command": "python",
             "args": [
                 "tools/can_updater.py",
-                "--port",
-                "COM17",
                 "--scan"
             ],
             "options": {
@@ -323,9 +321,7 @@
             "type": "process",
             "command": "python",
             "args": [
-                "tools/test_ota_suite.py",
-                "--port",
-                "COM17"
+                "tools/test_ota_suite.py"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

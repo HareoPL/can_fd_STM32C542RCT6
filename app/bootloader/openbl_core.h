@@ -15,13 +15,15 @@ extern "C" {
 #endif
 
 /**
- * @brief Initializes the Bootloader CAN subsystem, ISO-TP engine, and Flash interface.
+ * @brief Initializes the Bootloader CAN subsystem (FDCAN1 + FDCAN2), ISO-TP engine, and Flash interface.
  * @param[in] session_selected_init Initial state of target selection (e.g. from shared RAM).
+ * @param[in] boot_mode Bootloader operation mode (BOOT_MODE_STAY_IN_BOOT or BOOT_MODE_RECOVERY).
+ * @param[in] active_can_bus Initial active CAN bus (BOOT_CAN_BUS_AUTO, BOOT_CAN_BUS_FDCAN1, or BOOT_CAN_BUS_FDCAN2).
  */
-void openbl_core_init(bool session_selected_init);
+void openbl_core_init(bool session_selected_init, boot_mode_t boot_mode, uint8_t active_can_bus);
 
 /**
- * @brief Polls FDCAN2 RX FIFO, processes received CAN frames, and updates ISO-TP state.
+ * @brief Polls FDCAN1 and FDCAN2 RX FIFOs, processes received CAN frames, and updates ISO-TP state.
  * @note Must be called periodically in the Bootloader main loop.
  */
 void openbl_core_poll(void);
@@ -33,7 +35,7 @@ void openbl_core_poll(void);
 bool openbl_core_is_session_active(void);
 
 /**
- * @brief Transmits a recovery crash beacon on ID 0x7E9.
+ * @brief Transmits an on-demand recovery crash beacon on Extended ID 0x01F2F3E9.
  * @param[in] reason Recorded fault reason code.
  * @param[in] fail_cnt Number of consecutive boot crashes.
  * @param[in] pc Program counter at crash point.

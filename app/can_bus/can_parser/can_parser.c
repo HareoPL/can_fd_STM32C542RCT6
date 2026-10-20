@@ -11,6 +11,7 @@
 #include "cp_boot_ota.h"
 #include "safe_printf.h"
 #include <stddef.h>
+#include <string.h>
 
 /** @brief Logging tag for the CAN Parser dispatcher module. */
 #define TAG "CAN_PARSER"
@@ -62,6 +63,51 @@ bool can_parser_select(can_instance_t *can_inst, can_parser_id_t id)
     safe_printf(TAG, "Active parser: ID %u (%u filters)\r\n",
                 (unsigned int)id, (unsigned int)profile->num_filters);
 
+    return true;
+}
+
+/**
+ * @brief Attaches the system BOOT_OTA service parser filters alongside the currently active
+ *        parser profile on the specified CAN instance (exclusive exception for OTA).
+ * @param[in,out] can_inst Pointer to target CAN instance (e.g. &can1_inst).
+ * @return true on success, false if filter capacity is exceeded or hardware configuration fails.
+ */
+bool can_parser_attach_boot_ota(can_instance_t *can_inst)
+{
+    if (can_inst == NULL || s_parsers[CAN_PARSER_ID_BOOT_OTA] == NULL)
+    {
+        return false;
+    }
+
+    const can_parser_profile_t *ota_profile = s_parsers[CAN_PARSER_ID_BOOT_OTA]();
+    if (ota_profile == NULL || ota_profile->filters == NULL || ota_profile->num_filters == 0U)
+    {
+        return false;
+    }
+
+    if ((can_inst->num_filters + ota_profile->num_filters) > CAN_MAX_FILTERS)
+    {
+        return false;
+    }
+
+    can_filter_t combined[CAN_MAX_FILTERS];
+    uint32_t total_filters = can_inst->num_filters;
+
+    if (total_filters > 0U)
+    {
+        memcpy(combined, can_inst->filters, total_filters * sizeof(can_filter_t));
+    }
+
+    memcpy(&combined[total_filters], ota_profile->filters, ota_profile->num_filters * sizeof(can_filter_t));
+    total_filters += ota_profile->num_filters;
+
+    if (!can_manager_setFilter(can_inst, combined, total_filters))
+    {
+        return false;
+    }
+
+    safe_printf(TAG, "Attached BOOT_OTA parser to %s (total filters: %lu)\r\n",
+                can_inst->name, (unsigned long)total_filters);
     return true;
 }
 

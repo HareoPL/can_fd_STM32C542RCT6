@@ -8,17 +8,12 @@
 #include "cp_boot_ota.h"
 #include "safe_printf.h"
 #include "can_msg_types.h"
+#include "ota_protocol.h"
 #include "ota_manager.h"
 #include <stddef.h>
 
 /** @brief Logging tag for this parser profile. */
 #define TAG "CP_BOOT_OTA"
-
-/* ===========================================================================
- * Target CAN IDs on FDCAN2 for Bootloader / OTA Communication (Classic CAN 2.0)
- * =========================================================================== */
-#define CAN_ID_OTA_BROADCAST    0x7DFU   /**< Broadcast discovery and target selection */
-#define CAN_ID_ISOTP_REQ        0x7E0U   /**< ISO-TP request channel (PC -> STM32) */
 
 /* --- Private Callbacks -----------------------------------------------------*/
 
@@ -29,12 +24,22 @@
  * =========================================================================== */
 
 /**
- * @brief Callback for incoming broadcast frames on 0x7DF.
+ * @brief Callback for incoming broadcast frames on 0x01F2F3DF.
+ *        Validates the "VBOX" authorization token before queuing.
  * @param[in] msg Pointer to received CAN message structure.
  */
 static void on_boot_ota_broadcast_rx(const CAN_msg_t *msg)
 {
-    if (msg == NULL)
+    if (msg == NULL || msg->len < OTA_DISCOVERY_MIN_LEN)
+    {
+        return;
+    }
+
+    if (msg->data[1] != CMD_DISCOVER_NODES ||
+        msg->data[2] != OTA_MAGIC_TOKEN_0 ||
+        msg->data[3] != OTA_MAGIC_TOKEN_1 ||
+        msg->data[4] != OTA_MAGIC_TOKEN_2 ||
+        msg->data[5] != OTA_MAGIC_TOKEN_3)
     {
         return;
     }
@@ -43,7 +48,7 @@ static void on_boot_ota_broadcast_rx(const CAN_msg_t *msg)
 }
 
 /**
- * @brief Callback for incoming ISO-TP request frames on 0x7E0.
+ * @brief Callback for incoming ISO-TP request frames on 0x01F2F3E0.
  * @param[in] msg Pointer to received CAN message structure.
  */
 static void on_boot_ota_isotp_req_rx(const CAN_msg_t *msg)
@@ -61,12 +66,12 @@ static void on_boot_ota_isotp_req_rx(const CAN_msg_t *msg)
 static const can_filter_t s_filters[] = {
     {
         .arb  = CAN_ID_OTA_BROADCAST,
-        .mask = CAN_MASK_EXACT_STANDARD,
+        .mask = CAN_MASK_EXACT_EXTENDED,
         .cb   = on_boot_ota_broadcast_rx
     },
     {
         .arb  = CAN_ID_ISOTP_REQ,
-        .mask = CAN_MASK_EXACT_STANDARD,
+        .mask = CAN_MASK_EXACT_EXTENDED,
         .cb   = on_boot_ota_isotp_req_rx
     }
 };

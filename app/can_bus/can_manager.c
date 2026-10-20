@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/** @brief Pointer to the CAN instance currently dispatching an RX callback. */
+static can_instance_t *s_active_rx_inst = NULL;
+
 /**
  * @brief Notification callback invoked from interrupt (ISR) upon hardware reception.
  * @param[in] context Pointer to associated can_instance_t structure.
@@ -103,7 +106,9 @@ static void can_manager_dispatch_rx(can_instance_t *inst, const CAN_msg_t *msg)
         {
             if (f->cb != NULL)
             {
+                s_active_rx_inst = inst;
                 f->cb(msg);
+                s_active_rx_inst = NULL;
             }
             break;
         }
@@ -140,10 +145,6 @@ static void can_rx_task(void *pvParameters)
                 /* Flush all pending frames from the hardware FIFO */
                 while (inst->hw_interface->receive(&rx_id, rx_data, &rx_len))
                 {
-                    safe_printf(inst->name, "rx msg ID=0x%03lX len=%u\r\n",
-                                (unsigned long)rx_id,
-                                (unsigned int)rx_len);
-
                     CAN_msg_t rx_msg = {0};
                     rx_msg.ident = rx_id;
                     rx_msg.len = rx_len;
@@ -320,4 +321,9 @@ bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, ui
     }
 
     return true;
+}
+
+can_instance_t *can_manager_get_active_rx_instance(void)
+{
+    return s_active_rx_inst;
 }

@@ -123,10 +123,7 @@ def safe_open_or_reconnect_bus(existing_bus: Optional[can.BusABC],
 
     for attempt in range(1, 6):
         try:
-            if interface == "slcan":
-                bus = can.interface.Bus(interface='slcan', channel=channel, bitrate=bitrate)
-            else:
-                bus = can.interface.Bus(interface=interface, channel=channel, bitrate=bitrate)
+            bus = can_updater.open_can_bus(interface=interface, channel=channel, bitrate=bitrate)
 
             # Flush stale frames
             time.sleep(0.05)
@@ -135,16 +132,19 @@ def safe_open_or_reconnect_bus(existing_bus: Optional[can.BusABC],
             return bus
         except Exception as e:
             if attempt == 5:
-                raise RuntimeError(f"Could not connect to CAN channel '{channel}' after 5 attempts: {e}")
+                raise RuntimeError(f"Could not connect to CAN channel '{channel}' ({interface}) after 5 attempts: {e}")
             time.sleep(0.8)
 
     raise RuntimeError("Failed to establish CAN bus connection")
 
-def discover_single_device(bus: can.BusABC, target_uid: Optional[bytes] = None, timeout: float = 1.0) -> Optional[Dict]:
+def discover_single_device(bus: can.BusABC,
+                           target_uid: Optional[bytes] = None,
+                           timeout: float = 1.0,
+                           beacons_out: Optional[List[Dict]] = None) -> Optional[Dict]:
     """
     Discovers target device on CAN bus. If target_uid is specified, matches that UID.
     """
-    nodes = can_updater.scan_nodes(bus, timeout=timeout, verbose=False)
+    nodes = can_updater.scan_nodes(bus, timeout=timeout, verbose=False, beacons_out=beacons_out)
     if not nodes:
         return None
 
@@ -159,13 +159,14 @@ def discover_single_device(bus: can.BusABC, target_uid: Optional[bytes] = None, 
 def wait_for_device_online(bus: can.BusABC,
                            target_uid: bytes,
                            expected_mode: Optional[int] = None,
-                           timeout: float = 8.0) -> Optional[Dict]:
+                           timeout: float = 8.0,
+                           beacons_out: Optional[List[Dict]] = None) -> Optional[Dict]:
     """
     Polls the CAN bus until target node is discovered, optionally checking for expected mode.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        node = discover_single_device(bus, target_uid=target_uid, timeout=0.3)
+        node = discover_single_device(bus, target_uid=target_uid, timeout=0.35, beacons_out=beacons_out)
         if node:
             if expected_mode is None or node.get("mode_byte") == expected_mode:
                 return node
@@ -230,15 +231,34 @@ def test_1_app_corrupted_crc(bus: can.BusABC,
     print_banner(f"TEST 1 [Application]: {title}")
 
     # Ensure device is reachable
-    print("  [1/3] Verifying target connection...")
+    print("  [1/4] Verifying target connection...")
     dev = discover_single_device(bus, target_uid=target_uid, timeout=0.8)
     if not dev:
         return TestResult("T1", "Application", title, "FAIL", time.time() - t_start, "Target device not reachable on CAN bus")
 
+    # Automotive collision-immunity guard check:
+    # 1) Send standard 11-bit OBD-II 0x7DF frame -> must be ignored
+    # 2) Send 29-bit 0x01F2F3DF frame WITHOUT "VBOX" magic token -> must be ignored
+    print("  [2/4] Verifying Automotive Collision Guard (ignoring 11-bit 0x7DF & unauthorized 0x01F2F3DF)...")
+    while bus.recv(timeout=0.01):
+        pass
+    obd_msg = can.Message(arbitration_id=0x7DF, is_extended_id=False, data=[0x02, 0x01, 0x00, 0, 0, 0, 0, 0])
+    bad_magic_msg = can.Message(arbitration_id=can_updater.CAN_ID_OTA_BROADCAST, is_extended_id=True,
+                                data=[0x06, can_updater.CMD_DISCOVER_NODES, 0x11, 0x22, 0x33, 0x44, 0, 0])
+    bus.send(obd_msg)
+    bus.send(bad_magic_msg)
+    t_guard_end = time.time() + 0.25
+    while time.time() < t_guard_end:
+        rx_guard = bus.recv(timeout=0.02)
+        if rx_guard and rx_guard.arbitration_id in (0x7E8, 0x7E9, can_updater.CAN_ID_OTA_DISCOVERY_RESP, can_updater.CAN_ID_ISOTP_RESP):
+            return TestResult("T1", "Application", title, "FAIL", time.time() - t_start,
+                              f"Collision guard failed: MCU responded to unauthorized frame (ID=0x{rx_guard.arbitration_id:X})!")
+    print("  [OK] Collision guard verified: MCU remained 100% silent on unauthorized frames.")
+
     # Invert the CRC to force checksum mismatch
     true_crc = zlib.crc32(app_data) & 0xFFFFFFFF
     corrupted_crc = true_crc ^ 0xFFFFFFFF
-    print(f"  [2/3] Simulating corrupted CRC32 transmission (True: 0x{true_crc:08X} -> Corrupted: 0x{corrupted_crc:08X})...")
+    print(f"  [3/4] Simulating corrupted CRC32 transmission (True: 0x{true_crc:08X} -> Corrupted: 0x{corrupted_crc:08X})...")
 
     # Run update session with forced bad CRC
     success = can_updater.run_update_session(
@@ -257,7 +277,7 @@ def test_1_app_corrupted_crc(bus: can.BusABC,
         return TestResult("T1", "Application", title, "FAIL", duration,
                           "ERROR: Device erroneously accepted corrupted CRC32!")
 
-    print("\n  [3/3] Update was rejected as expected. Checking if MCU remains alive and responsive...")
+    print("\n  [4/4] Update was rejected as expected. Checking if MCU remains alive and responsive...")
     time.sleep(0.3)
     dev_post = discover_single_device(bus, target_uid=target_uid, timeout=1.0)
     if not dev_post:
@@ -266,7 +286,7 @@ def test_1_app_corrupted_crc(bus: can.BusABC,
 
     print(f"  [OK] Device responded on CAN! Active mode: {dev_post['mode']}")
     return TestResult("T1", "Application", title, "PASS", duration,
-                      "Device rejected corrupted CRC32 via NACK; MCU remained alive and responsive")
+                      "Collision guard & CRC32 NACK verified; MCU remained alive and responsive")
 
 
 def test_2_app_power_loss_recovery(bus_holder: List[can.BusABC],
@@ -315,22 +335,32 @@ def test_2_app_power_loss_recovery(bus_holder: List[can.BusABC],
     prompt_user_action(instruction, non_interactive=not interactive)
 
     # Step 3: Re-open CAN bus connection (in case USB serial port reset)
-    print("\n  [2/4] Reconnecting to CAN bus and listening for Bootloader Recovery Mode...")
+    print("\n  [2/4] Reconnecting to CAN bus and verifying Silent Recovery Mode (zero unsolicited traffic)...")
     try:
         bus = safe_open_or_reconnect_bus(bus, interface, channel, bitrate)
         bus_holder[0] = bus
     except Exception as e:
         return TestResult("T2", "Application", title, "FAIL", time.time() - t_start, f"CAN reconnect failed: {e}")
 
-    # Listen for device announcement or beacon
-    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=12.0)
+    # Verify Silent Recovery Mode: listen passively for 1.5s before sending any query
+    t_silent_end = time.time() + 1.5
+    while time.time() < t_silent_end:
+        rx_spont = bus.recv(timeout=0.05)
+        if rx_spont and rx_spont.arbitration_id == can_updater.CAN_ID_OTA_DISCOVERY_RESP:
+            return TestResult("T2", "Application", title, "FAIL", time.time() - t_start,
+                              "Bootloader emitted unsolicited frame on CAN bus in Recovery Mode!")
+    print("  [OK] Silent Recovery verified: 0 unsolicited frames on vehicle CAN bus over 1.5s.")
+
+    # Query device via authorized "VBOX" discovery broadcast and verify on-demand 0xEE beacon
+    captured_beacons: List[Dict] = []
+    dev = wait_for_device_online(bus, target_uid=target_uid, timeout=12.0, beacons_out=captured_beacons)
     if not dev:
         return TestResult("T2", "Application", title, "FAIL", time.time() - t_start,
                           "Device did not respond after power cycle!")
 
-    print(f"  [OK] Device detected online! Mode: {dev['mode']}")
-    if dev.get("mode_byte") != can_updater.OTA_MODE_BOOTLOADER:
-        print(f"  [WARN] Expected BOOTLOADER mode, device reported: {dev['mode']}")
+    print(f"  [OK] Device detected online! Mode: {dev['mode']} (On-demand 0xEE beacons received: {len(captured_beacons)})")
+    if dev.get("mode_byte") not in (can_updater.OTA_MODE_RECOVERY, can_updater.OTA_MODE_BOOTLOADER):
+        print(f"  [WARN] Expected RECOVERY_MODE or BOOTLOADER, device reported: {dev['mode']}")
 
     # Step 4: Perform Rescue Flash
     print("\n  [3/4] Performing RESCUE FLASH with valid Application binary...")
@@ -614,15 +644,17 @@ def main():
         description="STM32 CAN OTA Fault Injection & Recovery Test Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
-               "  python tools/test_ota_suite.py --port COM5\n"
-               "  python tools/test_ota_suite.py --port COM5 --test 2\n"
-               "  python tools/test_ota_suite.py --port COM5 --non-interactive\n"
+               "  python tools/test_ota_suite.py                          (auto-detects candleLight USB)\n"
+               "  python tools/test_ota_suite.py --interface candle\n"
+               "  python tools/test_ota_suite.py --interface candle --test 2\n"
+               "  python tools/test_ota_suite.py --port COM5 --interface slcan\n"
+               "  python tools/test_ota_suite.py --non-interactive\n"
     )
 
     parser.add_argument("--port", type=str, default=None,
-                        help="Serial COM port for SLCAN/CANable (e.g. COM5 or /dev/ttyACM0)")
-    parser.add_argument("--interface", type=str, default="slcan",
-                        help="python-can interface type (default: slcan; e.g. socketcan)")
+                        help="CAN channel or serial port (e.g. 'candle:0:0', '0', 'COM5', '/dev/ttyACM0')")
+    parser.add_argument("--interface", type=str, default="auto",
+                        help="python-can interface: auto, candle (candleLight WinUSB), gs_usb (libusb), slcan (COM), socketcan (default: auto)")
     parser.add_argument("--bitrate", type=int, default=DEFAULT_BITRATE,
                         help=f"CAN bus bitrate (default: {DEFAULT_BITRATE})")
     parser.add_argument("--uid", type=str, default=None,
@@ -640,12 +672,11 @@ def main():
 
     args = parser.parse_args()
 
-    channel = args.port
-    if args.interface == "socketcan" and channel is None:
-        channel = "can0"
+    resolved_iface, channel = can_updater.resolve_can_interface_and_channel(args.interface, args.port)
+    args.interface = resolved_iface
 
-    if channel is None and args.interface == "slcan":
-        print("[ERROR] Please specify serial port using --port (e.g. --port COM5 or --port /dev/ttyACM0)", file=sys.stderr)
+    if args.interface == "slcan" and not channel:
+        print("[ERROR] Please specify serial port using --port (e.g. --port COM5) or connect a candleLight USB adapter (--interface candle)", file=sys.stderr)
         sys.exit(1)
 
     # Validate binary files

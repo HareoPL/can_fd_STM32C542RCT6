@@ -36,10 +36,11 @@ void boot_shared_clear(void)
     boot_shared_update_crc();
 }
 
-void boot_shared_request_bootloader(bool session_selected)
+void boot_shared_request_bootloader(bool session_selected, uint8_t active_can_bus)
 {
     g_boot_shared.magic = BOOT_SHARED_MAGIC;
     g_boot_shared.session_selected = session_selected ? 1U : 0U;
+    g_boot_shared.active_can_bus = (uint32_t)active_can_bus;
     boot_shared_update_crc();
 }
 

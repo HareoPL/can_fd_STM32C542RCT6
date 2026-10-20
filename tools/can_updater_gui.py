@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / FDCAN2)
+V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / CAN1 & CAN2)
 Advanced GUI for STM32 Firmware Updates (MainApp & Bootloader) & Bus Diagnostics.
 
 Pure-Python implementation supporting both PyQt6 and PyQt5 with:
   - Smart COM Port Enumeration (CANable 2.0 SLCAN vs ST-Link VCP)
-  - Continuous Passive & Active Bus Monitoring (0x7E9 & Recovery Beacon 0xEE)
+  - Continuous Passive & Active Bus Monitoring (29-bit Extended 0x01F2F3E9 & On-Demand Recovery Beacon 0xEE)
   - Clickable Fleet Status KPI Tiles & Pulsing SOS Emergency Banner
   - PC Crash Address Decoding via arm-none-eabi-addr2line
   - Repository-Aware Auto-Build & Out-of-Date Build Detection
@@ -600,22 +600,28 @@ def decode_pc_address(pc_addr: int, repo_root: Optional[str] = None, on_decoded_
 
 
 
-def check_build_environment(repo_root: Optional[str]) -> Tuple[bool, str, str]:
+def detect_build_engines(repo_root: Optional[str]) -> Dict[str, Tuple[bool, str]]:
     """
-    Checks if a firmware build tool (Native Ninja + ARM GCC or Docker + vbox-builder) is available.
-    Returns:
-        can_build (bool): True if project can be built.
-        engine_name (str): 'NINJA', 'DOCKER', or 'NONE'.
-        status_desc (str): Concise description and guidance.
+    Detects availability of build engines: 'NINJA' (native) and 'DOCKER'.
+    Returns dict: {
+        'NINJA': (is_available, description),
+        'DOCKER': (is_available, description),
+    }
     """
+    results = {
+        "NINJA": (False, "Brak kompilatora arm-none-eabi-gcc lub ninja w PATH."),
+        "DOCKER": (False, "Brak narzędzia docker w PATH.")
+    }
     if not repo_root or not os.path.isdir(repo_root):
-        return False, "NONE", "Brak repozytorium projektu 5_v-box."
+        return results
 
     # 1. Native Ninja + arm-none-eabi-gcc check
     ninja_tool = shutil.which("ninja")
     gcc_tool = shutil.which("arm-none-eabi-gcc")
     if ninja_tool and gcc_tool:
-        return True, "NINJA", "Lokalny kompilator Ninja z toolchainem arm-none-eabi-gcc jest dostępny."
+        results["NINJA"] = (True, "Lokalny kompilator Ninja z toolchainem arm-none-eabi-gcc (katalog build/debug_GCC_NUCLEO-C542RC).")
+    elif ninja_tool:
+        results["NINJA"] = (False, "Wykryto ninja, lecz brak arm-none-eabi-gcc w PATH.")
 
     # 2. Docker + vbox-builder image check
     docker_tool = shutil.which("docker")
@@ -635,15 +641,32 @@ def check_build_environment(repo_root: Optional[str]) -> Tuple[bool, str, str]:
                     timeout=1.5
                 )
                 if r_img.returncode == 0:
-                    return True, "DOCKER", "Środowisko Docker Desktop i obraz vbox-builder są gotowe do kompilacji."
+                    results["DOCKER"] = (True, "Środowisko Docker Desktop i obraz vbox-builder są gotowe do kompilacji.")
                 else:
-                    return False, "DOCKER_NO_IMAGE", "Usługa Docker działa, lecz obraz 'vbox-builder' nie został zbudowany."
+                    results["DOCKER"] = (False, "Usługa Docker działa, lecz obraz 'vbox-builder' nie został zbudowany.")
             else:
-                return False, "DOCKER_NOT_RUNNING", "Wykryto narzędzie Docker, lecz aplikacja Docker Desktop nie jest uruchomiona."
+                results["DOCKER"] = (False, "Wykryto narzędzie Docker, lecz aplikacja Docker Desktop nie jest uruchomiona.")
         except Exception:
             pass
 
-    return False, "NONE", "Brak środowiska Docker Desktop oraz lokalnego kompilatora arm-none-eabi-gcc z ninja."
+    return results
+
+
+def check_build_environment(repo_root: Optional[str]) -> Tuple[bool, str, str]:
+    """
+    Checks if at least one firmware build tool is available.
+    Returns:
+        can_build (bool): True if project can be built.
+        engine_name (str): 'NINJA', 'DOCKER', or 'NONE'.
+        status_desc (str): Concise description and guidance.
+    """
+    engines = detect_build_engines(repo_root)
+    if engines["NINJA"][0]:
+        return True, "NINJA", engines["NINJA"][1]
+    if engines["DOCKER"][0]:
+        return True, "DOCKER", engines["DOCKER"][1]
+    desc = f"Ninja: {engines['NINJA'][1]} | Docker: {engines['DOCKER'][1]}"
+    return False, "NONE", desc
 
 
 # ==============================================================================
@@ -700,27 +723,28 @@ class CanBusMonitorWorker(QThread):
 
     def _prune_stale_beacons(self):
         """
-        Prunes expired beacons (no 0xEE frame seen in > 3.5s) and removes
-        beacons for any devices currently confirmed in APPLICATION mode.
+        Prunes beacons for any devices currently confirmed in APPLICATION or normal BOOTLOADER mode,
+        and expires stale beacons when auto-scan is active.
         """
         now = time.time()
-        app_hashes = {d.get("uid_hash") for d in self._devices if d.get("mode") == "APPLICATION"}
-        app_hashes.update({d.get("uid_crc_hash") for d in self._devices if d.get("mode") == "APPLICATION"})
+        healthy_hashes = {d.get("uid_hash") for d in self._devices if d.get("mode") in ("APPLICATION", "BOOTLOADER")}
+        healthy_hashes.update({d.get("uid_crc_hash") for d in self._devices if d.get("mode") in ("APPLICATION", "BOOTLOADER")})
 
         orig_len = len(self._beacons)
-        if len(self._devices) == 1 and self._devices[0].get("mode") == "APPLICATION":
+        if len(self._devices) == 1 and self._devices[0].get("mode") in ("APPLICATION", "BOOTLOADER"):
             self._beacons = []
         else:
+            max_age = 7.5 if self.auto_scan_enabled else 3600.0
             self._beacons = [
                 b for b in self._beacons
-                if (now - b.get("timestamp", 0.0)) < 3.5 and b.get("uid_hash") not in app_hashes
+                if (now - b.get("timestamp", 0.0)) < max_age and b.get("uid_hash") not in healthy_hashes
             ]
 
         if len(self._beacons) != orig_len:
             self.sig_devices_updated.emit(self._devices, self._beacons)
 
     def request_scan(self):
-        """Triggers an active 0x7DF discovery scan on next loop cycle."""
+        """Triggers an active 0x01F2F3DF discovery scan on next loop cycle."""
         self._scan_requested = True
 
     def pause_for_flashing(self):
@@ -744,15 +768,12 @@ class CanBusMonitorWorker(QThread):
         # Open CAN bus connection
         self.sig_log.emit("INFO", f"Otwieranie interfejsu '{self.interface}' na kanale '{self.channel}' @ {self.bitrate} bps...")
         try:
-            if self.interface == "slcan":
-                self.bus = can.interface.Bus(interface='slcan', channel=self.channel, bitrate=self.bitrate)
-            else:
-                self.bus = can.interface.Bus(interface=self.interface, channel=self.channel, bitrate=self.bitrate)
-            self.sig_bus_status.emit(True, f"Połączono: {self.channel} @ {self.bitrate} bps")
-            self.sig_log.emit("OK", f"Pomyślnie otwarto magistralę CAN ({self.channel} @ {self.bitrate} bps)")
+            self.bus = can_updater.open_can_bus(interface=self.interface, channel=self.channel, bitrate=self.bitrate)
+            self.sig_bus_status.emit(True, f"Połączono ({self.interface}): {self.channel} @ {self.bitrate} bps")
+            self.sig_log.emit("OK", f"Pomyślnie otwarto magistralę CAN ({self.interface}: {self.channel} @ {self.bitrate} bps)")
         except Exception as e:
             self.sig_bus_status.emit(False, f"Błąd połączenia: {e}")
-            self.sig_log.emit("ERROR", f"Nie udało się otworzyć portu CAN: {e}")
+            self.sig_log.emit("ERROR", f"Nie udało się otworzyć interfejsu CAN ({self.interface} na {self.channel}): {e}")
             return
 
         # Perform initial scan immediately on connect
@@ -778,7 +799,7 @@ class CanBusMonitorWorker(QThread):
                 try:
                     new_beacons: List[Dict] = []
                     log_fn = self._emit_log if is_manual else None
-                    found_devs = can_updater.scan_nodes(self.bus, timeout=0.35, verbose=False,
+                    found_devs = can_updater.scan_nodes(self.bus, timeout=0.5, verbose=False,
                                                          log_cb=log_fn, beacons_out=new_beacons)
                     self._devices = found_devs
                     for b in new_beacons:
@@ -789,13 +810,13 @@ class CanBusMonitorWorker(QThread):
                     if is_manual:
                         self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
 
-            # Passive reception of 0x7E9 frames
+            # Passive reception of 0x01F2F3E9 frames
             try:
                 rx_msg = self.bus.recv(timeout=0.04)
             except Exception:
                 rx_msg = None
 
-            if rx_msg and rx_msg.arbitration_id == can_updater.CAN_ID_OTA_DISCOVERY_RESP and len(rx_msg.data) >= 8:
+            if rx_msg and rx_msg.is_extended_id and rx_msg.arbitration_id == can_updater.CAN_ID_OTA_DISCOVERY_RESP and len(rx_msg.data) >= 8:
                 sub_idx = rx_msg.data[0]
                 if sub_idx == 0xEE:
                     reason_code = rx_msg.data[1]
@@ -870,10 +891,10 @@ class CanBusMonitorWorker(QThread):
             matched_dev = self._devices[0]
         if not matched_dev and uid_hash not in self._seen_beacon_hashes:
             self._seen_beacon_hashes.add(uid_hash)
-            # Broadcast discover to get full UID
+            # Broadcast discover with "VBOX" magic token to get full UID
             try:
-                disc_frame = [0x02, can_updater.CMD_DISCOVER_NODES, 0, 0, 0, 0, 0, 0]
-                msg = can.Message(arbitration_id=can_updater.CAN_ID_OTA_BROADCAST, is_extended_id=False, data=disc_frame)
+                disc_frame = [0x06, can_updater.CMD_DISCOVER_NODES] + can_updater.OTA_MAGIC_TOKEN + [0x00, 0x00]
+                msg = can.Message(arbitration_id=can_updater.CAN_ID_OTA_BROADCAST, is_extended_id=True, data=disc_frame)
                 self.bus.send(msg)
             except Exception:
                 pass
@@ -982,28 +1003,45 @@ class BuildProjectWorker(QThread):
     sig_build_log = pyqtSignal(str)
     sig_build_finished = pyqtSignal(bool, str)
 
-    def __init__(self, repo_root: str):
+    def __init__(self, repo_root: str, engine: str = "NINJA"):
         super().__init__()
         self.repo_root = repo_root
+        self.engine = engine
 
     def run(self):
         self.sig_build_log.emit("=" * 60)
-        self.sig_build_log.emit("[BUILD] Rozpoczynanie kompilacji projektu...")
+        self.sig_build_log.emit(f"[BUILD] Rozpoczynanie kompilacji projektu ({self.engine})...")
 
         docker_bat = os.path.join(self.repo_root, ".devcontainer", "docker_build.bat")
-        ninja_exe = shutil.which("ninja")
         is_docker_env = os.path.isfile("/.dockerenv")
 
+        win_build_dir = os.path.join(self.repo_root, "build", "debug_GCC_NUCLEO-C542RC")
+        docker_build_dir = os.path.join(self.repo_root, "build", "docker")
+
         cmd = []
-        if is_docker_env or (ninja_exe and os.path.isdir(os.path.join(self.repo_root, "build", "docker"))):
-            cmd = ["ninja", "-C", "build/docker"]
-        elif os.name == "nt" and os.path.isfile(docker_bat):
-            cmd = ["cmd.exe", "/c", docker_bat]
-        elif ninja_exe:
-            cmd = ["ninja", "-C", "build/debug_GCC_NUCLEO-C542RC"]
+        if is_docker_env:
+            # Running inside Linux Docker container
+            target = "build/docker" if os.path.isdir(docker_build_dir) else "build"
+            cmd = ["ninja", "-C", target]
+        elif self.engine == "DOCKER":
+            if os.name == "nt" and os.path.isfile(docker_bat):
+                cmd = ["cmd.exe", "/c", docker_bat]
+            else:
+                cmd = [
+                    "docker", "run", "--rm",
+                    "-v", f"{self.repo_root}:/workspaces/5_v-box",
+                    "-w", "/workspaces/5_v-box",
+                    "vbox-builder", "sh", "-c",
+                    "cmake -B build/docker -G Ninja -DCMAKE_BUILD_TYPE=debug_GCC_NUCLEO-C542RC -DTOOLCHAIN_FILE=GCC.14.3.1.cmake && ninja -C build/docker && mkdir -p build/debug_GCC_NUCLEO-C542RC && cp -f build/docker/v_box* build/debug_GCC_NUCLEO-C542RC/"
+                ]
         else:
-            self.sig_build_finished.emit(False, "Nie znaleziono docker_build.bat ani kompilatora ninja w systemie.")
-            return
+            # Native Windows Ninja build (always targets Windows build dir)
+            if os.path.isdir(win_build_dir):
+                cmd = ["ninja", "-C", "build/debug_GCC_NUCLEO-C542RC"]
+            elif os.name == "nt" and os.path.isfile(docker_bat):
+                cmd = ["cmd.exe", "/c", docker_bat]
+            else:
+                cmd = ["ninja", "-C", "build/debug_GCC_NUCLEO-C542RC"]
 
         self.sig_build_log.emit(f"[BUILD] Uruchamianie: {' '.join(cmd)}")
 
@@ -1327,10 +1365,12 @@ class CanUpdaterMainWindow(QMainWindow):
     """
     sig_pc_decoded = pyqtSignal(int, str)
 
-    def __init__(self, init_port: Optional[str] = None, init_bitrate: int = 500000):
+    def __init__(self, init_port: Optional[str] = None, init_bitrate: int = 500000, init_iface: Optional[str] = None):
         super().__init__()
         self.init_port = init_port
         self.init_bitrate = init_bitrate
+        self.init_iface = init_iface
+        self._initial_port_scan_done = False
 
         self.repo_root = get_vbox_repo_root()
         self.monitor_worker: Optional[CanBusMonitorWorker] = None
@@ -1348,7 +1388,7 @@ class CanUpdaterMainWindow(QMainWindow):
 
         self.sig_pc_decoded.connect(self._on_pc_async_decoded)
 
-        self.setWindowTitle("V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / FDCAN2)")
+        self.setWindowTitle("V-BOX CAN OTA UPDATER & DIAGNOSTIC STUDIO (STM32C542 / CAN1 & CAN2)")
         self.resize(1200, 860)
         self.setMinimumSize(1180, 840)
         self.setStyleSheet(DARK_ENGINEERING_THEME)
@@ -1399,7 +1439,7 @@ class CanUpdaterMainWindow(QMainWindow):
         main_vbox.addWidget(terminal_panel, 1)
 
     def _create_connection_panel(self) -> QGroupBox:
-        grp = QGroupBox("POŁĄCZENIE MAGISTRALI CAN (CANable 2.0 / SLCAN)")
+        grp = QGroupBox("POŁĄCZENIE MAGISTRALI CAN (candleLight WinUSB / CANable SLCAN)")
         layout = QHBoxLayout(grp)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(6)
@@ -1407,18 +1447,30 @@ class CanUpdaterMainWindow(QMainWindow):
         # Interface
         layout.addWidget(QLabel("Interfejs:"))
         self.combo_iface = QComboBox()
-        self.combo_iface.addItems(["slcan", "socketcan"])
-        self.combo_iface.setFixedWidth(85)
+        self.combo_iface.addItem("candle (candleLight USB)", "candle")
+        self.combo_iface.addItem("slcan (CANable COM)", "slcan")
+        self.combo_iface.addItem("gs_usb (libusb)", "gs_usb")
+        self.combo_iface.addItem("socketcan (Linux)", "socketcan")
+        self.combo_iface.setMinimumWidth(175)
+        self.combo_iface.setToolTip(
+            "Wybór sterownika adaptera CAN:\n"
+            "• candle (candleLight USB): Adaptery CANable 2.0 / candleLight z firmwarem WinUSB (natywne USB)\n"
+            "• slcan (CANable COM): Adaptery szeregowe Virtual COM Port (SLCAN)\n"
+            "• gs_usb (libusb): Backend libusb-1.0 dla urządzeń gs_usb / candleLight\n"
+            "• socketcan (Linux): Interfejs sieciowy SocketCAN w systemie Linux"
+        )
+        self.combo_iface.currentIndexChanged.connect(self._on_interface_changed)
         layout.addWidget(self.combo_iface)
 
-        # COM Port
-        layout.addWidget(QLabel("Port COM:"))
+        # Channel / COM Port
+        self.lbl_port_caption = QLabel("Urządzenie USB:")
+        layout.addWidget(self.lbl_port_caption)
         self.combo_port = QComboBox()
-        self.combo_port.setMinimumWidth(180)
+        self.combo_port.setMinimumWidth(220)
         layout.addWidget(self.combo_port, 1)
 
         self.btn_refresh_ports = QPushButton("🔄")
-        self.btn_refresh_ports.setToolTip("Odśwież listę portów szeregowych")
+        self.btn_refresh_ports.setToolTip("Odśwież listę adapterów USB candleLight oraz portów szeregowych COM")
         self.btn_refresh_ports.setFixedSize(28, 26)
         self.btn_refresh_ports.clicked.connect(self._refresh_com_ports)
         layout.addWidget(self.btn_refresh_ports)
@@ -1487,7 +1539,7 @@ class CanUpdaterMainWindow(QMainWindow):
         header_bar.addWidget(lbl_hint, 1)
 
         # Prominent scan button
-        self.btn_scan_table = QPushButton("🔍 Skanuj (0x7DF)")
+        self.btn_scan_table = QPushButton("🔍 Skanuj (0x01F2F3DF)")
         self.btn_scan_table.setObjectName("btn_scan_table")
         self.btn_scan_table.setStyleSheet("""
             QPushButton#btn_scan_table {
@@ -1654,7 +1706,12 @@ class CanUpdaterMainWindow(QMainWindow):
             self.chk_use_repo_artifact.toggled.connect(self._on_use_repo_artifact_toggled)
             row_repo.addWidget(self.chk_use_repo_artifact, 1)
 
-            self.btn_build_project = QPushButton("🔨 Zbuduj Projekt")
+            self.combo_build_engine = QComboBox()
+            self.combo_build_engine.setFixedHeight(26)
+            self.combo_build_engine.setToolTip("Wybór środowiska kompilacji: Windows (Ninja) lub Docker (vbox-builder)")
+            row_repo.addWidget(self.combo_build_engine)
+
+            self.btn_build_project = QPushButton("🔨 Zbuduj")
             self.btn_build_project.setFixedHeight(26)
             self.btn_build_project.clicked.connect(self._build_project_now)
             row_repo.addWidget(self.btn_build_project)
@@ -1841,35 +1898,105 @@ class CanUpdaterMainWindow(QMainWindow):
         return self.tabs_terminal
 
     # --------------------------------------------------------------------------
-    # COM Port Handling
+    # CAN Interface & COM Port Handling
     # --------------------------------------------------------------------------
-    def _refresh_com_ports(self):
-        ports = find_serial_ports()
+    def _get_selected_interface(self) -> str:
+        data = self.combo_iface.currentData()
+        if data:
+            return str(data)
+        return self.combo_iface.currentText().split()[0].strip().lower()
+
+    def _on_interface_changed(self, _index: int = 0):
+        self._populate_can_channels()
+
+    def _populate_can_channels(self, ports: Optional[List[Dict]] = None, candle_devs: Optional[List[Tuple[str, str]]] = None):
+        iface = self._get_selected_interface()
         self.combo_port.clear()
-        self.combo_uart_port.clear()
 
-        canable_idx = -1
-        stlink_idx = -1
+        if iface in ("candle", "gs_usb"):
+            if hasattr(self, "lbl_port_caption"):
+                self.lbl_port_caption.setText("Urządzenie USB:")
+            if candle_devs is None:
+                candle_devs = can_updater.list_candle_devices()
+            if candle_devs:
+                for ch_id, label in candle_devs:
+                    self.combo_port.addItem(label, ch_id)
+                self.combo_port.setCurrentIndex(0)
+            else:
+                self.combo_port.addItem("candle:0:0 — Domyślny kanał USB 0 (1D50:606F)", "candle:0:0")
+                self.combo_port.setCurrentIndex(0)
 
-        for idx, p in enumerate(ports):
-            self.combo_port.addItem(p["label"], p["device"])
-            self.combo_uart_port.addItem(p["label"], p["device"])
-
-            if p["is_canable"] and canable_idx == -1:
-                canable_idx = idx
-            if p["is_stlink"] and stlink_idx == -1:
-                stlink_idx = idx
-
-        # Auto-select best ports
-        if canable_idx != -1:
-            self.combo_port.setCurrentIndex(canable_idx)
-        elif self.combo_port.count() > 0:
+        elif iface == "socketcan":
+            if hasattr(self, "lbl_port_caption"):
+                self.lbl_port_caption.setText("Interfejs:")
+            self.combo_port.addItem("can0 — SocketCAN (can0)", "can0")
+            self.combo_port.addItem("vcan0 — Virtual CAN (vcan0)", "vcan0")
             self.combo_port.setCurrentIndex(0)
 
+        else:
+            # Default: slcan (Serial COM ports)
+            if hasattr(self, "lbl_port_caption"):
+                self.lbl_port_caption.setText("Port COM:")
+            if ports is None:
+                ports = find_serial_ports()
+            canable_idx = -1
+            for idx, p in enumerate(ports):
+                self.combo_port.addItem(p["label"], p["device"])
+                if p["is_canable"] and canable_idx == -1:
+                    canable_idx = idx
+            if canable_idx != -1:
+                self.combo_port.setCurrentIndex(canable_idx)
+            elif self.combo_port.count() > 0:
+                self.combo_port.setCurrentIndex(0)
+
+        # Apply explicit init_port if matches an item
+        if self.init_port:
+            for i in range(self.combo_port.count()):
+                if self.combo_port.itemData(i) == self.init_port:
+                    self.combo_port.setCurrentIndex(i)
+                    break
+
+    def _refresh_com_ports(self):
+        ports = find_serial_ports()
+        candle_devs = can_updater.list_candle_devices()
+
+        # Populate ST-Link UART2 combo
+        self.combo_uart_port.clear()
+        stlink_idx = -1
+        for idx, p in enumerate(ports):
+            self.combo_uart_port.addItem(p["label"], p["device"])
+            if p["is_stlink"] and stlink_idx == -1:
+                stlink_idx = idx
         if stlink_idx != -1:
             self.combo_uart_port.setCurrentIndex(stlink_idx)
         elif self.combo_uart_port.count() > 0:
             self.combo_uart_port.setCurrentIndex(0)
+
+        # Smart interface auto-selection on initial startup
+        if not self._initial_port_scan_done:
+            self._initial_port_scan_done = True
+            desired_iface = None
+            if self.init_iface:
+                desired_iface = self.init_iface.strip().lower()
+                if desired_iface == "candlelight":
+                    desired_iface = "candle"
+            elif self.init_port:
+                desired_iface, _ = can_updater.resolve_can_interface_and_channel("auto", self.init_port)
+            elif candle_devs:
+                desired_iface = "candle"
+            elif any(p["is_canable"] for p in ports):
+                desired_iface = "slcan"
+            else:
+                desired_iface = "candle"
+
+            self.combo_iface.blockSignals(True)
+            for i in range(self.combo_iface.count()):
+                if self.combo_iface.itemData(i) == desired_iface:
+                    self.combo_iface.setCurrentIndex(i)
+                    break
+            self.combo_iface.blockSignals(False)
+
+        self._populate_can_channels(ports=ports, candle_devs=candle_devs)
 
         # Auto-update default file path if in repo
         if self.repo_root and hasattr(self, 'chk_use_repo_artifact') and self.chk_use_repo_artifact.isChecked():
@@ -1890,12 +2017,15 @@ class CanUpdaterMainWindow(QMainWindow):
             self._connect_can_bus()
 
     def _connect_can_bus(self):
+        iface = self._get_selected_interface()
         if self.combo_port.count() == 0:
-            QMessageBox.warning(self, "Brak portów", "Nie wykryto żadnego portu szeregowego na komputerze!")
-            return
+            if iface == "slcan":
+                QMessageBox.warning(self, "Brak portów COM", "Nie wykryto żadnego portu szeregowego na komputerze!")
+                return
+            channel = "candle:0:0" if iface in ("candle", "gs_usb") else "can0"
+        else:
+            channel = self.combo_port.currentData() or self.combo_port.currentText().split()[0]
 
-        channel = self.combo_port.currentData() or self.combo_port.currentText().split()[0]
-        iface = self.combo_iface.currentText()
         bitrate_str = self.combo_bitrate.currentText().split()[0]
         bitrate = int(bitrate_str)
 
@@ -2333,47 +2463,76 @@ class CanUpdaterMainWindow(QMainWindow):
         self._update_quick_action_buttons_state()
 
     def _update_build_system_state(self):
-        """Validates build capabilities (Docker / Ninja) and sets button state and tooltip."""
+        """Validates build capabilities (Docker / Ninja) and sets button state and combo options."""
         if not hasattr(self, 'btn_build_project') or not self.repo_root:
             return
 
-        can_build, engine_type, desc = check_build_environment(self.repo_root)
-        if can_build:
-            self.btn_build_project.setEnabled(True)
-            if engine_type == "DOCKER":
-                self.btn_build_project.setText("🔨 Zbuduj Projekt (Docker)")
-                self.btn_build_project.setToolTip(f"Kompiluj w kontenerze Docker (vbox-builder):\n{desc}")
+        engines = detect_build_engines(self.repo_root)
+        available = []
+        if engines["NINJA"][0]:
+            available.append(("NINJA", "🔨 Windows (Ninja)", engines["NINJA"][1]))
+        if engines["DOCKER"][0]:
+            available.append(("DOCKER", "🐳 Docker (vbox-builder)", engines["DOCKER"][1]))
+
+        current_selected = self.combo_build_engine.currentData() if hasattr(self, 'combo_build_engine') else None
+
+        if hasattr(self, 'combo_build_engine'):
+            self.combo_build_engine.blockSignals(True)
+            self.combo_build_engine.clear()
+            if available:
+                for eid, label, tip in available:
+                    self.combo_build_engine.addItem(label, eid)
+                    tip_role = Qt.ToolTipRole if QT_VERSION == 5 else Qt.ItemDataRole.ToolTipRole
+                    self.combo_build_engine.setItemData(self.combo_build_engine.count() - 1, tip, tip_role)
+                idx = 0
+                for i in range(self.combo_build_engine.count()):
+                    if self.combo_build_engine.itemData(i) == current_selected:
+                        idx = i
+                        break
+                self.combo_build_engine.setCurrentIndex(idx)
+                self.combo_build_engine.setEnabled(True)
             else:
-                self.btn_build_project.setText("🔨 Zbuduj Projekt (Ninja)")
-                self.btn_build_project.setToolTip(f"Kompiluj lokalnym kompilatorem Ninja (arm-none-eabi-gcc):\n{desc}")
+                self.combo_build_engine.addItem("Brak kompilatora", "NONE")
+                self.combo_build_engine.setEnabled(False)
+            self.combo_build_engine.blockSignals(False)
+
+        if available:
+            self.btn_build_project.setEnabled(True)
+            self.btn_build_project.setText("🔨 Zbuduj")
+            self.btn_build_project.setToolTip("Rozpocznij kompilację projektu wybraną metodą.")
         else:
             self.btn_build_project.setEnabled(False)
-            self.btn_build_project.setText("🔨 Zbuduj Projekt (Niedostępny)")
+            self.btn_build_project.setText("🔨 Zbuduj (Niedostępny)")
             self.btn_build_project.setToolTip(
-                f"Kompilacja niedostępna: {desc}\n\n"
+                "Kompilacja niedostępna.\n\n"
                 "Kliknij przycisk [ℹ️] obok, aby wyświetlić instrukcję jak odblokować kompilację.\n"
                 "Pamiętaj: jeśli posiadasz gotowy plik .bin, możesz go wgrać przyciskiem '📂 Przeglądaj...' bez kompilowania!"
             )
 
     def _show_build_instructions(self):
-        can_build, engine_type, desc = check_build_environment(self.repo_root)
-        status_line = f"Aktualny stan systemu: {desc}"
+        engines = detect_build_engines(self.repo_root)
+        ninja_ok, ninja_desc = engines["NINJA"]
+        docker_ok, docker_desc = engines["DOCKER"]
+
+        ninja_badge = "<font color='#10B981'>Dostępny</font>" if ninja_ok else "<font color='#EF4444'>Niedostępny</font>"
+        docker_badge = "<font color='#10B981'>Dostępny</font>" if docker_ok else "<font color='#EF4444'>Niedostępny</font>"
 
         msg = (
-            f"<b>{status_line}</b><br><br>"
+            f"<b>Aktualny stan środowisk kompilacji:</b><br>"
+            f"• <b>Windows Ninja:</b> {ninja_badge} ({ninja_desc})<br>"
+            f"• <b>Docker:</b> {docker_badge} ({docker_desc})<br><br>"
             "Aby kompilować projekt mikrokontrolera STM32C542 bezpośrednio z aplikacji, "
-            "wymagane jest jedno z poniższych środowisk:<br><br>"
-            "<b>1. Środowisko Docker (Zalecane na Windows):</b><br>"
-            "&nbsp;&nbsp;• Zainstaluj i uruchom aplikację <b>Docker Desktop</b>.<br>"
-            "&nbsp;&nbsp;• Upewnij się, że silnik Docker działa (zielona ikona w zasobniku).<br>"
-            "&nbsp;&nbsp;• Zbuduj obraz kontenera, uruchamiając w terminalu skrypt:<br>"
-            "&nbsp;&nbsp;&nbsp;&nbsp;<code>.devcontainer\\docker_build.bat</code><br>"
-            "&nbsp;&nbsp;&nbsp;&nbsp;lub polecenie: <code>docker build -t vbox-builder .devcontainer</code><br><br>"
-            "<b>2. Środowisko Natywne (Bez Dockera):</b><br>"
+            "dostępne są dwie metody:<br><br>"
+            "<b>1. Środowisko Natywne Windows (Najszybsze):</b><br>"
             "&nbsp;&nbsp;• Zainstaluj <b>Arm GNU Toolchain</b> (<code>arm-none-eabi-gcc</code>) oraz <b>Ninja</b>.<br>"
-            "&nbsp;&nbsp;• Dodaj ścieżki do plików wykonywalnych do zmiennej środowiskowej <code>PATH</code>.<br><br>"
+            "&nbsp;&nbsp;• Dodaj ich foldery <code>bin</code> do zmiennej środowiskowej <code>PATH</code>.<br>"
+            "&nbsp;&nbsp;• Kompilacja działa bezpośrednio w katalogu <code>build/debug_GCC_NUCLEO-C542RC/</code>.<br><br>"
+            "<b>2. Środowisko Docker (Konteneryzowane):</b><br>"
+            "&nbsp;&nbsp;• Zainstaluj i uruchom aplikację <b>Docker Desktop</b>.<br>"
+            "&nbsp;&nbsp;• Zbuduj obraz kontenera poleceniem: <code>docker build -t vbox-builder .devcontainer</code><br>"
+            "&nbsp;&nbsp;• GUI uruchamia skrypt <code>.devcontainer\\docker_build.bat</code> i automatycznie kopiuje wynik.<br><br>"
             "<b>Wskazówka:</b> Kompilacja nie jest wymagana do wgrania oprogramowania po CAN! "
-            "Jeśli posiadasz gotowy plik <code>.bin</code> z zewnętrznego IDE (np. STM32CubeIDE), "
+            "Jeśli posiadasz gotowy plik <code>.bin</code> z zewnętrznego IDE, "
             "po prostu wskaż go przyciskiem <b>'📂 Przeglądaj...'</b>. Wgrywanie działa w 100% natywnie bez Dockera."
         )
 
@@ -2391,14 +2550,17 @@ class CanUpdaterMainWindow(QMainWindow):
             QMessageBox.information(self, "Budowanie w toku", "Kompilacja jest już uruchomiona w tle!")
             return
 
-        can_build, engine_type, desc = check_build_environment(self.repo_root)
-        if not can_build:
+        selected_engine = "NINJA"
+        if hasattr(self, 'combo_build_engine') and self.combo_build_engine.count() > 0:
+            selected_engine = self.combo_build_engine.currentData() or "NINJA"
+
+        if selected_engine == "NONE":
             self._show_build_instructions()
             return
 
         self.tabs_terminal.setCurrentIndex(0)
         self.btn_build_project.setEnabled(False)
-        self.build_worker = BuildProjectWorker(self.repo_root)
+        self.build_worker = BuildProjectWorker(self.repo_root, engine=selected_engine)
         self.build_worker.sig_build_log.connect(lambda l: self._append_can_log("INFO", l))
         self.build_worker.sig_build_finished.connect(self._on_build_finished)
         self.build_worker.start()
@@ -2745,7 +2907,8 @@ class CanUpdaterMainWindow(QMainWindow):
 
 def main():
     parser = argparse.ArgumentParser(description="V-BOX CAN OTA Updater & Diagnostic Studio GUI")
-    parser.add_argument("--port", type=str, default=None, help="Initial COM port for CANable SLCAN (e.g. COM17)")
+    parser.add_argument("--port", type=str, default=None, help="Initial channel/port (e.g. candle:0:0 or COM17)")
+    parser.add_argument("--interface", type=str, default=None, help="Initial CAN interface: candle, slcan, gs_usb, socketcan")
     parser.add_argument("--bitrate", type=int, default=500000, help="CAN bus bitrate (default: 500000)")
     parser.add_argument("--file", type=str, default=None, help="Initial firmware .bin file to inspect/flash")
     args = parser.parse_args()
@@ -2753,7 +2916,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("V-Box CAN OTA Updater")
 
-    window = CanUpdaterMainWindow(init_port=args.port, init_bitrate=args.bitrate)
+    window = CanUpdaterMainWindow(init_port=args.port, init_bitrate=args.bitrate, init_iface=args.interface)
     if args.file and os.path.isfile(args.file):
         window.txt_file_path.setText(os.path.abspath(args.file))
 

@@ -6,10 +6,11 @@ Automotive controller firmware developed for the **STM32C542RCT6** microcontroll
 
 ## Key Architectural Features
 - **Strict Layered Architecture:** Complete separation of business application logic (`app/`), hardware abstraction port contracts in pure C (`app/port/`), hardware adapters (`app/port/stm32c5/`), and FreeRTOS middleware.
-- **Dual-Target CAN Bootloader & OTA Subsystem (FDCAN2):**
-  - **Bare-Metal CAN Bootloader (`v_box_boot` @ `0x08000000`, 32 KB):** Instant Fast-Boot (< 2 ms), ISO 15765-2 (ISO-TP) transport over FDCAN2 (`PB5` RX / `PB6` TX @ 500 kbps), OpenBootloader command engine, and **Deferred Vector Table Commit** protecting against power-loss bricking.
-  - **Anti-Brick & Crash-Loop Recovery (`SHARED_RAM` @ `0x2000FFC0`):** Hardware fault handlers (`HardFault`, `BusFault`, `MemManage`, `UsageFault`, `configASSERT`) log crash `PC`/`CFSR` to CRC32-protected non-volatile RAM. After 3 failed boots (or blank Flash), the MCU enters `BOOT_MODE_RECOVERY` and broadcasts a `0xEE` rescue beacon on CAN ID `0x7E9`.
-  - **Zero-Touch OTA & Bootloader Self-Update (`v_box` @ `0x08008000`, 192 KB):** Background 96-bit factory UID discovery (`0x7DF` $\rightarrow$ `0x7E9` with anti-collision slotting), automatic transition from Application to Bootloader, and safe remote Bootloader upgrades via an isolated 32 KB **Flash Staging Slot (`0x08038000`)**.
+- **Dual-Target & Dual-Bus CAN Bootloader & OTA Subsystem (FDCAN1 & FDCAN2):**
+  - **Bare-Metal CAN Bootloader (`v_box_boot` @ `0x08000000`, 32 KB):** Instant Fast-Boot (< 2 ms), ISO 15765-2 (ISO-TP) transport over both **FDCAN1** (`PB8` RX / `PB9` TX) and **FDCAN2** (`PB5` RX / `PB6` TX) @ 500 kbps, OpenBootloader command engine, and **Deferred Vector Table Commit** protecting against power-loss bricking.
+  - **Automotive-Safe & Collision-Free Protocol:** Uses 29-bit Extended CAN IDs in the dedicated V-Box namespace (`0x01F2F3DF`, `0x01F2F3E0`, `0x01F2F3E8`, `0x01F2F3E9`) with a 4-byte `"VBOX"` magic authorization token, preventing any collision with standard 11-bit OBD-II (`0x7DF`/`0x7E0`/`0x7E8`) or vehicle ECU traffic when connected to a vehicle CAN bus on `CAN1`.
+  - **Silent Anti-Brick & Crash-Loop Recovery (`SHARED_RAM` @ `0x2000FFC0`):** Hardware fault handlers (`HardFault`, `BusFault`, `MemManage`, `UsageFault`, `configASSERT`) log crash `PC`/`CFSR` to CRC32-protected non-volatile RAM. After 3 failed boots (or blank Flash), the MCU enters **Silent Recovery Mode** (`BOOT_MODE_RECOVERY` — zero unsolicited bus traffic) and responds on-demand with a `0xEE` diagnostic rescue beacon on `0x01F2F3E9` when queried by the updater.
+  - **Zero-Touch OTA & Bootloader Self-Update (`v_box` @ `0x08008000`, 192 KB):** Background 96-bit factory UID discovery (`0x01F2F3DF` $\rightarrow$ `0x01F2F3E9` with anti-collision slotting) attached to both `CAN1` (`can_parser_attach_boot_ota`) and `CAN2`, automatic transition from Application to Bootloader preserving the active CAN bus index, and safe remote Bootloader upgrades via an isolated 32 KB **Flash Staging Slot (`0x08038000`)**.
 - **Event-Driven CAN Bus (FDCAN1 & FDCAN2):** Classic CAN 2.0B running at 500 kbps nominal (87.5% sample point) with hardware M_CAN Message RAM filtering, zero-polling RX via binary semaphore, thread-safe TX queue, and modular parser profiles (`app/can_bus/can_parser/parsers/`).
 - **Fault-Tolerant Bistable Relay Engine:** Edge-controlled latching relay with pre-charge pulse generation, closed-loop feedback verification (PB12), retry mechanism, power-cut recovery, and boot synchronization without audible clicking.
 - **Non-Blocking Asynchronous Workers:** Decoupled relay (`relay_worker_task`) and OTA (`ota_worker_task`) execution via dedicated FreeRTOS queues to guarantee sub-microsecond CAN RX callbacks and prevent hardware FIFO overflow.
@@ -102,26 +103,26 @@ Launch the modern PyQt6/PyQt5 GUI studio via VS Code task **`[GUI] Launch CAN OT
 ```bash
 python tools/can_updater_gui.py
 ```
-* **Features:** Smart USB port classification (CANable 2.0 vs ST-Link VCP), real-time passive `0x7E9` / `0xEE` SOS alarm beacon monitor with 3.5s TTL expiry, interactive fleet KPI cards, asynchronous PC crash decoding (`addr2line`), Pre-Flight Cortex-M33 vector table inspector, repo-aware stale-build detector & one-click Docker/Ninja compiler, visual 5-stage / 6-stage progress pipeline, and dual terminal console (CAN log + UART2 serial monitor).
+* **Features:** Smart USB port classification (CANable 2.0 vs ST-Link VCP), real-time 29-bit Extended `0x01F2F3E9` / `0xEE` on-demand SOS alarm beacon monitor, interactive fleet KPI cards, asynchronous PC crash decoding (`addr2line`), Pre-Flight Cortex-M33 vector table inspector, repo-aware stale-build detector & one-click Docker/Ninja compiler, visual 5-stage / 6-stage progress pipeline, and dual terminal console (CAN log + UART2 serial monitor).
 * 👉 **Full User Manual:** [docs/bootloader/can_updater_gui_manual.md](docs/bootloader/can_updater_gui_manual.md)
 
 #### C. Command-Line Tools (`tools/can_updater.py` & `tools/test_ota_suite.py`):
-Connect a 3.3V CAN transceiver to **FDCAN2** (`PB5` = RX on CN10 pin 6 / D4, `PB6` = TX on CN10 pin 3 / D10) and attach a **CANable 2.0** adapter (500 kbps SLCAN):
+Connect a **CANable 2.0** adapter (**candleLight WinUSB** or **SLCAN** @ 500 kbps) to either **FDCAN1** (`PB8` RX / `PB9` TX — onboard transceiver) or **FDCAN2** (`PB5` RX / `PB6` TX):
 ```bash
-# 1. Install Python dependencies
+# 1. Install Python dependencies (includes candle-api, python-can-candle, gs_usb, pyserial, PyQt6)
 pip install -r tools/requirements_ota.txt
 
-# 2. Scan CAN bus for STM32 nodes (96-bit UID, active mode, FW version)
-python tools/can_updater.py --interface slcan --channel COM17 --scan
+# 2. Scan CAN bus for STM32 nodes (auto-detects candleLight USB, or pass --interface slcan --port COM17)
+python tools/can_updater.py --scan
 
 # 3. Flash Main Application over CAN (auto-switches App -> Bootloader -> App)
-python tools/can_updater.py --interface slcan --channel COM17 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
+python tools/can_updater.py --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
 
 # 4. Safely update the Bootloader itself via Flash Staging Slot (0x08038000 -> 0x08000000)
-python tools/can_updater.py --interface slcan --channel COM17 --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin
+python tools/can_updater.py --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin
 
 # 5. Run the automated 6-stage Fault-Injection & Recovery test suite
-python tools/test_ota_suite.py --port COM17
+python tools/test_ota_suite.py
 ```
 
 ### 4. VS Code Tasks Overview

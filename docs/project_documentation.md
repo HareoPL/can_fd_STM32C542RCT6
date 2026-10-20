@@ -229,9 +229,10 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
   ```c
   .num_filters = (uint8_t)(sizeof(s_filters) / sizeof(s_filters[0]))
   ```
-* **Runtime Dynamic Switching:** Profiles can be activated or swapped on the fly without stopping tasks:
+* **Runtime Dynamic Switching & Composite Boot/OTA Attachment:** Profiles can be activated or swapped on the fly without stopping tasks, and `CAN_PARSER_ID_BOOT_OTA` can be attached alongside the primary profile on `CAN1`:
   ```c
   can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX);
+  can_parser_attach_boot_ota(&can1_inst);
   ```
 
 ### 5.3. Active CAN Messages in V-BOX Profile (`cp_v_box`)
@@ -418,22 +419,22 @@ During early boot (before FreeRTOS scheduler initialization), `main()` invokes `
 
 > **Full Guide & Operating Manual:** See [docs/bootloader/can_bootloader_and_ota_guide.md](file:///c:/WORK/5_v-box/docs/bootloader/can_bootloader_and_ota_guide.md) for complete program flow diagrams, hardware wiring (`CANable 2.0` + `FDCAN2`), and CLI usage examples.
 
-The system implements a fully integrated, dual-target firmware architecture consisting of an autonomous bare-metal **CAN Bootloader** (`v_box_boot`) and a preemptive FreeRTOS **Main Application** (`v_box`), communicating over **FDCAN2** (`PB5` RX / `PB6` TX, 500 kbps Classic CAN 2.0).
+The system implements a fully integrated, dual-target and dual-bus firmware architecture consisting of an autonomous bare-metal **CAN Bootloader** (`v_box_boot`) and a preemptive FreeRTOS **Main Application** (`v_box`), communicating over either **FDCAN1** (`PB8` RX / `PB9` TX) or **FDCAN2** (`PB5` RX / `PB6` TX) at 500 kbps Classic CAN 2.0B using 29-bit Extended CAN IDs in the proprietary V-Box namespace (`0x01F2F3xx`).
 
 ### 9.1. Flash & SRAM Memory Map
 
 | Region | Physical Address Range | Size | Description |
 | :--- | :--- | :---: | :--- |
-| **Bootloader Slot** | `0x08000000` – `0x08007FFF` | 32 KB (Pages 0..15) | Bare-metal OpenBootloader core, Fast-Boot engine, Recovery rescue beacon |
+| **Bootloader Slot** | `0x08000000` – `0x08007FFF` | 32 KB (Pages 0..15) | Bare-metal OpenBootloader core, Fast-Boot engine, Silent Recovery on-demand beacon |
 | **Main Application** | `0x08008000` – `0x08037FFF` | 192 KB (Pages 16..111) | FreeRTOS application firmware, tasks, CAN managers, telemetry |
 | **Bootloader Staging Slot** | `0x08038000` – `0x0803FFFF` | 32 KB (Pages 112..127) | Safe isolated staging area for remote Bootloader updates via MainApp |
 | **SRAM (Kernel/App)** | `0x20000000` – `0x2000FFBF` | 63.9 KB | Zero-initialized data, BSS, FreeRTOS ucHeap pool, system stacks |
-| **SHARED_RAM (IPC Mailbox)** | `0x2000FFC0` – `0x2000FFFF` | 64 B (`.noinit`) | Non-volatile IPC structure (`boot_shared_ram_t`) preserved across resets |
+| **SHARED_RAM (IPC Mailbox)** | `0x2000FFC0` – `0x2000FFFF` | 64 B (`.noinit`) | Non-volatile IPC structure (`boot_shared_ram_t`, including `active_can_bus`) preserved across resets |
 
 ### 9.2. Application Firmware OTA Update Flow (App -> Bootloader -> App)
 
-1. **Target Discovery & Selection:** PC scans nodes via broadcast `CMD_DISCOVER_NODES (0xA0)` on `0x7DF`. Devices reply with unique 96-bit UID on `0x7E9`. The target node is locked with `CMD_SELECT_TARGET (0xA1)`.
-2. **Reboot to Bootloader:** PC issues `CMD_ENTER_BOOTLOADER (0xA2)`. The Main Application writes `magic = BOOT_SHARED_MAGIC` into `SHARED_RAM` and executes `NVIC_SystemReset()`.
+1. **Target Discovery & Selection:** PC scans nodes via broadcast `CMD_DISCOVER_NODES (0xA0)` + 4-byte `"VBOX"` magic token on 29-bit Extended ID `0x01F2F3DF`. Devices reply with unique 96-bit UID on `0x01F2F3E9` (and an on-demand `0xEE` diagnostic frame if in `BOOT_MODE_RECOVERY`). The target node is locked with `CMD_SELECT_TARGET (0xA1)` on `0x01F2F3E0` $\rightarrow$ `0x01F2F3E8`.
+2. **Reboot to Bootloader:** PC issues `CMD_ENTER_BOOTLOADER (0xA2)`. The Main Application writes `magic = BOOT_SHARED_MAGIC` and `active_can_bus` (`1` = CAN1, `2` = CAN2) into `SHARED_RAM` and executes `NVIC_SystemReset()`.
 3. **Flash Erase, Deferred Vector Write & Verification:** Bootloader starts in < 2 ms, validates IPC mailbox, erases Application pages (`0x08008000`), and streams binary blocks (256 B) via ISO 15765-2 transport with block-level CRC32. **Block 0 (`0x08008000`) is buffered in RAM (`s_deferred_vector_block`) and committed to Flash only inside `CMD_VERIFY_FIRMWARE (0xA3)`** after full-image CRC32 validation succeeds, preventing power-loss bricking.
 4. **Fast-Boot Jump:** On `CMD_GO_EXECUTE (0x21)`, Bootloader deinitializes peripherals and RCC clocks (`mx_rcc_deinit()`), resets VTOR to `0x08008000`, clears Cortex-M33 `MSPLIM`/`PSPLIM`, and branches to the new Application `Reset_Handler`.
 

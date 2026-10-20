@@ -29,6 +29,14 @@ import struct
 import argparse
 from typing import Optional, List, Tuple, Dict, Callable
 
+# On Windows, raise timer resolution to 1ms so time.sleep(0.001..0.002) is accurate
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
 # ==============================================================================
 # Protocol Callbacks for GUI & Automation Integration
 # ==============================================================================
@@ -47,13 +55,225 @@ except ImportError:
     print("[ERROR] python-can is not installed. Run: pip install -r tools/requirements_ota.txt", file=sys.stderr)
     sys.exit(1)
 
+try:
+    import candle_api
+    CANDLE_API_AVAILABLE = True
+except Exception:
+    candle_api = None
+    CANDLE_API_AVAILABLE = False
+
+try:
+    from candle import CandleBus
+    CANDLE_BUS_AVAILABLE = True
+except Exception:
+    CandleBus = None
+    CANDLE_BUS_AVAILABLE = False
+
+
+# ==============================================================================
+# CAN Adapter Abstraction (candleLight WinUSB / gs_usb / SLCAN / SocketCAN)
+# ==============================================================================
+SUPPORTED_CAN_INTERFACES = ("candle", "slcan", "gs_usb", "socketcan")
+
+
+def _init_gs_usb_backend() -> bool:
+    """Initializes libusb-1.0 backend via libusb_package and patches GsUsbBus.__str__ on Windows."""
+    try:
+        import libusb_package
+        import usb.backend.libusb1
+        _backend = libusb_package.get_libusb1_backend()
+        if _backend is not None:
+            usb.backend.libusb1.get_backend = lambda **kwargs: _backend
+        from can.interfaces.gs_usb import GsUsbBus
+        GsUsbBus.__str__ = lambda self: str(getattr(self, "channel_info", "gs_usb"))
+        return True
+    except Exception:
+        return False
+
+
+def list_candle_devices() -> List[Tuple[str, str]]:
+    """
+    Enumerates connected candleLight USB CAN adapters.
+    Returns a list of (channel_id, display_label) tuples, e.g.:
+      [('candle:0:0', 'candle:0:0 — Candlelight 2.5 - Multiboard (SN: 2074326D554850142)')]
+    """
+    if CANDLE_API_AVAILABLE and candle_api is not None:
+        try:
+            devices = list(candle_api.list_device())
+            result: List[Tuple[str, str]] = []
+            for dev_idx, dev in enumerate(devices):
+                sn = getattr(dev, "serial_number", "") or f"DEV{dev_idx}"
+                prod = getattr(dev, "product", "") or "candleLight"
+                ch_count = getattr(dev, "channel_count", 1) or 1
+                for ch_idx in range(ch_count):
+                    ch_id = f"candle:{dev_idx}:{ch_idx}"
+                    label = f"{ch_id} — {prod} (SN: {sn})"
+                    result.append((ch_id, label))
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # Fallback USB check via pyusb + libusb_package for gs_usb (VID=0x1D50, PID=0x606F)
+    try:
+        import usb.core
+        _init_gs_usb_backend()
+        usb_devs = list(usb.core.find(find_all=True, idVendor=0x1D50, idProduct=0x606F) or [])
+        result_usb: List[Tuple[str, str]] = []
+        for idx, udev in enumerate(usb_devs):
+            try:
+                prod = udev.product or "candleLight (gs_usb)"
+            except Exception:
+                prod = "candleLight (gs_usb)"
+            try:
+                sn = udev.serial_number or f"USB{idx}"
+            except Exception:
+                sn = f"USB{idx}"
+            ch_id = f"candle:{idx}:0"
+            result_usb.append((ch_id, f"{ch_id} — {prod} (SN: {sn})"))
+        return result_usb
+    except Exception:
+        return []
+
+
+def parse_candle_channel_index(channel: Optional[str]) -> int:
+    """Extracts integer channel index (default 0) from 'candle:0:0' or '0'."""
+    if channel is None:
+        return 0
+    s = str(channel).strip()
+    if s.startswith("candle:"):
+        parts = s.split(":")
+        if len(parts) >= 3 and parts[2].isdigit():
+            return int(parts[2])
+    elif s.isdigit():
+        return int(s)
+    return 0
+
+
+def resolve_can_interface_and_channel(interface: Optional[str], channel: Optional[str]) -> Tuple[str, str]:
+    """
+    Resolves (interface, channel) with smart auto-detection:
+      - If interface is 'auto' or None:
+          * If channel starts with 'COM' or '/dev/tty' -> ('slcan', channel)
+          * If channel starts with 'can' or 'vcan' (and not 'candle') -> ('socketcan', channel)
+          * If candleLight USB device is detected -> ('candle', 'candle:0:0')
+          * Otherwise defaults to ('candle', 'candle:0:0') if candle_api is available, else ('slcan', channel or '')
+      - Normalizes 'candlelight' alias to 'candle'.
+    """
+    iface = (interface or "auto").strip().lower()
+    if iface == "candlelight":
+        iface = "candle"
+
+    ch = (channel or "").strip()
+
+    if iface == "auto":
+        if ch:
+            ch_upper = ch.upper()
+            if ch_upper.startswith("COM") or ch.startswith("/dev/tty"):
+                return "slcan", ch
+            if ch_upper.startswith("CANDLE") or ch.isdigit():
+                return "candle", (ch if ch_upper.startswith("CANDLE:") else f"candle:0:{ch}")
+            if ch.startswith("can") or ch.startswith("vcan"):
+                return "socketcan", ch
+        candle_devs = list_candle_devices()
+        if candle_devs:
+            return "candle", candle_devs[0][0]
+        if CANDLE_BUS_AVAILABLE:
+            return "candle", "candle:0:0"
+        return "slcan", ch
+
+    if iface in ("candle", "gs_usb"):
+        if not ch:
+            candle_devs = list_candle_devices()
+            ch = candle_devs[0][0] if candle_devs else "candle:0:0"
+        elif ch.isdigit():
+            ch = f"candle:0:{ch}"
+        return iface, ch
+
+    if iface == "socketcan" and not ch:
+        return "socketcan", "can0"
+
+    return iface, ch
+
+
+def open_can_bus(interface: str,
+                 channel: Optional[str] = None,
+                 bitrate: int = 500000,
+                 listen_only: bool = False) -> can.BusABC:
+    """
+    Unified factory for opening CAN bus adapters across candleLight (WinUSB / gs_usb), SLCAN, and SocketCAN.
+    """
+    iface, resolved_ch = resolve_can_interface_and_channel(interface, channel)
+
+    if iface == "candle":
+        ch_idx = parse_candle_channel_index(resolved_ch)
+        last_err = None
+        if CANDLE_BUS_AVAILABLE:
+            try:
+                return can.Bus(
+                    interface="candle",
+                    channel=ch_idx,
+                    bitrate=int(bitrate),
+                    sample_point=80.0,
+                    fd=False,
+                    listen_only=bool(listen_only),
+                )
+            except Exception as e:
+                last_err = e
+        # Fallback to gs_usb if python-can-candle is not installed or failed
+        try:
+            _init_gs_usb_backend()
+            return can.Bus(
+                interface="gs_usb",
+                channel=ch_idx,
+                bitrate=int(bitrate),
+            )
+        except Exception as e_gs:
+            err_msg = str(last_err or e_gs)
+            raise RuntimeError(
+                f"{err_msg} (Upewnij się, że adapter candleLight nie jest zajęty przez inny program, np. Serial Commander)"
+            ) from (last_err or e_gs)
+
+    if iface == "gs_usb":
+        ch_idx = parse_candle_channel_index(resolved_ch)
+        _init_gs_usb_backend()
+        try:
+            return can.Bus(
+                interface="gs_usb",
+                channel=ch_idx,
+                bitrate=int(bitrate),
+            )
+        except Exception as e_gs:
+            raise RuntimeError(
+                f"{e_gs} (Upewnij się, że adapter candleLight nie jest zajęty przez inny program, np. Serial Commander)"
+            ) from e_gs
+
+    if iface == "slcan":
+        if not resolved_ch:
+            raise ValueError("Port COM jest wymagany dla interfejsu 'slcan' (np. --port COM5)")
+        return can.interface.Bus(
+            interface="slcan",
+            channel=resolved_ch,
+            bitrate=int(bitrate),
+            listen_only=bool(listen_only),
+        )
+
+    return can.interface.Bus(
+        interface=iface,
+        channel=resolved_ch,
+        bitrate=int(bitrate),
+    )
+
 # ==============================================================================
 # Protocol Constants (aligned with app/ota_update/ota_protocol.h)
+# 29-bit Extended CAN IDs in proprietary V-Box namespace (0x01F2F3xx)
 # ==============================================================================
-CAN_ID_OTA_BROADCAST        = 0x7DF  # PC -> All Nodes (Broadcast)
-CAN_ID_OTA_DISCOVERY_RESP   = 0x7E9  # Node -> PC (Discovery Response)
-CAN_ID_ISOTP_REQ            = 0x7E0  # PC -> Selected Node (ISO-TP Requests)
-CAN_ID_ISOTP_RESP           = 0x7E8  # Selected Node -> PC (ISO-TP Responses)
+CAN_ID_OTA_BROADCAST        = 0x01F2F3DF  # PC -> All Nodes (29-bit Extended Broadcast)
+CAN_ID_OTA_DISCOVERY_RESP   = 0x01F2F3E9  # Node -> PC (29-bit Extended Discovery Response)
+CAN_ID_ISOTP_REQ            = 0x01F2F3E0  # PC -> Selected Node (29-bit Extended ISO-TP Requests)
+CAN_ID_ISOTP_RESP           = 0x01F2F3E8  # Selected Node -> PC (29-bit Extended ISO-TP Responses)
+
+OTA_MAGIC_TOKEN             = [0x56, 0x42, 0x4F, 0x58]  # ASCII "VBOX" authorization token
 
 CMD_DISCOVER_NODES          = 0xA0
 CMD_SELECT_TARGET           = 0xA1
@@ -125,7 +345,7 @@ class IsoTpClient:
             # Single Frame (SF)
             frame_data = [length] + list(pdu)
             frame_data += [0x00] * (8 - len(frame_data))
-            msg = can.Message(arbitration_id=self.tx_id, is_extended_id=False, data=frame_data)
+            msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=frame_data)
             if self.verbose:
                 print(f"  [ISO-TP TX SF] {bytes(frame_data).hex()}")
             self.bus.send(msg)
@@ -134,7 +354,7 @@ class IsoTpClient:
         # Multi-Frame: First Frame (FF)
         ff_header = [0x10 | ((length >> 8) & 0x0F), length & 0xFF]
         frame_data = ff_header + list(pdu[:6])
-        msg = can.Message(arbitration_id=self.tx_id, is_extended_id=False, data=frame_data)
+        msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=frame_data)
         if self.verbose:
             print(f"  [ISO-TP TX FF] {bytes(frame_data).hex()} (len={length})")
         self.bus.send(msg)
@@ -147,7 +367,9 @@ class IsoTpClient:
 
         while time.time() < t_deadline:
             rx_msg = self.bus.recv(timeout=0.05)
-            if rx_msg and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
+            if not rx_msg:
+                continue
+            if rx_msg.is_extended_id and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
                 pci = rx_msg.data[0] & 0xF0
                 if pci == 0x30:  # Flow Control
                     fs = rx_msg.data[0] & 0x0F
@@ -170,7 +392,7 @@ class IsoTpClient:
         # Send Consecutive Frames (CF)
         offset = 6
         sn = 1
-        st_delay = (st_min_ms / 1000.0) if st_min_ms > 0 else 0.0005
+        st_delay = max(0.002, (st_min_ms / 1000.0) if st_min_ms > 0 else 0.002)
         cf_sent_in_block = 0
 
         while offset < length:
@@ -179,7 +401,9 @@ class IsoTpClient:
             cf_data = cf_header + list(chunk)
             cf_data += [0x00] * (8 - len(cf_data))
 
-            msg = can.Message(arbitration_id=self.tx_id, is_extended_id=False, data=cf_data)
+            msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=cf_data)
+            if self.verbose:
+                print(f"  [ISO-TP TX CF #{cf_sent_in_block+1} sn={sn}] {bytes(cf_data).hex()}")
             self.bus.send(msg)
 
             offset += len(chunk)
@@ -196,11 +420,13 @@ class IsoTpClient:
                 t_fc_deadline = time.time() + timeout
                 while time.time() < t_fc_deadline:
                     rx_msg = self.bus.recv(timeout=0.05)
-                    if rx_msg and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
+                    if not rx_msg:
+                        continue
+                    if rx_msg.is_extended_id and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
                         if (rx_msg.data[0] & 0xF0) == 0x30 and (rx_msg.data[0] & 0x0F) == 0x00:
                             block_size = rx_msg.data[1]
                             st_min_ms = rx_msg.data[2]
-                            st_delay = (st_min_ms / 1000.0) if st_min_ms > 0 else 0.0005
+                            st_delay = max(0.002, (st_min_ms / 1000.0) if st_min_ms > 0 else 0.002)
                             fc_next = True
                             break
                 if not fc_next:
@@ -215,7 +441,9 @@ class IsoTpClient:
 
         while time.time() < t_deadline:
             rx_msg = self.bus.recv(timeout=0.05)
-            if not rx_msg or rx_msg.arbitration_id != self.rx_id or len(rx_msg.data) == 0:
+            if not rx_msg:
+                continue
+            if not rx_msg.is_extended_id or rx_msg.arbitration_id != self.rx_id or len(rx_msg.data) == 0:
                 continue
 
             pci_type = rx_msg.data[0] & 0xF0
@@ -238,7 +466,7 @@ class IsoTpClient:
 
                 # Send Flow Control (CTS, BS=0, STmin=1ms)
                 fc_data = [0x30, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
-                fc_msg = can.Message(arbitration_id=self.tx_id, is_extended_id=False, data=fc_data)
+                fc_msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=fc_data)
                 self.bus.send(fc_msg)
 
                 # Receive Consecutive Frames (CF)
@@ -246,7 +474,9 @@ class IsoTpClient:
                 cf_deadline = time.time() + timeout
                 while len(buf) < total_len and time.time() < cf_deadline:
                     cf_msg = self.bus.recv(timeout=0.05)
-                    if cf_msg and cf_msg.arbitration_id == self.rx_id and len(cf_msg.data) > 1:
+                    if not cf_msg:
+                        continue
+                    if cf_msg.is_extended_id and cf_msg.arbitration_id == self.rx_id and len(cf_msg.data) > 1:
                         if (cf_msg.data[0] & 0xF0) == 0x20:
                             sn = cf_msg.data[0] & 0x0F
                             if sn != expected_sn:
@@ -295,21 +525,22 @@ def scan_nodes(bus: can.BusABC,
                log_cb: LogCallback = None,
                beacons_out: Optional[List[Dict]] = None) -> List[Dict]:
     """
-    Broadcasts CMD_DISCOVER_NODES (0xA0) on 0x7DF and collects announcements from 0x7E9.
-    Computes 8-bit UID hash (XOR & 0xFF matching firmware beacon) and captures 0xEE CRASH_RECOVERY_BEACON frames.
+    Broadcasts CMD_DISCOVER_NODES (0xA0) with "VBOX" magic token on 0x01F2F3DF and collects announcements from 0x01F2F3E9.
+    Computes 8-bit UID hash (XOR & 0xFF matching firmware beacon) and captures on-demand 0xEE CRASH_RECOVERY_BEACON frames.
     """
     scan_msg = "Scanning CAN bus (500 kbps) for STM32 devices..."
     print(f"\n[INFO] {scan_msg}")
     if log_cb:
         log_cb("INFO", scan_msg)
 
-    # Clear pending RX queue
-    while bus.recv(timeout=0.01):
-        pass
+    # Clear pending RX queue (up to 50 frames to avoid getting stuck if bus has high traffic)
+    for _ in range(50):
+        if not bus.recv(timeout=0.005):
+            break
 
-    # Broadcast discovery frame: [0x02, 0xA0, 0x00, 0, 0, 0, 0, 0]
-    disc_frame = [0x02, CMD_DISCOVER_NODES, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-    msg = can.Message(arbitration_id=CAN_ID_OTA_BROADCAST, is_extended_id=False, data=disc_frame)
+    # Broadcast discovery frame: [0x06, 0xA0, 'V', 'B', 'O', 'X', 0x00, 0x00]
+    disc_frame = [0x06, CMD_DISCOVER_NODES] + OTA_MAGIC_TOKEN + [0x00, 0x00]
+    msg = can.Message(arbitration_id=CAN_ID_OTA_BROADCAST, is_extended_id=True, data=disc_frame)
     bus.send(msg)
 
     t_end = time.time() + timeout
@@ -319,10 +550,12 @@ def scan_nodes(bus: can.BusABC,
 
     while time.time() < t_end:
         rx = bus.recv(timeout=0.02)
-        if rx and rx.arbitration_id == CAN_ID_OTA_DISCOVERY_RESP and len(rx.data) >= 8:
+        if not rx or rx.arbitration_id == CAN_ID_OTA_BROADCAST:
+            continue
+        if rx.is_extended_id and rx.arbitration_id == CAN_ID_OTA_DISCOVERY_RESP and len(rx.data) >= 8:
             sub_idx = rx.data[0]
             if verbose:
-                print(f"  [RAW 0x7E9] sub={sub_idx} payload={rx.data.hex()}")
+                print(f"  [RAW 0x01F2F3E9] sub={sub_idx} payload={rx.data.hex()}")
 
             if sub_idx == 0x01:
                 pending_f1 = bytes(rx.data[1:8])
@@ -401,7 +634,7 @@ def print_progress_bar(current: int, total: int, start_time: float, prefix: str 
     pct = (current / total) * 100.0 if total > 0 else 100.0
     bar_len = 30
     filled = int(round(bar_len * (current / float(total)))) if total > 0 else bar_len
-    bar = "█" * filled + "-" * (bar_len - filled)
+    bar = "=" * filled + "-" * (bar_len - filled)
 
     rem_bytes = max(0, total - current)
     eta_sec = (rem_bytes / (speed_kb * 1024.0)) if speed_kb > 0 else 0.0
@@ -548,7 +781,7 @@ def run_update_session(bus: can.BusABC,
         _log("ERROR", fail_msg)
         return False
 
-    resp = client.recv_pdu(timeout=6.0)
+    resp = client.recv_pdu(timeout=12.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
         fail_msg = f"Erase command failed or timeout: {decode_nack(resp)}"
         print(f"  [FAILED] {fail_msg}", file=sys.stderr)
@@ -602,11 +835,11 @@ def run_update_session(bus: can.BusABC,
                 _log("WARN", "Update session cancelled by user during block transfer!")
                 return False
 
-            if not client.send_pdu(write_pdu, timeout=1.0):
+            if not client.send_pdu(write_pdu, timeout=2.5):
                 total_retries += 1
                 continue
 
-            resp = client.recv_pdu(timeout=1.0)
+            resp = client.recv_pdu(timeout=2.5)
             if resp and len(resp) >= 1 and resp[0] == OTA_RESP_ACK:
                 success = True
                 break
@@ -762,7 +995,7 @@ def run_bootloader_update_session(bus: can.BusABC,
     print(f"  [OK] {ok_msg}")
     _log("OK", ok_msg)
 
-    if mode == 0x00:  # BOOTLOADER mode -> Bootloader update must be done from APPLICATION
+    if mode in (0x00, 0x02):  # BOOTLOADER or RECOVERY mode -> Bootloader update must be done from APPLICATION
         step1b_msg = "[Step 1b] Device is currently in BOOTLOADER mode. Requesting jump to APPLICATION..."
         print(f"\n{step1b_msg}")
         _log("INFO", step1b_msg)
@@ -811,7 +1044,7 @@ def run_bootloader_update_session(bus: can.BusABC,
         _log("ERROR", fail_msg)
         return False
 
-    resp = client.recv_pdu(timeout=6.0)
+    resp = client.recv_pdu(timeout=12.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
         fail_msg = f"Staging erase rejected or timeout: {decode_nack(resp)}"
         print(f"  [FAILED] {fail_msg}", file=sys.stderr)
@@ -862,10 +1095,10 @@ def run_bootloader_update_session(bus: can.BusABC,
                 _log("WARN", "Cancelled by user during staging write!")
                 return False
 
-            if not client.send_pdu(write_pdu, timeout=1.0):
+            if not client.send_pdu(write_pdu, timeout=2.5):
                 total_retries += 1
                 continue
-            resp = client.recv_pdu(timeout=1.0)
+            resp = client.recv_pdu(timeout=2.5)
             if resp and len(resp) >= 1 and resp[0] == OTA_RESP_ACK:
                 success = True
                 break
@@ -940,7 +1173,7 @@ def run_bootloader_update_session(bus: can.BusABC,
         _log("ERROR", fail_msg)
         return False
 
-    resp = client.recv_pdu(timeout=6.0)
+    resp = client.recv_pdu(timeout=12.0)
     if not resp or len(resp) < 1 or resp[0] != OTA_RESP_ACK:
         fail_msg = f"Bootloader installation failed on device: {decode_nack(resp)}"
         print(f"  [FAILED] {fail_msg}", file=sys.stderr)
@@ -988,14 +1221,18 @@ def main():
         description="STM32 CAN Bus Firmware Updater & Diagnostic Tool (v-box)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
-               "  python tools/can_updater.py --port COM5 --scan\n"
-               "  python tools/can_updater.py --port COM5 --dummy --size 32768\n"
-               "  python tools/can_updater.py --port COM5 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin\n"
-               "  python tools/can_updater.py --port COM5 --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin\n"
+               "  python tools/can_updater.py --scan                          (auto-detects candleLight USB)\n"
+               "  python tools/can_updater.py --interface candle --scan\n"
+               "  python tools/can_updater.py --port COM5 --interface slcan --scan\n"
+               "  python tools/can_updater.py --dummy --size 32768\n"
+               "  python tools/can_updater.py --file build/debug_GCC_NUCLEO-C542RC/v_box.bin\n"
+               "  python tools/can_updater.py --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin\n"
     )
 
-    parser.add_argument("--port", type=str, default=None, help="Serial COM port for SLCAN/CANable (e.g. COM5 or /dev/ttyACM0)")
-    parser.add_argument("--interface", type=str, default="slcan", help="python-can interface type (default: slcan; e.g. socketcan)")
+    parser.add_argument("--port", type=str, default=None,
+                        help="CAN channel or serial port (e.g. 'candle:0:0', '0', 'COM5', '/dev/ttyACM0')")
+    parser.add_argument("--interface", type=str, default="auto",
+                        help="python-can interface: auto, candle (candleLight WinUSB), gs_usb (libusb), slcan (COM), socketcan (default: auto)")
     parser.add_argument("--bitrate", type=int, default=500000, help="CAN bus bitrate in bps (default: 500000)")
     parser.add_argument("--scan", action="store_true", help="Scan CAN bus for all active STM32 devices and display their UIDs")
     parser.add_argument("--uid", type=str, default=None, help="Target 96-bit MCU UID in hex (e.g. 0038002A-3132510F-39383531)")
@@ -1009,24 +1246,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Determine connection parameters
-    channel = args.port
-    if args.interface == "socketcan" and channel is None:
-        channel = "can0"
+    resolved_iface, resolved_channel = resolve_can_interface_and_channel(args.interface, args.port)
 
-    if channel is None and args.interface == "slcan":
-        # Check standard default COM port or scan
-        print("[ERROR] Please specify serial port using --port (e.g. --port COM5 or --port /dev/ttyACM0)", file=sys.stderr)
+    if resolved_iface == "slcan" and not resolved_channel:
+        print("[ERROR] Please specify serial port using --port (e.g. --port COM5) or connect a candleLight USB adapter (--interface candle)", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[INFO] Opening CAN interface '{args.interface}' on channel '{channel}' @ {args.bitrate} bps...")
+    print(f"[INFO] Opening CAN interface '{resolved_iface}' on channel '{resolved_channel}' @ {args.bitrate} bps...")
     try:
-        if args.interface == "slcan":
-            bus = can.interface.Bus(interface='slcan', channel=channel, bitrate=args.bitrate)
-        else:
-            bus = can.interface.Bus(interface=args.interface, channel=channel, bitrate=args.bitrate)
+        bus = open_can_bus(interface=resolved_iface, channel=resolved_channel, bitrate=args.bitrate)
     except Exception as e:
-        print(f"[ERROR] Failed to open CAN bus: {e}", file=sys.stderr)
+        print(f"[ERROR] Failed to open CAN bus ({resolved_iface} on {resolved_channel}): {e}", file=sys.stderr)
         sys.exit(1)
 
     try:

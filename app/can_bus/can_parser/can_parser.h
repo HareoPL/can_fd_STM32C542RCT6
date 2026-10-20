@@ -45,6 +45,14 @@ typedef struct
 bool can_parser_select(can_instance_t *can_inst, can_parser_id_t id);
 
 /**
+ * @brief Attaches the system BOOT_OTA service parser filters alongside the currently active
+ *        parser profile on the specified CAN instance (exclusive exception for OTA).
+ * @param[in,out] can_inst Pointer to target CAN instance (e.g. &can1_inst).
+ * @return true on success, false if filter capacity is exceeded or hardware configuration fails.
+ */
+bool can_parser_attach_boot_ota(can_instance_t *can_inst);
+
+/**
  * @brief Retrieves the currently active parser profile identifier.
  * @return Current can_parser_id_t, or CAN_PARSER_COUNT if none active.
  */

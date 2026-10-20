@@ -61,4 +61,10 @@ bool can_manager_send(can_instance_t* inst, const CAN_msg_t* msg);
  */
 bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, uint32_t num_filters);
 
+/**
+ * @brief Returns the CAN instance currently executing an RX filter callback.
+ * @return Pointer to the active can_instance_t during callback dispatch, or NULL.
+ */
+can_instance_t *can_manager_get_active_rx_instance(void);
+
 #endif /* CAN_MANAGER_H */

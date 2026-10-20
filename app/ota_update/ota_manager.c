@@ -21,8 +21,8 @@
 
 #define TAG "OTA_MGR"
 
-/** @brief Length of the incoming frame queue. */
-#define OTA_QUEUE_LENGTH                16U
+/** @brief Length of the incoming frame queue (must buffer at least one full multi-frame PDU: 39 frames for 256 B block). */
+#define OTA_QUEUE_LENGTH                64U
 
 /** @brief Static storage for cached 96-bit MCU UID. */
 static uint8_t s_mcu_uid[STM32C5_UID_LEN_BYTES];
@@ -33,8 +33,14 @@ static bool s_target_selected = false;
 /** @brief Bootloader update session flag (true when staging slot 0x08038000 is targeted). */
 static bool s_bootloader_update_active = false;
 
-/** @brief Pointer to CAN2 instance used for transmission. */
-static can_instance_t *s_can2_inst = NULL;
+/** @brief Pointer to the currently active CAN instance used for OTA transmission (CAN1 or CAN2). */
+static can_instance_t *s_active_can_inst = NULL;
+
+/** @brief Timestamp of the last accepted OTA frame to support idle timeout and duplicate rejection. */
+static TickType_t s_last_ota_rx_tick = 0U;
+
+/** @brief Timestamp of the last accepted broadcast discovery frame. */
+static TickType_t s_last_discovery_tick = 0U;
 
 /** @brief FreeRTOS queue for incoming CAN messages dispatched from cp_boot_ota. */
 static QueueHandle_t s_ota_rx_queue = NULL;
@@ -54,11 +60,11 @@ static uint32_t s_block_count = 0U;
 /* --- Internal Helpers ------------------------------------------------------*/
 
 /**
- * @brief Helper callback for ISO-TP to transmit a raw CAN frame over FDCAN2.
+ * @brief Helper callback for ISO-TP to transmit a 29-bit Extended CAN frame over the active CAN bus.
  */
 static bool ota_can_send_frame(uint32_t can_id, const uint8_t *data, uint8_t len, void *user_ctx)
 {
-    can_instance_t *inst = (can_instance_t *)user_ctx;
+    can_instance_t *inst = (s_active_can_inst != NULL) ? s_active_can_inst : (can_instance_t *)user_ctx;
     if (inst == NULL || data == NULL || len == 0U)
     {
         return false;
@@ -66,7 +72,7 @@ static bool ota_can_send_frame(uint32_t can_id, const uint8_t *data, uint8_t len
 
     CAN_msg_t frame;
     memset(&frame, 0, sizeof(frame));
-    frame.ident = CAN_msg_set_standard_id(can_id);
+    frame.ident = CAN_msg_set_extended_id(can_id);
     frame.format = CAN_MSG_FRAME_FORMAT_CAN;
     frame.len = len;
     memcpy(frame.data, data, len);
@@ -75,7 +81,7 @@ static bool ota_can_send_frame(uint32_t can_id, const uint8_t *data, uint8_t len
 }
 
 /**
- * @brief Handles Discovery command received via Broadcast ID 0x7DF.
+ * @brief Handles Discovery command received via Broadcast ID 0x01F2F3DF.
  */
 static void handle_discovery_cmd(void)
 {
@@ -89,21 +95,22 @@ static void handle_discovery_cmd(void)
     const app_version_info_t *ver = version_getInfo();
     uint8_t packed_ver = (uint8_t)(((ver->fw_major & 0x0FU) << 4) | (ver->fw_minor & 0x0FU));
 
-    /* Frame 1 (0x7E9): [0x01, UID[0..6]] (8 bytes total) */
+    /* Frame 1 (0x01F2F3E9): [0x01, UID[0..6]] (8 bytes total) */
     uint8_t frame1[8];
     frame1[0] = 0x01U;
     memcpy(&frame1[1], &s_mcu_uid[0], 7U);
-    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame1, sizeof(frame1), s_can2_inst);
+    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame1, sizeof(frame1), s_active_can_inst);
 
-    /* Frame 2 (0x7E9): [0x02, UID[7..11], Mode=1 (APP), PackedVersion] (8 bytes total) */
+    /* Frame 2 (0x01F2F3E9): [0x02, UID[7..11], Mode=1 (APP), PackedVersion] (8 bytes total) */
     uint8_t frame2[8];
     frame2[0] = 0x02U;
     memcpy(&frame2[1], &s_mcu_uid[7], 5U);
     frame2[6] = OTA_MODE_APPLICATION;
     frame2[7] = packed_ver;
-    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame2, sizeof(frame2), s_can2_inst);
+    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame2, sizeof(frame2), s_active_can_inst);
 
-    safe_printf(TAG, "[DISCOVERY] Responded on 0x7E9 after %lu ms slot (UID: %02X%02X%02X%02X...)\r\n",
+    safe_printf(TAG, "[DISCOVERY] Responded on 0x01F2F3E9 (%s) after %lu ms slot (UID: %02X%02X%02X%02X...)\r\n",
+                (s_active_can_inst != NULL) ? s_active_can_inst->name : "CAN",
                 slot_delay_ms, s_mcu_uid[0], s_mcu_uid[1], s_mcu_uid[2], s_mcu_uid[3]);
 }
 
@@ -158,11 +165,25 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
                 return;
             }
 
-            safe_printf(TAG, "[CMD] ENTER_BOOTLOADER requested! Saving state to SHARED_RAM and resetting...\r\n");
+            uint8_t active_bus = BOOT_CAN_BUS_AUTO;
+            if (s_active_can_inst != NULL)
+            {
+                if (strcmp(s_active_can_inst->name, "CAN1") == 0)
+                {
+                    active_bus = BOOT_CAN_BUS_FDCAN1;
+                }
+                else if (strcmp(s_active_can_inst->name, "CAN2") == 0)
+                {
+                    active_bus = BOOT_CAN_BUS_FDCAN2;
+                }
+            }
+
+            safe_printf(TAG, "[CMD] ENTER_BOOTLOADER requested on %s! Saving state to SHARED_RAM and resetting...\r\n",
+                        (s_active_can_inst != NULL) ? s_active_can_inst->name : "AUTO");
             uint8_t resp[2] = {OTA_RESP_ACK, OTA_MODE_APPLICATION};
             (void)isotp_send_pdu(&s_isotp_link, resp, sizeof(resp));
 
-            boot_shared_request_bootloader(s_target_selected);
+            boot_shared_request_bootloader(s_target_selected, active_bus);
             vTaskDelay(pdMS_TO_TICKS(30));
             NVIC_SystemReset();
             break;
@@ -423,12 +444,22 @@ static void ota_worker_task(void *pvParameters)
 
         if (xQueueReceive(s_ota_rx_queue, &rx_msg, pdMS_TO_TICKS(500U)) == pdTRUE)
         {
-            uint32_t can_id = CAN_msg_get_can_id(rx_msg.ident);
+            /* Extract 29-bit Extended CAN ID directly without TX helper macros (Rule 13) */
+            if (rx_msg.ident <= CAN_SFF_MASK)
+            {
+                continue;
+            }
+            uint32_t can_id = rx_msg.ident & CAN_EFF_MASK;
 
             if (can_id == CAN_ID_OTA_BROADCAST)
             {
-                /* Check if payload is CMD_DISCOVER_NODES */
-                if (rx_msg.len >= 2U && rx_msg.data[1] == CMD_DISCOVER_NODES)
+                /* Check if payload is CMD_DISCOVER_NODES with valid 4-byte "VBOX" magic token */
+                if ((rx_msg.len >= OTA_DISCOVERY_MIN_LEN) &&
+                    (rx_msg.data[1] == CMD_DISCOVER_NODES) &&
+                    (rx_msg.data[2] == OTA_MAGIC_TOKEN_0) &&
+                    (rx_msg.data[3] == OTA_MAGIC_TOKEN_1) &&
+                    (rx_msg.data[4] == OTA_MAGIC_TOKEN_2) &&
+                    (rx_msg.data[5] == OTA_MAGIC_TOKEN_3))
                 {
                     handle_discovery_cmd();
                 }
@@ -450,7 +481,7 @@ bool ota_manager_init(can_instance_t *can2_inst)
         return false;
     }
 
-    s_can2_inst = can2_inst;
+    s_active_can_inst = can2_inst;
     (void)bootloader_updater_init();
 
     /* Read factory 96-bit Unique Device ID into cache using strictly 32-bit word accesses.
@@ -480,7 +511,7 @@ bool ota_manager_init(can_instance_t *can2_inst)
                CAN_ID_ISOTP_RESP,
                ota_can_send_frame,
                handle_isotp_pdu,
-               s_can2_inst);
+               s_active_can_inst);
 
     /* Create OTA worker task */
     BaseType_t ret = xTaskCreate(ota_worker_task,
@@ -495,8 +526,70 @@ bool ota_manager_init(can_instance_t *can2_inst)
 
 void ota_manager_feed_can_frame(const CAN_msg_t *msg)
 {
-    if (msg != NULL && s_ota_rx_queue != NULL)
+    if (msg == NULL || s_ota_rx_queue == NULL)
     {
+        return;
+    }
+
+    can_instance_t *rx_inst = can_manager_get_active_rx_instance();
+    if (rx_inst == NULL)
+    {
+        rx_inst = s_active_can_inst;
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    uint32_t can_id = msg->ident & CAN_EFF_MASK;
+
+    /* Handle Broadcast Discovery on 0x01F2F3DF */
+    if (can_id == CAN_ID_OTA_BROADCAST)
+    {
+        /* If both CAN1 and CAN2 share the physical bus, drop duplicate discovery frames arriving within 100 ms */
+        if ((s_active_can_inst != NULL) && (rx_inst != s_active_can_inst) &&
+            ((now - s_last_discovery_tick) < pdMS_TO_TICKS(100U)))
+        {
+            return;
+        }
+
+        s_last_discovery_tick = now;
+        s_last_ota_rx_tick = now;
+        if (rx_inst != NULL)
+        {
+            s_active_can_inst = rx_inst;
+        }
+
+        (void)xQueueSend(s_ota_rx_queue, msg, 0);
+        return;
+    }
+
+    /* Handle ISO-TP Requests on 0x01F2F3E0 */
+    if (can_id == CAN_ID_ISOTP_REQ)
+    {
+        uint8_t pci_type = (msg->len > 0U) ? (msg->data[0] & 0xF0U) : 0xFFU;
+
+        /* If an active session is in progress (target selected or recent frames received),
+         * strictly accept frames ONLY from the active CAN instance to prevent duplicate frames from
+         * a shared/bridged bus corrupting the ISO-TP sequence counter. */
+        if (s_active_can_inst != NULL && rx_inst != NULL && rx_inst != s_active_can_inst)
+        {
+            if (s_target_selected || ((now - s_last_ota_rx_tick) < pdMS_TO_TICKS(1000U)))
+            {
+                /* Drop duplicate frame from the other bus */
+                return;
+            }
+            /* Session has been idle (> 1s) and target is not locked: switch to the newly active bus */
+            s_active_can_inst = rx_inst;
+        }
+
+        /* If this is a Single Frame (0x00) or First Frame (0x10), it initiates a new PDU */
+        if (pci_type == ISOTP_PCI_TYPE_SINGLE || pci_type == ISOTP_PCI_TYPE_FIRST)
+        {
+            if (rx_inst != NULL)
+            {
+                s_active_can_inst = rx_inst;
+            }
+        }
+
+        s_last_ota_rx_tick = now;
         (void)xQueueSend(s_ota_rx_queue, msg, 0);
     }
 }

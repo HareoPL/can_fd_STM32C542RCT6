@@ -46,6 +46,7 @@ int main(void)
     /* Inspect Shared RAM structure */
     boot_mode_t mode = BOOT_MODE_NORMAL;
     bool session_selected = false;
+    uint8_t active_can_bus = BOOT_CAN_BUS_AUTO;
 
     if (boot_shared_is_valid())
     {
@@ -53,7 +54,9 @@ int main(void)
         {
             mode = BOOT_MODE_STAY_IN_BOOT;
             session_selected = (g_boot_shared.session_selected == 1U);
-            safe_printf(TAG, "[INIT] App requested Bootloader mode! Staying in bootloader.\r\n");
+            active_can_bus = (uint8_t)g_boot_shared.active_can_bus;
+            safe_printf(TAG, "[INIT] App requested Bootloader mode (bus=%u)! Staying in bootloader.\r\n",
+                        (unsigned int)active_can_bus);
 
             /* Clear magic so subsequent reset is normal unless requested again */
             g_boot_shared.magic = 0U;
@@ -95,7 +98,7 @@ int main(void)
         else
         {
             safe_printf(TAG, "[RECOVERY] No valid application at 0x%08lX (Flash blank or corrupt)!\r\n", BOOT_APP_START_ADDR);
-            safe_printf(TAG, "[RECOVERY] Entering Recovery Mode. Calling for rescue on CAN2 (0x7E9)...\r\n");
+            safe_printf(TAG, "[RECOVERY] Entering silent Recovery Mode. Listening on CAN1 & CAN2 (0x01F2F3DF)...\r\n");
             mode = BOOT_MODE_RECOVERY;
             g_boot_shared.fault_reason = BOOT_FAULT_NO_APP;
             g_boot_shared.fault_pc = BOOT_APP_START_ADDR;
@@ -105,27 +108,18 @@ int main(void)
     }
 
     /* -------------------------------------------------------------------------
-     * Phase B: Stay in Bootloader or Recovery Mode (CAN listener active)
+     * Phase B: Stay in Bootloader or Recovery Mode (CAN1 + CAN2 listener active)
      * ------------------------------------------------------------------------- */
-    /* Initialize Bootloader CAN core and Flash subsystem */
-    openbl_core_init(session_selected);
+    /* Initialize Bootloader CAN core and Flash subsystem (zero unsolicited traffic) */
+    openbl_core_init(session_selected, mode, active_can_bus);
 
-    /* Send immediate rescue beacon if in recovery mode */
-    if (mode == BOOT_MODE_RECOVERY)
-    {
-        openbl_core_send_recovery_beacon((uint8_t)g_boot_shared.fault_reason,
-                                        (uint8_t)g_boot_shared.boot_fail_counter,
-                                        g_boot_shared.fault_pc);
-    }
     uint32_t led_ticker = 0U;
-    uint32_t beacon_ticker = 0U;
 
     while (1)
     {
         openbl_core_poll();
 
         led_ticker++;
-        beacon_ticker++;
 
         /* Fast alert LED blink (Recovery = 5 Hz, Update = 2 Hz) */
         uint32_t led_period = (mode == BOOT_MODE_RECOVERY) ? 500U : 1500U;
@@ -133,18 +127,6 @@ int main(void)
         {
             bsp_io_output_setPin(!bsp_io_output_get_state());
             led_ticker = 0U;
-        }
-
-        /* Emit recovery crash beacon every 1000 ms if in recovery mode */
-        if (mode == BOOT_MODE_RECOVERY)
-        {
-            if (beacon_ticker >= 10000U) /* ~1000 ms */
-            {
-                openbl_core_send_recovery_beacon((uint8_t)g_boot_shared.fault_reason,
-                                                (uint8_t)g_boot_shared.boot_fail_counter,
-                                                g_boot_shared.fault_pc);
-                beacon_ticker = 0U;
-            }
         }
 
         delay_cycles(1440U); /* ~10 us */

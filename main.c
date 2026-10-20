@@ -101,6 +101,13 @@ int main(void)
     return (-1);
   }
 
+  /* Attach Bootloader/OTA listener to CAN1 alongside V_BOX parser (dual-bus support) */
+  if (!can_parser_attach_boot_ota(&can1_inst))
+  {
+    safe_printf(NULL, "[MAIN] ERROR: CAN1 attach BOOT_OTA parser failed!\r\n");
+    return (-1);
+  }
+
   /* 3. Inicjalizacja instancji CAN2 dla Bootloadera / OTA (Classic CAN 2.0 @ 500 kbps) */
   can2_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN;
   can2_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
@@ -112,7 +119,7 @@ int main(void)
     return (-1);
   }
 
-  if (!can_parser_select(&can2_inst, CAN_PARSER_ID_BOOT_OTA))
+  if (!can_parser_select(&can2_inst, CAN_PARSER_ID_EXAMPLE))
   {
     safe_printf(NULL, "[MAIN] ERROR: CAN2 parser select failed!\r\n");
     return (-1);

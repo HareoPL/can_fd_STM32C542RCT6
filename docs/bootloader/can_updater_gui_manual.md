@@ -10,7 +10,7 @@
 
 ## 1. Przegląd Programu
 
-**V-BOX CAN OTA Updater & Diagnostic Studio** (`tools/can_updater_gui.py`) to dedykowana aplikacja desktopowa (oparta na bibliotece **PyQt6** z automatycznym fallbackiem na **PyQt5**), zaprojektowana do bezinwazyjnej aktualizacji oprogramowania układowego (**Over-The-Air / Over-CAN**) oraz zaawansowanej diagnostyki mikrokontrolerów **STM32C542RCT6** przez magistralę **FDCAN2** (500 kbps).
+**V-BOX CAN OTA Updater & Diagnostic Studio** (`tools/can_updater_gui.py`) to dedykowana aplikacja desktopowa (oparta na bibliotece **PyQt6** z automatycznym fallbackiem na **PyQt5**), zaprojektowana do bezinwazyjnej aktualizacji oprogramowania układowego (**Over-The-Air / Over-CAN**) oraz zaawansowanej diagnostyki mikrokontrolerów **STM32C542RCT6** przez magistralę **FDCAN1** lub **FDCAN2** (500 kbps, 29-bitowe identyfikatory Extended ID w przestrzeni `0x01F2F3xx` z tokenem autoryzacyjnym `"VBOX"`).
 
 ![Widok główny aplikacji V-BOX CAN OTA Updater Studio](can_updater_gui_screen.png)
 
@@ -30,7 +30,7 @@ Wszystkie wymagane pakiety znajdują się w pliku [tools/requirements_ota.txt](f
 ```powershell
 pip install -r tools/requirements_ota.txt
 ```
-*(Wymagane pakiety: `python-can`, `pyserial`, `PyQt6` lub `PyQt5`).*
+*(Wymagane pakiety: `python-can`, `python-can-candle`, `candle-api`, `pyusb`, `libusb-package`, `pyserial`, `PyQt6` lub `PyQt5`).*
 
 ### 2.2. Sposoby uruchomienia
 1. **Z poziomu Visual Studio Code (Zalecane):**
@@ -51,22 +51,23 @@ Okno programu zostało podzielone na **6 logicznych stref funkcjonalnych** uło�
 
 ### Sekcja 1: Połączenie Magistrali CAN (`POŁĄCZENIE MAGISTRALI CAN`)
 
-Górny pasek odpowiada za konfigurację fizycznego adaptera USB-CAN i nawiązanie połączenia z magistralą **FDCAN2** (`PB5` RX / `PB6` TX).
+Górny pasek odpowiada za konfigurację fizycznego adaptera USB-CAN (**candleLight WinUSB** lub **CANable SLCAN**) i nawiązanie połączenia z magistralą **FDCAN1** (`PB8` RX / `PB9` TX) lub **FDCAN2** (`PB5` RX / `PB6` TX).
 
 | Kontrolka / Opcja | Opis działania i przeznaczenie |
 | :--- | :--- |
-| **`Interfejs`** | Wybór backendu sprzętowego biblioteki `python-can`. Domyślnie **`slcan`** (obsługuje adaptery **CANable 2.0**, Lawicel, cantact). Dostępne również: `socketcan`, `pcan`, `vector`, `kvaser`. |
-| **`Port COM`** | Lista wykrytych portów szeregowych w systemie wraz z automatyczną klasyfikacją urządzeń USB. |
-| **`[🔄]` (Odśwież porty)** | Ponownie skanuje porty COM w systemie Windows/Linux i automatycznie przypisuje właściwe urządzenia po podłączeniu kabla USB. |
-| **`Prędkość`** | Prędkość nominalna magistrali CAN (Bitrate). Domyślnie **`500000 bps` (500 kbps)** – zgodna z konfiguracją sprzętową FDCAN2 w mikrokontrolerze. |
-| **`[🔌 Połącz]` / `[🔌 Rozłącz]`** | Otwiera lub zamyka połączenie z magistralą CAN i uruchamia wątek nasłuchujący `CanBusMonitorWorker`. Tuż po połączeniu automatycznie wykonuje pojedynczy skan magistrali (`0x7DF`). |
-| **Status połączenia** | Wskaźnik tekstowy obok przycisku: zielony `(● Połączono: COM17 @ 500000 bps)` lub czerwony `(● ROZŁĄCZONO)`. |
-| **`[ ] Auto-Scan (3s)`** | **Domyślnie odznaczony** w celu utrzymania cichej magistrali CAN. Po zaznaczeniu program wysyła co 3 sekundy rozgłoszeniową ramkę `0x7DF`, odświeżając listę urządzeń w czasie rzeczywistym. *(Na czas wgrywania wsadu skanowanie jest automatycznie wstrzymywane).* |
+| **`Interfejs`** | Wybór sterownika adaptera CAN: **`candle (candleLight USB)`** (natywny WinUSB dla CANable 2.0 z firmwarem candleLight), **`slcan (CANable COM)`** (wirtualny port COM), **`gs_usb (libusb)`** (backend libusb-1.0) oraz **`socketcan (Linux)`**. Program automatycznie wykrywa podłączony adapter `candleLight` przy starcie! |
+| **`Urządzenie USB / Port COM`** | Dynamiczna lista wykrytych kanałów USB `candleLight` (np. `candle:0:0 — Candlelight 2.5 (SN: ...)`) lub portów szeregowych COM (dla trybu `slcan`). |
+| **`[🔄]` (Odśwież porty)** | Ponownie skanuje urządzenia USB `candleLight` oraz porty szeregowe COM i automatycznie przypisuje właściwe urządzenia po podłączeniu kabla USB. |
+| **`Prędkość`** | Prędkość nominalna magistrali CAN (Bitrate). Domyślnie **`500000 bps` (500 kbps)** – zgodna z konfiguracją sprzętową FDCAN1/FDCAN2 w mikrokontrolerze. |
+| **`[🔌 Połącz]` / `[🔌 Rozłącz]`** | Otwiera lub zamyka połączenie z magistralą CAN i uruchamia wątek nasłuchujący `CanBusMonitorWorker`. Tuż po połączeniu automatycznie wykonuje pojedynczy skan magistrali (`0x01F2F3DF`). |
+| **Status połączenia** | Wskaźnik tekstowy obok przycisku: zielony `(● Połączono (candle): candle:0:0 @ 500000 bps)` lub czerwony `(● ROZŁĄCZONO)`. |
+| **`[ ] Auto-Scan (3s)`** | **Domyślnie odznaczony** w celu utrzymania cichej magistrali CAN. Po zaznaczeniu program wysyła co 3 sekundy rozgłoszeniową ramkę `0x01F2F3DF` z tokenem `"VBOX"`, odświeżając listę urządzeń w czasie rzeczywistym. *(Na czas wgrywania wsadu skanowanie jest automatycznie wstrzymywane).* |
 
-#### 🧠 Jak działa inteligentne rozpoznawanie portu CANable 2.0 vs ST-Link?
-Funkcja `classify_serial_ports()` bada deskryptory sprzętowe USB każdego portu COM (`VID`, `PID`, nazwa sterownika i opis):
-* **Adapter CANable 2.0 (SLCAN):** rozpoznawany po identyfikatorach `VID:PID` (`16D0:117E`, `1D50:606F`) lub słowach kluczowych (`canable`, `slcan`, `candlelight`, `gs_usb`). Otrzymuje etykietę **`COMx - CANable 2.0 (SLCAN)`** i jest **automatycznie wybierany** w sekcji CAN.
-* **Programator ST-Link VCP (UART2):** rozpoznawany po identyfikatorze STMicroelectronics (`VID = 0x0483`, `PID = 0x374B / 0x374E / 0x3752`). Otrzymuje etykietę **`COMy - ST-Link VCP (UART2)`**, jest **wykluczany z domyślnego wyboru CAN** (aby nie wysłać ramek SLCAN na konsolę UART) i **automatycznie przypisywany** do dolnej zakładki terminala UART2!
+#### 🧠 Jak działa inteligentne rozpoznawanie adaptera (candleLight WinUSB vs CANable SLCAN vs ST-Link VCP)?
+1. **Wykrywanie natywnego USB `candleLight` (`candle_api` / `1D50:606F`):** Przy uruchomieniu aplikacja sprawdza obecność adapterów z firmwarem `candleLight` (WinUSB / `gs_usb`). Jeśli taki adapter jest podłączony, lista `Interfejs` automatycznie ustawia się na **`candle (candleLight USB)`**, a na liście urządzeń pojawia się kanał `candle:0:0` wraz z numerem seryjnym.
+2. **Klasyfikacja portów szeregowych (`find_serial_ports()`):**
+   * **Adapter CANable 2.0 (SLCAN):** rozpoznawany po identyfikatorach `VID:PID` (`16D0:117E`) lub opisie (`CANable`, `SLCAN`). Otrzymuje etykietę **`COMx - CANable 2.0 (SLCAN)`**.
+   * **Programator ST-Link VCP (UART2):** rozpoznawany po identyfikatorze STMicroelectronics (`VID = 0x0483`, `PID = 0x374B / 0x374E / 0x3752`). Otrzymuje etykietę **`COMy - ST-Link VCP (UART2)`** i jest **automatycznie przypisywany** do dolnej zakładki terminala szeregowego UART2!
 
 ---
 
@@ -92,7 +93,7 @@ Trzy kafelki pod paskiem połączenia prezentują stan wszystkich układów na m
 Centralna tabela prezentuje szczegółowe informacje o każdym węźle wykrytym na magistrali CAN.
 
 #### Pasek przycisków nad tabelą:
-* **`[🔍 Skanuj (0x7DF)]`:** wysyła rozgłoszeniowe zapytanie `CMD_DISCOVER_NODES` (`0xA0`) na ID `0x7DF`. Wszystkie podłączone płytki STM32 odpowiadają na ID `0x7E9` (z przeciwkolizyjnym opóźnieniem czasowym wyliczanym ze skrótu `uid_hash`), przesyłając swój pełny 96-bitowy UID, aktywny tryb oraz wersję FW.
+* **`[🔍 Skanuj (0x01F2F3DF)]`:** wysyła rozgłoszeniowe zapytanie `CMD_DISCOVER_NODES` (`0xA0`) wraz z 4-bajtowym tokenem autoryzacyjnym `"VBOX"` na 29-bitowym Extended ID `0x01F2F3DF`. Wszystkie podłączone płytki STM32 odpowiadają na Extended ID `0x01F2F3E9` (z przeciwkolizyjnym opóźnieniem czasowym wyliczanym ze skrótu `uid_hash`), przesyłając swój pełny 96-bitowy UID, aktywny tryb oraz wersję FW (a w trybie Recovery również ramkę diagnostyczną `0xEE` z przyczyną błędu i adresem `PC`).
 * **`[📥 Do Bootloadera]`:** wysyła do wybranego węzła komendę `CMD_ENTER_BOOTLOADER` (`0xA2`). Aplikacja główna zapisuje żądanie `BOOT_REQ_ENTER_BOOTLOADER` w `SHARED_RAM` i wykonuje natychmiastowy restart do Bootloadera.
 * **`[▶️ Skocz do App]`:** wysyła komendę `CMD_GO_EXECUTE` (`0x21`), nakazując Bootloaderowi zweryfikowanie aplikacji i skok pod adres `0x08008000`.
   > [!WARNING]

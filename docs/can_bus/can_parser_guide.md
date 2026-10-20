@@ -258,6 +258,18 @@ if (!can_parser_select(&can1_inst, CAN_PARSER_ID_2))
 
 Profil można również przełączać **dynamicznie w locie** w dowolnym momencie działania programu (np. po odebraniu dedykowanej ramki CAN, komendy UART lub polecenia CLI). Funkcja `can_parser_select()` zatrzyma kontroler FDCAN, przekonfiguruje filtry sprzętowe M_CAN oraz tablicę dyspozytora programowego, a następnie wznowi pracę magistrali.
 
+### Krok 6b: Wyjątek kompozytowy – dołączenie `CAN_PARSER_ID_BOOT_OTA` (`can_parser_attach_boot_ota`)
+
+Z założenia na jednej instancji CAN aktywny jest jeden profil aplikacyjny wybierany przez `can_parser_select()`. Jedynym architektonicznym wyjątkiem (przeznaczonym dla płytek niewyposażonych w transceiver `CAN2`) jest możliwość dołączenia filtrów aktualizacji `CAN_PARSER_ID_BOOT_OTA` (`0x01F2F3DF`, `0x01F2F3E0`) do aktualnie aktywnego profilu na `CAN1`:
+
+```c
+/* 1. Wybór głównego profilu aplikacyjnego na CAN1 */
+can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX);
+
+/* 2. Dołączenie obsługi Bootloadera / OTA równolegle na CAN1 */
+can_parser_attach_boot_ota(&can1_inst);
+```
+
 ---
 
 ## 4. Zasady Dobrej Praktyki

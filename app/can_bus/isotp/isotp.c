@@ -101,8 +101,8 @@ void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data
             link->rx_sn = 1U;
             link->rx_state = ISOTP_RX_STATE_RECEIVING_CF;
 
-            /* Send Flow Control: Clear To Send (FS=0), BlockSize=0 (no limit), STmin=1ms */
-            uint8_t fc_frame[8] = {0x30U, 0x00U, 0x01U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
+            /* Send Flow Control: Clear To Send (FS=0), BlockSize=0 (no limit), STmin=2ms */
+            uint8_t fc_frame[8] = {0x30U, 0x00U, 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
             if (link->tx_fn != NULL)
             {
                 link->tx_fn(link->tx_can_id, fc_frame, sizeof(fc_frame), link->user_ctx);

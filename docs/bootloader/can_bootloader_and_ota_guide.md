@@ -1,4 +1,4 @@
-# Dokumentacja Techniczna i Instrukcja Obsługi: CAN Bootloader & OTA Update (FDCAN2)
+# Dokumentacja Techniczna i Instrukcja Obsługi: CAN Bootloader & OTA Update (FDCAN1 & FDCAN2)
 
 > **Powiązane dokumenty:**
 > * Instrukcja obsługi programu GUI (OTA Studio): [docs/bootloader/can_updater_gui_manual.md](file:///c:/WORK/5_v-box/docs/bootloader/can_updater_gui_manual.md)
@@ -14,8 +14,8 @@
 Podsystem aktualizacji oprogramowania układowego (**CAN Bootloader & OTA Update**) na mikrokontrolerze **STM32C542RCT6** (płytka **NUCLEO-C542RC**, ARM Cortex-M33 @ 144 MHz) został zaprojektowany i zrealizowany zgodnie z 6-fazowym planem architektonicznym opisanym w pliku [bootloader_implementation_plan.md](file:///c:/WORK/5_v-box/docs/bootloader/bootloader_implementation_plan.md).
 
 System wykorzystuje architekturę **Dual-Target** (dwa niezależne programy wykonywalne kompilowane w ramach jednego drzewa CMake i scalane post-buildem w pojedynczy obraz produkcyjny):
-1. **`v_box_boot` (`CAN Bootloader`)** – lekki, autonomiczny program **bare-metal** (bez systemu RTOS, kompilowany z flagą `-Os`), rezydujący w pierwszych **32 KB** pamięci Flash (`0x08000000`). Odpowiada za błyskawiczny rozruch aplikacji (**Fast-Boot < 2 ms**), weryfikację spójności wektorów startowych, obsługę trybu awaryjnego (**Recovery Mode**) oraz programowanie pamięci Flash aplikacji przez magistralę **FDCAN2**.
-2. **`v_box` (`Main Application`)** – wielowątkowa aplikacja główna oparta na systemie **FreeRTOS**, rezydująca od adresu `0x08008000` (**192 KB**). Podczas normalnej pracy nasłuchuje w tle na magistrali **FDCAN2** (ID `0x7DF` oraz `0x7E0`), odpowiada na rozgłoszenia **UID Discovery**, przyjmuje polecenia przejścia do Bootloadera oraz realizuje bezpieczną aktualizację samego Bootloadera za pośrednictwem wyizolowanego bufora **Flash Staging Slot** (`0x08038000`).
+1. **`v_box_boot` (`CAN Bootloader`)** – lekki, autonomiczny program **bare-metal** (bez systemu RTOS, kompilowany z flagą `-Os`), rezydujący w pierwszych **32 KB** pamięci Flash (`0x08000000`). Odpowiada za błyskawiczny rozruch aplikacji (**Fast-Boot < 2 ms**), weryfikację spójności wektorów startowych, obsługę cichego trybu awaryjnego (**Silent Recovery Mode**) oraz programowanie pamięci Flash aplikacji przez magistralę **FDCAN1** lub **FDCAN2**.
+2. **`v_box` (`Main Application`)** – wielowątkowa aplikacja główna oparta na systemie **FreeRTOS**, rezydująca od adresu `0x08008000` (**192 KB**). Podczas normalnej pracy nasłuchuje w tle jednocześnie na magistrali **FDCAN1** (dołączony profil `can_parser_attach_boot_ota`) oraz **FDCAN2** (29-bitowe Extended ID `0x01F2F3DF` oraz `0x01F2F3E0`), weryfikuje 4-bajtowy token autoryzacyjny `"VBOX"`, odpowiada na rozgłoszenia **UID Discovery** wyłącznie na tej magistrali, z której nadeszło zapytanie, przyjmuje polecenia przejścia do Bootloadera (przekazując aktywny numer magistrali w `SHARED_RAM`) oraz realizuje bezpieczną aktualizację samego Bootloadera za pośrednictwem wyizolowanego bufora **Flash Staging Slot** (`0x08038000`).
 
 ---
 
@@ -105,14 +105,20 @@ c:\WORK\5_v-box\
 
 ## 2. Szczegółowy Opis Metody i Sposobu Implementacji
 
-### 2.1. Warstwa Fizyczna i Konfiguracja Peryferium FDCAN2
-Komunikacja aktualizacyjna oraz diagnostyczna OTA odbywa się na dedykowanym drugim kontrolerze **FDCAN2**, odseparowanym od głównej magistrali wykonawczej FDCAN1:
-* **Wyprowadzenia GPIO:** `PB5` (`FDCAN2_RX`, funkcja alternatywna `AF9`) oraz `PB6` (`FDCAN2_TX`, funkcja alternatywna `AF9`).
+### 2.1. Warstwa Fizyczna, Obsługa Dual-Bus (CAN1 + CAN2) i Ochrona Przed Kolizją w Aucie
+Komunikacja aktualizacyjna oraz diagnostyczna OTA obsługuje jednocześnie oba kontrolery **FDCAN1** oraz **FDCAN2** (wspierając zarówno płytki docelowe wyposażone wyłącznie w transceiver `CAN1`, jak i stanowiska z dedykowanym `CAN2`):
+* **Wyprowadzenia GPIO:**
+  * **FDCAN1:** `PB8` (`FDCAN1_RX`, `AF9`) oraz `PB9` (`FDCAN1_TX`, `AF9`) – wbudowany transceiver na płytce (współdzielony z główną magistralą pojazdu / V-Box).
+  * **FDCAN2:** `PB5` (`FDCAN2_RX`, `AF9`) oraz `PB6` (`FDCAN2_TX`, `AF9`) – opcjonalny drugi kanał CAN.
 * **Parametry czasowe (Bit Timing):** Zegar rdzenia M_CAN wynosi **144 MHz** (`CLK_FD`). Przy `Prescaler = 1`, `NominalTimeSeg1 = 251`, `NominalTimeSeg2 = 36`, `SJW = 36` uzyskano precyzyjną prędkość **500 kbps** (Classic CAN 2.0B) z punktem próbkowania na poziomie **87.5%** ($252 / 288$ kwantów czasu).
-* **Filtrowanie sprzętowe M_CAN Message RAM:** Skonfigurowano dwa klasyczne filtry maskowe akceptujące wyłącznie ramki o standardowym 11-bitowym ID:
-  * `0x7DF` (`CAN_ID_OTA_BROADCAST`) – ramki rozgłoszeniowe Discovery.
-  * `0x7E0` (`CAN_ID_ISOTP_REQ`) – ramki żądań unicastowych ISO-TP z narzędzia PC.
-* **Bezpieczeństwo przerwań FreeRTOS:** W pliku [mx_fdcan2.c](file:///c:/WORK/5_v-box/generated/hal/mx_fdcan2.c) przerwanie `FDCAN2_IT0_IRQn` otrzymuje jawnie priorytet wywłaszczania **5** (`HAL_CORTEX_NVIC_PREEMP_PRIORITY_5`), równy `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, co pozwala na bezpieczne wywoływanie `xSemaphoreGiveFromISR()` wewnątrz `HAL_FDCAN_RxFifo0Callback()`.
+* **Przestrzeń adresowa 29-bit Extended ID (`0x01F2F3xx`) i Token `"VBOX"` (Automotive-Safe):**
+  Aby całkowicie wykluczyć kolizję z fabrycznymi sterownikami samochodowymi (ECM/TCM/BCM) oraz standardowymi testerami diagnostycznymi OBD-II (`0x7DF` / `0x7E0` / `0x7E8`), cały protokół OTA został przeniesiony do prywatnej przestrzeni **29-bitowych identyfikatorów Extended CAN (`0x01F2F3xx`)**:
+  * `0x01F2F3DF` (`CAN_ID_OTA_BROADCAST`) – ramki rozgłoszeniowe Discovery (wymagają 4-bajtowego tokenu autoryzacyjnego `'V','B','O','X'` w bajtach `2..5`).
+  * `0x01F2F3E0` (`CAN_ID_ISOTP_REQ`) – ramki żądań unicastowych ISO-TP z narzędzia PC.
+  * `0x01F2F3E8` (`CAN_ID_ISOTP_RESP`) – ramki odpowiedzi ISO-TP z wybranego węzła STM32.
+  * `0x01F2F3E9` (`CAN_ID_OTA_DISCOVERY_RESP`) – odpowiedzi UID Discovery oraz ramka diagnostyczna `0xEE` (nadawana wyłącznie na żądanie po autoryzowanym zapytaniu `"VBOX"`, zero spontanicznego ruchu na magistrali auta!).
+* **Dynamiczny wybór aktywnej magistrali:** Zarówno `ota_manager` w aplikacji, jak i `openbl_core` w Bootloaderze automatycznie wykrywają, na którym interfejsie (`CAN1` lub `CAN2`) nadeszło zapytanie, i odsyłają odpowiedzi wyłącznie na ten sam interfejs (nie zapełniając bufora TX na nieobsadzonym porcie `CAN2`).
+* **Bezpieczeństwo przerwań FreeRTOS:** W plikach [mx_fdcan1.c](file:///c:/WORK/5_v-box/generated/hal/mx_fdcan1.c) i [mx_fdcan2.c](file:///c:/WORK/5_v-box/generated/hal/mx_fdcan2.c) przerwania `FDCAN1_IT0_IRQn` oraz `FDCAN2_IT0_IRQn` otrzymują jawnie priorytet wywłaszczania **5** (`HAL_CORTEX_NVIC_PREEMP_PRIORITY_5`), równy `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, co pozwala na bezpieczne wywoływanie `xSemaphoreGiveFromISR()` wewnątrz `HAL_FDCAN_RxFifo0Callback()`.
 
 ---
 
@@ -142,17 +148,17 @@ W środowisku docelowym do jednej magistrali CAN może być podłączonych wiele
 
 | Komenda | Kod Hex | Kierunek | Format Payloadu (ISO-TP / CAN) | Opis działania |
 | :--- | :---: | :---: | :--- | :--- |
-| `CMD_DISCOVER_NODES` | `0xA0` | PC $\rightarrow$ `0x7DF` | `[0xA0]` (1 B) | Rozgłoszeniowe zapytanie o aktywne węzły na magistrali CAN |
-| `CMD_SELECT_TARGET` | `0xA1` | PC $\rightarrow$ `0x7E0` | `[0xA1, UID[0..11]]` (13 B) | Wybór i autoryzacja konkretnego mikrokontrolera po 96-bitowym UID |
-| `CMD_ENTER_BOOTLOADER` | `0xA2` | PC $\rightarrow$ `0x7E0` | `[0xA2, 0xB0, 0x07, 0x10, 0xAD]` (5 B) | Zapis żądania do `SHARED_RAM`, odesłanie `ACK` i `NVIC_SystemReset()` |
-| `CMD_ERASE_APP` | `0x44` | PC $\rightarrow$ `0x7E0` | `[0x44, Addr(4B), Size(4B)]` (9 B) | Kasowanie stron Flash (obszar `0x08008000` w Boot lub `0x08038000` w App) |
-| `CMD_WRITE_MEMORY` | `0x31` | PC $\rightarrow$ `0x7E0` | `[0x31, Addr(4B), Len(2B), CRC32(4B), Data(N)]` | Zapis bloku 256 B z weryfikacją CRC32 bloku przed dotknięciem Flash |
-| `CMD_VERIFY_FIRMWARE` | `0xA3` | PC $\rightarrow$ `0x7E0` | `[0xA3, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja CRC32 całego obrazu + **atomowy commit bloku 0 (`0x08008000`)** |
-| `CMD_UPDATE_BOOTLOADER` | `0xA4` | PC $\rightarrow$ `0x7E0` | `[0xA4, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja obrazu w Staging Slot (`0x08038000`) i przepisanie do `0x08000000` |
-| `CMD_GO_EXECUTE` | `0x21` | PC $\rightarrow$ `0x7E0` | `[0x21, Addr(4B)]` (5 B) | Skok z Bootloadera do Aplikacji lub restart MCU po aktualizacji Boota |
-| `CRASH_RECOVERY_BEACON`| `0xEE` | MCU $\rightarrow$ `0x7E9`| `[0xEE, Reason, FailCnt, Hash8, PC(4B)]` (8 B) | Cykliczna (co 1 s) ramka ratunkowa nadawana w trybie `BOOT_MODE_RECOVERY` |
+| `CMD_DISCOVER_NODES` | `0xA0` | PC $\rightarrow$ `0x01F2F3DF` | `[0x06, 0xA0, 'V', 'B', 'O', 'X', 0, 0]` | Rozgłoszeniowe zapytanie o aktywne węzły z 4-bajtowym tokenem `"VBOX"` |
+| `CMD_SELECT_TARGET` | `0xA1` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA1, UID[0..11]]` (13 B) | Wybór i autoryzacja konkretnego mikrokontrolera po 96-bitowym UID |
+| `CMD_ENTER_BOOTLOADER` | `0xA2` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA2]` (1 B) | Zapis żądania i `active_can_bus` do `SHARED_RAM`, odesłanie `ACK` i `NVIC_SystemReset()` |
+| `CMD_ERASE_APP` | `0x44` | PC $\rightarrow$ `0x01F2F3E0` | `[0x44, Addr(4B), Size(4B)]` (9 B) | Kasowanie stron Flash (obszar `0x08008000` w Boot lub `0x08038000` w App) |
+| `CMD_WRITE_MEMORY` | `0x31` | PC $\rightarrow$ `0x01F2F3E0` | `[0x31, Addr(4B), Len(2B), Data(N), CRC32(4B)]` | Zapis bloku 256 B z weryfikacją CRC32 bloku przed dotknięciem Flash |
+| `CMD_VERIFY_FIRMWARE` | `0xA3` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA3, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja CRC32 całego obrazu + **atomowy commit bloku 0 (`0x08008000`)** |
+| `CMD_UPDATE_BOOTLOADER` | `0xA4` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA4, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja obrazu w Staging Slot (`0x08038000`) i przepisanie do `0x08000000` |
+| `CMD_GO_EXECUTE` | `0x21` | PC $\rightarrow$ `0x01F2F3E0` | `[0x21]` (1 B) | Skok z Bootloadera do Aplikacji lub restart MCU po aktualizacji Boota |
+| `CRASH_RECOVERY_BEACON`| `0xEE` | MCU $\rightarrow$ `0x01F2F3E9`| `[0xEE, Reason, FailCnt, Hash8, PC(4B)]` (8 B) | Ramka ratunkowa nadawana **na żądanie (on-demand)** po odebraniu Discovery w `BOOT_MODE_RECOVERY` |
 
-**Kody odpowiedzi (na ID `0x7E8`):**
+**Kody odpowiedzi (na 29-bitowym Extended ID `0x01F2F3E8`):**
 * `OTA_RESP_ACK (0x79)`: Operacja zakończona powodzeniem `[0x79, CmdEcho, ...]`.
 * `OTA_RESP_NACK (0x1F)`: Operacja odrzucona `[0x1F, ErrorCode]`, gdzie `ErrorCode` określa przyczynę:
   * `OTA_ERR_CRC (0x01)` – niezgodność sumy kontrolnej CRC32 bloku lub całego obrazu.
@@ -396,28 +402,33 @@ Do przeprowadzenia aktualizacji oprogramowania oraz uruchomienia testów wymagan
 Skrypt [tools/can_updater.py](file:///c:/WORK/5_v-box/tools/can_updater.py) obsługuje cztery główne tryby pracy:
 
 #### 1. Skanowanie magistrali CAN (`--scan`)
-Wykrywa wszystkie podłączone mikrokontrolery STM32C542, wyświetla ich 96-bitowy identyfikator UID, aktualny tryb pracy (`APPLICATION`, `BOOTLOADER` lub `RECOVERY`) oraz wersję oprogramowania:
+Wykrywa wszystkie podłączone mikrokontrolery STM32C542, wyświetla ich 96-bitowy identyfikator UID, aktualny tryb pracy (`APPLICATION`, `BOOTLOADER` lub `RECOVERY_MODE`) oraz wersję oprogramowania (automatycznie wykrywa adapter `candleLight` USB lub przyjmuje jawny parametr `--interface candle` / `--interface slcan --port COM17`):
 ```bash
-python tools/can_updater.py --interface slcan --channel COM17 --scan
+# Automatyczne wykrycie adaptera candleLight (WinUSB / gs_usb):
+python tools/can_updater.py --scan
+
+# Jawny wybór interfejsu candleLight lub SLCAN:
+python tools/can_updater.py --interface candle --scan
+python tools/can_updater.py --interface slcan --port COM17 --scan
 ```
 
 #### 2. Aktualizacja Aplikacji Głównej (`--file`)
 Wgrywa nowy plik binarny aplikacji `v_box.bin` do przestrzeni `0x08008000`. Jeśli na magistrali znajduje się tylko jedno urządzenie, parametr `--uid` można pominąć (skrypt automatycznie wybierze wykryty układ, przełączy go z Aplikacji do Bootloadera, skasuje Flash, prześle bloki, zweryfikuje CRC32 i uruchomi nową aplikację):
 ```bash
-python tools/can_updater.py --interface slcan --channel COM17 --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
+python tools/can_updater.py --file build/debug_GCC_NUCLEO-C542RC/v_box.bin
 ```
 *(Opcjonalnie przy wielu urządzeniach na magistrali wskaż docelowy węzeł: `--uid 46009900-19513531-31343039`).*
 
 #### 3. Zdalna Aktualizacja Bootloadera przez Staging Slot (`--update-bootloader`)
 Wgrywa nową wersję Bootloadera `v_box_boot.bin` do bufora pośredniego `0x08038000`, weryfikuje sumę CRC32 oraz tablicę wektorów Cortex-M33, a następnie atomowo aktualizuje sektor `0x08000000`:
 ```bash
-python tools/can_updater.py --interface slcan --channel COM17 --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin
+python tools/can_updater.py --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_box_boot.bin
 ```
 
 #### 4. Test przepustowości i stabilności bez zapisu Flash (`--dummy`)
 Przeprowadza pełny test protokołu ISO-TP i weryfikacji CRC32 w pamięci RAM bez zużywania cykli zapisu pamięci Flash:
 ```bash
-python tools/can_updater.py --interface slcan --channel COM17 --dummy --size 32768
+python tools/can_updater.py --dummy --size 32768
 ```
 
 ---

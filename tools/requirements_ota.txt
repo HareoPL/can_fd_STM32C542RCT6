@@ -1,3 +1,7 @@
 python-can>=4.0.0
 pyserial>=3.5
 PyQt6>=6.4.0; platform_system=="Windows"
+python-can-candle>=1.2.0; platform_system=="Windows"
+candle-api>=0.0.5; platform_system=="Windows"
+pyusb>=1.2.0
+libusb-package>=1.0.26; platform_system=="Windows"

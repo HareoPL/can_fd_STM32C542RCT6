@@ -10,14 +10,18 @@
 #include "ota_protocol.h"
 #include "isotp.h"
 #include "crc32.h"
+#include "mx_fdcan1.h"
 #include "mx_fdcan2.h"
 #include "safe_printf.h"
 #include <string.h>
 
 #define TAG                     "BOOT"
-#define PACKED_BOOT_VERSION     0x10U   /**< Bootloader version v1.0 */
+#define PACKED_BOOT_VERSION     0x11U   /**< Bootloader version v1.1 */
 
-static hal_fdcan_handle_t *s_hfdcan = NULL;
+static hal_fdcan_handle_t *s_hfdcan1 = NULL;
+static hal_fdcan_handle_t *s_hfdcan2 = NULL;
+static hal_fdcan_handle_t *s_active_hfdcan = NULL;
+static boot_mode_t s_boot_mode = BOOT_MODE_STAY_IN_BOOT;
 static isotp_link_t s_boot_isotp;
 static uint8_t s_mcu_uid[STM32C5_UID_LEN_BYTES];
 static bool s_target_selected = false;
@@ -78,18 +82,24 @@ static uint8_t fdcan_dlc_to_bytes(hal_fdcan_data_length_code_t dlc)
 }
 
 /**
- * @brief Low-level CAN frame transmission routine for ISO-TP and discovery announcements.
+ * @brief Low-level 29-bit Extended CAN frame transmission routine for ISO-TP and discovery announcements.
  */
 static bool boot_can_send_frame(uint32_t id, const uint8_t *data, uint8_t len)
 {
-    if (s_hfdcan == NULL || data == NULL)
+    hal_fdcan_handle_t *hfdcan = (s_active_hfdcan != NULL) ? s_active_hfdcan : s_hfdcan1;
+    if (hfdcan == NULL)
+    {
+        hfdcan = s_hfdcan2;
+    }
+
+    if (hfdcan == NULL || data == NULL)
     {
         return false;
     }
 
-    if (HAL_FDCAN_GetState(s_hfdcan) != HAL_FDCAN_STATE_ACTIVE)
+    if (HAL_FDCAN_GetState(hfdcan) != HAL_FDCAN_STATE_ACTIVE)
     {
-        if (HAL_FDCAN_Start(s_hfdcan) != HAL_OK)
+        if (HAL_FDCAN_Start(hfdcan) != HAL_OK)
         {
             return false;
         }
@@ -97,25 +107,25 @@ static bool boot_can_send_frame(uint32_t id, const uint8_t *data, uint8_t len)
 
     /* Wait for free TX buffer (up to 10 ms polling) */
     uint32_t t_timeout = 50000U;
-    while ((HAL_FDCAN_GetTxFifoFreeLevel(s_hfdcan) == 0U) && (t_timeout > 0U))
+    while ((HAL_FDCAN_GetTxFifoFreeLevel(hfdcan) == 0U) && (t_timeout > 0U))
     {
         t_timeout--;
     }
 
-    if (HAL_FDCAN_GetTxFifoFreeLevel(s_hfdcan) == 0U)
+    if (HAL_FDCAN_GetTxFifoFreeLevel(hfdcan) == 0U)
     {
         return false;
     }
 
     hal_fdcan_tx_header_t tx_header = {0};
-    tx_header.b.identifier = id & 0x7FFU;
-    tx_header.b.identifier_type = HAL_FDCAN_ID_STANDARD;
+    tx_header.b.identifier = id & 0x1FFFFFFFUL;
+    tx_header.b.identifier_type = HAL_FDCAN_ID_EXTENDED;
     tx_header.b.frame_type = HAL_FDCAN_FRAME_DATA;
     tx_header.b.data_length = bytes_to_fdcan_dlc(len);
     tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_CAN;
     tx_header.b.bit_rate_switch = HAL_FDCAN_BIT_RATE_SWITCH_OFF;
 
-    return (HAL_FDCAN_ReqTransmitMsgFromFIFOQ(s_hfdcan, &tx_header, data) == HAL_OK);
+    return (HAL_FDCAN_ReqTransmitMsgFromFIFOQ(hfdcan, &tx_header, data) == HAL_OK);
 }
 
 /**
@@ -128,35 +138,52 @@ static bool boot_isotp_can_tx_fn(uint32_t id, const uint8_t *data, uint8_t len, 
 }
 
 /**
- * @brief Handles broadcast discovery request CMD_DISCOVER_NODES (0xA0) from ID 0x7DF.
+ * @brief Handles broadcast discovery request CMD_DISCOVER_NODES (0xA0) from Extended ID 0x01F2F3DF.
  */
 static void handle_broadcast_discovery(const uint8_t *data, uint8_t len)
 {
-    if ((data == NULL) || (len < 2U))
+    if ((data == NULL) || (len < OTA_DISCOVERY_MIN_LEN))
     {
         return;
     }
 
-    if (data[1] != CMD_DISCOVER_NODES)
+    /* Validate command code and 4-byte "VBOX" authorization token */
+    if ((data[1] != CMD_DISCOVER_NODES) ||
+        (data[2] != OTA_MAGIC_TOKEN_0)  ||
+        (data[3] != OTA_MAGIC_TOKEN_1)  ||
+        (data[4] != OTA_MAGIC_TOKEN_2)  ||
+        (data[5] != OTA_MAGIC_TOKEN_3))
     {
         return;
     }
 
-    /* Frame 1 (0x7E9): [0x01, UID[0..6]] (8 bytes total) */
+    uint8_t reported_mode = (s_boot_mode == BOOT_MODE_RECOVERY) ? OTA_MODE_RECOVERY : OTA_MODE_BOOTLOADER;
+
+    /* Frame 1 (0x01F2F3E9): [0x01, UID[0..6]] (8 bytes total) */
     uint8_t frame1[8];
     frame1[0] = 0x01U;
     memcpy(&frame1[1], &s_mcu_uid[0], 7U);
     (void)boot_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame1, sizeof(frame1));
 
-    /* Frame 2 (0x7E9): [0x02, UID[7..11], Mode=BOOTLOADER (0), PackedVersion] (8 bytes total) */
+    /* Frame 2 (0x01F2F3E9): [0x02, UID[7..11], Mode (BOOTLOADER=0 or RECOVERY=2), PackedVersion] (8 bytes total) */
     uint8_t frame2[8];
     frame2[0] = 0x02U;
     memcpy(&frame2[1], &s_mcu_uid[7], 5U);
-    frame2[6] = OTA_MODE_BOOTLOADER;
+    frame2[6] = reported_mode;
     frame2[7] = PACKED_BOOT_VERSION;
     (void)boot_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame2, sizeof(frame2));
 
-    safe_printf(TAG, "[DISCOVERY] Responded on 0x7E9 (Bootloader mode)\r\n");
+    /* On-demand diagnostic crash beacon in Recovery Mode (zero unsolicited traffic on vehicle bus) */
+    if (s_boot_mode == BOOT_MODE_RECOVERY)
+    {
+        openbl_core_send_recovery_beacon((uint8_t)g_boot_shared.fault_reason,
+                                         (uint8_t)g_boot_shared.boot_fail_counter,
+                                         g_boot_shared.fault_pc);
+    }
+
+    safe_printf(TAG, "[DISCOVERY] Responded on 0x01F2F3E9 (%s, mode=%u)\r\n",
+                (s_active_hfdcan == s_hfdcan1) ? "CAN1" : "CAN2",
+                (unsigned int)reported_mode);
 }
 
 /**
@@ -440,9 +467,10 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
     }
 }
 
-void openbl_core_init(bool session_selected_init)
+void openbl_core_init(bool session_selected_init, boot_mode_t boot_mode, uint8_t active_can_bus)
 {
     s_target_selected = session_selected_init;
+    s_boot_mode = boot_mode;
 
     /* Read factory 96-bit Unique Device ID into cache using 32-bit aligned words */
     uint32_t uid_w0 = *((const volatile uint32_t *)(STM32C5_UID_BASE));
@@ -463,55 +491,106 @@ void openbl_core_init(bool session_selected_init)
     /* Initialize ISO-TP link */
     isotp_init(&s_boot_isotp, CAN_ID_ISOTP_REQ, CAN_ID_ISOTP_RESP, boot_isotp_can_tx_fn, boot_isotp_pdu_cb, NULL);
 
-    /* Initialize and start FDCAN2 */
-    s_hfdcan = mx_fdcan2_init();
-    if (s_hfdcan != NULL)
-    {
-        /* Accept non-matching standard/extended frames into RX FIFO 0 (open promiscuous filter) */
-        hal_fdcan_global_filter_config_t g_filter = {
-            .acceptance_non_matching_std = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
-            .acceptance_non_matching_ext = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
-            .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
-            .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
-        };
-        (void)HAL_FDCAN_SetGlobalFilter(s_hfdcan, &g_filter);
+    hal_fdcan_global_filter_config_t g_filter = {
+        .acceptance_non_matching_std = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_non_matching_ext = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
+        .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
+    };
 
-        (void)HAL_FDCAN_Start(s_hfdcan);
+    /* Initialize and start both FDCAN1 and FDCAN2 so single-CAN and dual-CAN boards both work seamlessly */
+    s_hfdcan1 = mx_fdcan1_init();
+    if (s_hfdcan1 != NULL)
+    {
+        (void)HAL_FDCAN_SetGlobalFilter(s_hfdcan1, &g_filter);
+        (void)HAL_FDCAN_Start(s_hfdcan1);
+    }
+
+    s_hfdcan2 = mx_fdcan2_init();
+    if (s_hfdcan2 != NULL)
+    {
+        (void)HAL_FDCAN_SetGlobalFilter(s_hfdcan2, &g_filter);
+        (void)HAL_FDCAN_Start(s_hfdcan2);
+    }
+
+    /* Select initial active bus from shared RAM handoff */
+    if (active_can_bus == BOOT_CAN_BUS_FDCAN1 && s_hfdcan1 != NULL)
+    {
+        s_active_hfdcan = s_hfdcan1;
+    }
+    else if (active_can_bus == BOOT_CAN_BUS_FDCAN2 && s_hfdcan2 != NULL)
+    {
+        s_active_hfdcan = s_hfdcan2;
+    }
+    else
+    {
+        s_active_hfdcan = NULL; /* Unlocked: will lock to whichever bus receives the first frame */
     }
 }
 
-void openbl_core_poll(void)
+/**
+ * @brief Polls a single FDCAN hardware instance RX FIFO 0 and locks active bus upon receiving a valid OTA frame.
+ */
+static void poll_fdcan_instance(hal_fdcan_handle_t *hfdcan)
 {
-    if (s_hfdcan == NULL)
+    if (hfdcan == NULL)
     {
         return;
     }
 
     uint32_t fill_level = 0U;
-    HAL_FDCAN_GetRxFifoFillLevel(s_hfdcan, HAL_FDCAN_RX_FIFO_0, &fill_level);
-
-    while (fill_level > 0U)
+    while (1)
     {
+        HAL_FDCAN_GetRxFifoFillLevel(hfdcan, HAL_FDCAN_RX_FIFO_0, &fill_level);
+        if (fill_level == 0U)
+        {
+            break;
+        }
+
         hal_fdcan_rx_header_t rx_header = {0};
         uint8_t rx_data[64] = {0};
 
-        if (HAL_FDCAN_GetReceivedMessage(s_hfdcan, HAL_FDCAN_RX_FIFO_0, &rx_header, rx_data) == HAL_OK)
+        if (HAL_FDCAN_GetReceivedMessage(hfdcan, HAL_FDCAN_RX_FIFO_0, &rx_header, rx_data) == HAL_OK)
         {
-            uint32_t can_id = rx_header.b.identifier;
-            uint8_t len = fdcan_dlc_to_bytes(rx_header.b.data_length);
-
-            if (can_id == CAN_ID_OTA_BROADCAST)
+            /* If an active CAN bus is locked, drain and ignore duplicate frames from the other bus */
+            if (s_active_hfdcan != NULL && hfdcan != s_active_hfdcan)
             {
-                handle_broadcast_discovery(rx_data, len);
+                continue;
             }
-            else if (can_id == CAN_ID_ISOTP_REQ)
+
+            /* Only accept 29-bit Extended CAN frames in the V-Box OTA namespace */
+            if (rx_header.b.identifier_type == HAL_FDCAN_ID_EXTENDED)
             {
-                isotp_on_can_frame(&s_boot_isotp, can_id, rx_data, len);
+                uint32_t can_id = rx_header.b.identifier;
+                uint8_t len = fdcan_dlc_to_bytes(rx_header.b.data_length);
+
+                if (can_id == CAN_ID_OTA_BROADCAST)
+                {
+                    if ((len >= OTA_DISCOVERY_MIN_LEN) &&
+                        (rx_data[1] == CMD_DISCOVER_NODES) &&
+                        (rx_data[2] == OTA_MAGIC_TOKEN_0)  &&
+                        (rx_data[3] == OTA_MAGIC_TOKEN_1)  &&
+                        (rx_data[4] == OTA_MAGIC_TOKEN_2)  &&
+                        (rx_data[5] == OTA_MAGIC_TOKEN_3))
+                    {
+                        s_active_hfdcan = hfdcan;
+                        handle_broadcast_discovery(rx_data, len);
+                    }
+                }
+                else if (can_id == CAN_ID_ISOTP_REQ)
+                {
+                    s_active_hfdcan = hfdcan;
+                    isotp_on_can_frame(&s_boot_isotp, can_id, rx_data, len);
+                }
             }
         }
-
-        fill_level--;
     }
+}
+
+void openbl_core_poll(void)
+{
+    poll_fdcan_instance(s_hfdcan1);
+    poll_fdcan_instance(s_hfdcan2);
 }
 
 bool openbl_core_is_session_active(void)

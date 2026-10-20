@@ -13,12 +13,23 @@ extern "C" {
 #endif
 
 /* ===========================================================================
- * CAN Arbitration Identifiers on FDCAN2 (11-bit Standard IDs)
+ * CAN Arbitration Identifiers (29-bit Extended IDs in V-Box Namespace)
+ * Eliminates collisions with standard 11-bit OBD-II / UDS vehicle traffic.
  * =========================================================================== */
-#define CAN_ID_OTA_BROADCAST            0x7DFU  /**< PC -> All Nodes: Discovery & Target Selection */
-#define CAN_ID_OTA_DISCOVERY_RESP       0x7E9U  /**< Node -> PC: Discovery Response */
-#define CAN_ID_ISOTP_REQ                0x7E0U  /**< PC -> Target Node: ISO-TP Requests (SF/FF/CF) */
-#define CAN_ID_ISOTP_RESP               0x7E8U  /**< Target Node -> PC: ISO-TP Responses & Flow Control */
+#define CAN_ID_OTA_BROADCAST            0x01F2F3DFUL  /**< PC -> All Nodes: Discovery & Broadcast */
+#define CAN_ID_OTA_DISCOVERY_RESP       0x01F2F3E9UL  /**< Node -> PC: Discovery Response & On-Demand SOS */
+#define CAN_ID_ISOTP_REQ                0x01F2F3E0UL  /**< PC -> Target Node: ISO-TP Requests (SF/FF/CF) */
+#define CAN_ID_ISOTP_RESP               0x01F2F3E8UL  /**< Target Node -> PC: ISO-TP Responses & Flow Control */
+
+/* ===========================================================================
+ * Broadcast Discovery Authorization Token ("VBOX")
+ * Frame format on 0x01F2F3DF: [0x06, CMD_DISCOVER_NODES, 'V', 'B', 'O', 'X', 0, 0]
+ * =========================================================================== */
+#define OTA_MAGIC_TOKEN_0               0x56U   /**< ASCII 'V' */
+#define OTA_MAGIC_TOKEN_1               0x42U   /**< ASCII 'B' */
+#define OTA_MAGIC_TOKEN_2               0x4FU   /**< ASCII 'O' */
+#define OTA_MAGIC_TOKEN_3               0x58U   /**< ASCII 'X' */
+#define OTA_DISCOVERY_MIN_LEN           6U      /**< Minimum frame length for valid discovery */
 
 /* ===========================================================================
  * Protocol Command Identifiers

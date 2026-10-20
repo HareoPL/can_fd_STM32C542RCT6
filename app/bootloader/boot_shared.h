@@ -27,6 +27,11 @@ extern "C" {
 /** @brief Application Flash end address (224 KB region) */
 #define BOOT_APP_END_ADDR               0x08040000UL
 
+/** @brief Active CAN bus identifiers for Bootloader handoff */
+#define BOOT_CAN_BUS_AUTO               0U  /**< Listen on both FDCAN1 and FDCAN2 */
+#define BOOT_CAN_BUS_FDCAN1             1U  /**< Use FDCAN1 as active OTA bus */
+#define BOOT_CAN_BUS_FDCAN2             2U  /**< Use FDCAN2 as active OTA bus */
+
 /**
  * @brief Bootloader fault reasons recorded during crashes.
  */
@@ -61,7 +66,8 @@ typedef struct
     uint32_t fault_reason;          /**< Fault reason code (boot_fault_reason_t) */
     uint32_t fault_pc;              /**< Program Counter at crash point */
     uint32_t fault_cfsr;            /**< Configurable Fault Status Register (SCB->CFSR) */
-    uint32_t reserved[9];           /**< Reserved for future expansion / 64-byte padding */
+    uint32_t active_can_bus;        /**< Active CAN bus index (0=Auto, 1=FDCAN1, 2=FDCAN2) */
+    uint32_t reserved[8];           /**< Reserved for future expansion / 64-byte padding */
     uint32_t crc32;                 /**< IEEE 802.3 CRC32 of preceding 15 words */
 } boot_shared_ram_t;
 
@@ -85,10 +91,11 @@ void boot_shared_update_crc(void);
 void boot_shared_clear(void);
 
 /**
- * @brief Sets the enter-bootloader request flag and resets the MCU.
+ * @brief Sets the enter-bootloader request flag and active CAN bus in shared RAM.
  * @param[in] session_selected Whether the CAN session is already selected.
+ * @param[in] active_can_bus Active CAN bus index (BOOT_CAN_BUS_AUTO / FDCAN1 / FDCAN2).
  */
-void boot_shared_request_bootloader(bool session_selected);
+void boot_shared_request_bootloader(bool session_selected, uint8_t active_can_bus);
 
 /**
  * @brief Records a system fault and updates CRC32 before reset.
