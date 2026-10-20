@@ -799,7 +799,7 @@ class CanBusMonitorWorker(QThread):
                 try:
                     new_beacons: List[Dict] = []
                     log_fn = self._emit_log if is_manual else None
-                    found_devs = can_updater.scan_nodes(self.bus, timeout=0.5, verbose=False,
+                    found_devs = can_updater.scan_nodes(self.bus, timeout=0.8, verbose=False,
                                                          log_cb=log_fn, beacons_out=new_beacons)
                     self._devices = found_devs
                     for b in new_beacons:
@@ -810,13 +810,13 @@ class CanBusMonitorWorker(QThread):
                     if is_manual:
                         self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
 
-            # Passive reception of 0x01F2F3E9 frames
+            # Passive reception of discovery response / crash beacon frames
             try:
                 rx_msg = self.bus.recv(timeout=0.04)
             except Exception:
                 rx_msg = None
 
-            if rx_msg and rx_msg.is_extended_id and rx_msg.arbitration_id == can_updater.CAN_ID_OTA_DISCOVERY_RESP and len(rx_msg.data) >= 8:
+            if rx_msg and rx_msg.is_extended_id and ((rx_msg.arbitration_id & can_updater.CAN_ID_OTA_DISCOVERY_RESP_MASK) == can_updater.CAN_ID_OTA_DISCOVERY_RESP_BASE) and len(rx_msg.data) >= 8:
                 sub_idx = rx_msg.data[0]
                 if sub_idx == 0xEE:
                     reason_code = rx_msg.data[1]

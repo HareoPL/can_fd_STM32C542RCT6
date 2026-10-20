@@ -116,7 +116,8 @@ Komunikacja aktualizacyjna oraz diagnostyczna OTA obsługuje jednocześnie oba k
   * `0x01F2F3DF` (`CAN_ID_OTA_BROADCAST`) – ramki rozgłoszeniowe Discovery (wymagają 4-bajtowego tokenu autoryzacyjnego `'V','B','O','X'` w bajtach `2..5`).
   * `0x01F2F3E0` (`CAN_ID_ISOTP_REQ`) – ramki żądań unicastowych ISO-TP z narzędzia PC.
   * `0x01F2F3E8` (`CAN_ID_ISOTP_RESP`) – ramki odpowiedzi ISO-TP z wybranego węzła STM32.
-  * `0x01F2F3E9` (`CAN_ID_OTA_DISCOVERY_RESP`) – odpowiedzi UID Discovery oraz ramka diagnostyczna `0xEE` (nadawana wyłącznie na żądanie po autoryzowanym zapytaniu `"VBOX"`, zero spontanicznego ruchu na magistrali auta!).
+  * `0x01F200E9..0x01F2FFE9` (`CAN_ID_OTA_DISCOVERY_RESP_NODE(hash) = 0x01F200E9 | (hash << 8)`) – bezkolizyjne odpowiedzi UID Discovery oraz ramka diagnostyczna `0xEE` (nadawane wyłącznie na żądanie po autoryzowanym zapytaniu `"VBOX"`, sprzętowy arbitraż CAN zapobiega kolizjom przy wielu węzłach!).
+  * `0x01F2F3E9` (`CAN_ID_OTA_DISCOVERY_RESP`) – domyślny/wsteczny identyfikator odpowiedzi Discovery (dla węzłów ze skrótem `0xF3`).
 * **Dynamiczny wybór aktywnej magistrali:** Zarówno `ota_manager` w aplikacji, jak i `openbl_core` w Bootloaderze automatycznie wykrywają, na którym interfejsie (`CAN1` lub `CAN2`) nadeszło zapytanie, i odsyłają odpowiedzi wyłącznie na ten sam interfejs (nie zapełniając bufora TX na nieobsadzonym porcie `CAN2`).
 * **Bezpieczeństwo przerwań FreeRTOS:** W plikach [mx_fdcan1.c](file:///c:/WORK/5_v-box/generated/hal/mx_fdcan1.c) i [mx_fdcan2.c](file:///c:/WORK/5_v-box/generated/hal/mx_fdcan2.c) przerwania `FDCAN1_IT0_IRQn` oraz `FDCAN2_IT0_IRQn` otrzymują jawnie priorytet wywłaszczania **5** (`HAL_CORTEX_NVIC_PREEMP_PRIORITY_5`), równy `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, co pozwala na bezpieczne wywoływanie `xSemaphoreGiveFromISR()` wewnątrz `HAL_FDCAN_RxFifo0Callback()`.
 

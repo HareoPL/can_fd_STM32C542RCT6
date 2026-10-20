@@ -266,12 +266,14 @@ def open_can_bus(interface: str,
 
 # ==============================================================================
 # Protocol Constants (aligned with app/ota_update/ota_protocol.h)
-# 29-bit Extended CAN IDs in proprietary V-Box namespace (0x01F2F3xx)
+# 29-bit Extended CAN IDs in proprietary V-Box namespace (0x01F2xxxx)
 # ==============================================================================
-CAN_ID_OTA_BROADCAST        = 0x01F2F3DF  # PC -> All Nodes (29-bit Extended Broadcast)
-CAN_ID_OTA_DISCOVERY_RESP   = 0x01F2F3E9  # Node -> PC (29-bit Extended Discovery Response)
-CAN_ID_ISOTP_REQ            = 0x01F2F3E0  # PC -> Selected Node (29-bit Extended ISO-TP Requests)
-CAN_ID_ISOTP_RESP           = 0x01F2F3E8  # Selected Node -> PC (29-bit Extended ISO-TP Responses)
+CAN_ID_OTA_BROADCAST           = 0x01F2F3DF  # PC -> All Nodes (29-bit Extended Broadcast)
+CAN_ID_OTA_DISCOVERY_RESP_BASE = 0x01F200E9  # Base Extended ID for node-addressed discovery response
+CAN_ID_OTA_DISCOVERY_RESP_MASK = 0x1FFF00FF  # Discovery Response Match Mask
+CAN_ID_OTA_DISCOVERY_RESP      = 0x01F2F3E9  # Legacy Discovery Response (hash=0xF3)
+CAN_ID_ISOTP_REQ               = 0x01F2F3E0  # PC -> Selected Node (29-bit Extended ISO-TP Requests)
+CAN_ID_ISOTP_RESP              = 0x01F2F3E8  # Selected Node -> PC (29-bit Extended ISO-TP Responses)
 
 OTA_MAGIC_TOKEN             = [0x56, 0x42, 0x4F, 0x58]  # ASCII "VBOX" authorization token
 
@@ -520,12 +522,13 @@ def parse_uid(raw_uid: str) -> bytes:
     return bytes.fromhex(clean)
 
 def scan_nodes(bus: can.BusABC,
-               timeout: float = 0.5,
+               timeout: float = 0.8,
                verbose: bool = False,
                log_cb: LogCallback = None,
                beacons_out: Optional[List[Dict]] = None) -> List[Dict]:
     """
-    Broadcasts CMD_DISCOVER_NODES (0xA0) with "VBOX" magic token on 0x01F2F3DF and collects announcements from 0x01F2F3E9.
+    Broadcasts CMD_DISCOVER_NODES (0xA0) with "VBOX" magic token on 0x01F2F3DF and collects announcements.
+    Matches node discovery responses using mask 0x1FFF00FF == 0x01F200E9 with non-destructive arbitration IDs.
     Computes 8-bit UID hash (XOR & 0xFF matching firmware beacon) and captures on-demand 0xEE CRASH_RECOVERY_BEACON frames.
     """
     scan_msg = "Scanning CAN bus (500 kbps) for STM32 devices..."
@@ -544,7 +547,7 @@ def scan_nodes(bus: can.BusABC,
     bus.send(msg)
 
     t_end = time.time() + timeout
-    pending_f1: Optional[bytes] = None
+    pending_f1: Dict[int, bytes] = {}
     devices = []
     seen_uids = set()
 
@@ -552,16 +555,18 @@ def scan_nodes(bus: can.BusABC,
         rx = bus.recv(timeout=0.02)
         if not rx or rx.arbitration_id == CAN_ID_OTA_BROADCAST:
             continue
-        if rx.is_extended_id and rx.arbitration_id == CAN_ID_OTA_DISCOVERY_RESP and len(rx.data) >= 8:
+        if rx.is_extended_id and ((rx.arbitration_id & CAN_ID_OTA_DISCOVERY_RESP_MASK) == CAN_ID_OTA_DISCOVERY_RESP_BASE) and len(rx.data) >= 8:
             sub_idx = rx.data[0]
+            node_can_id = rx.arbitration_id
             if verbose:
-                print(f"  [RAW 0x01F2F3E9] sub={sub_idx} payload={rx.data.hex()}")
+                print(f"  [RAW 0x{node_can_id:08X}] sub={sub_idx} payload={rx.data.hex()}")
 
             if sub_idx == 0x01:
-                pending_f1 = bytes(rx.data[1:8])
-            elif sub_idx == 0x02 and pending_f1 is not None:
+                pending_f1[node_can_id] = bytes(rx.data[1:8])
+            elif sub_idx == 0x02 and node_can_id in pending_f1:
+                f1 = pending_f1.pop(node_can_id)
                 f2 = bytes(rx.data[1:8])
-                uid_bytes = pending_f1[:7] + f2[:5]
+                uid_bytes = f1[:7] + f2[:5]
                 mode_byte = f2[5]
                 ver_byte = f2[6]
                 v_major = (ver_byte >> 4) & 0x0F
@@ -579,12 +584,12 @@ def scan_nodes(bus: can.BusABC,
                         "uid_crc_hash": uid_crc,
                         "mode": mode_str,
                         "mode_byte": mode_byte,
-                        "version": f"v{v_major}.{v_minor}"
+                        "version": f"v{v_major}.{v_minor}",
+                        "can_id": node_can_id
                     }
                     devices.append(dev_entry)
                     if log_cb:
                         log_cb("INFO", f"Discovered node: UID={dev_entry['uid_str']} (Hash=0x{uid_hash:02X}) Mode={mode_str} FW={dev_entry['version']}")
-                pending_f1 = None
             elif sub_idx == 0xEE:
                 reason_code = rx.data[1]
                 fail_cnt = rx.data[2]
@@ -604,7 +609,8 @@ def scan_nodes(bus: can.BusABC,
                     "fail_cnt": fail_cnt,
                     "uid_hash": uid_hash,
                     "pc": pc,
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    "can_id": node_can_id
                 }
                 if beacons_out is not None:
                     beacons_out.append(beacon_dict)

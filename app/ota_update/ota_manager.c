@@ -41,6 +41,7 @@ static TickType_t s_last_ota_rx_tick = 0U;
 
 /** @brief Timestamp of the last accepted broadcast discovery frame. */
 static TickType_t s_last_discovery_tick = 0U;
+static bool s_discovery_received = false;
 
 /** @brief FreeRTOS queue for incoming CAN messages dispatched from cp_boot_ota. */
 static QueueHandle_t s_ota_rx_queue = NULL;
@@ -85,33 +86,42 @@ static bool ota_can_send_frame(uint32_t can_id, const uint8_t *data, uint8_t len
  */
 static void handle_discovery_cmd(void)
 {
-    /* Calculate 32-bit CRC32 from our 12-byte UID */
+    /* Calculate 8-bit XOR hash and 32-bit CRC32 from our 12-byte UID */
+    uint8_t uid_hash = 0U;
+    for (size_t i = 0; i < STM32C5_UID_LEN_BYTES; i++)
+    {
+        uid_hash ^= s_mcu_uid[i];
+    }
     uint32_t uid_crc = crc32_calculate(s_mcu_uid, STM32C5_UID_LEN_BYTES);
 
-    /* Anti-collision slot delay: (CRC32 & 0x1F) * 3 ms -> 0 to 93 ms */
-    uint32_t slot_delay_ms = (uid_crc & 0x1FU) * 3U;
+    /* Anti-collision prime-modulo slot delay: 10 to 332 ms (prevents burst contention) */
+    uint32_t slot_delay_ms = 10U + ((uint32_t)(uid_crc ^ ((uint32_t)uid_hash << 16)) % 47U) * 7U;
     vTaskDelay(pdMS_TO_TICKS(slot_delay_ms));
+
+    /* Node-specific 29-bit CAN Extended ID guarantees non-destructive hardware arbitration */
+    uint32_t resp_id = CAN_ID_OTA_DISCOVERY_RESP_NODE(uid_hash);
 
     const app_version_info_t *ver = version_getInfo();
     uint8_t packed_ver = (uint8_t)(((ver->fw_major & 0x0FU) << 4) | (ver->fw_minor & 0x0FU));
 
-    /* Frame 1 (0x01F2F3E9): [0x01, UID[0..6]] (8 bytes total) */
+    /* Frame 1: [0x01, UID[0..6]] (8 bytes total) */
     uint8_t frame1[8];
     frame1[0] = 0x01U;
     memcpy(&frame1[1], &s_mcu_uid[0], 7U);
-    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame1, sizeof(frame1), s_active_can_inst);
+    (void)ota_can_send_frame(resp_id, frame1, sizeof(frame1), s_active_can_inst);
 
-    /* Frame 2 (0x01F2F3E9): [0x02, UID[7..11], Mode=1 (APP), PackedVersion] (8 bytes total) */
+    /* Frame 2: [0x02, UID[7..11], Mode=1 (APP), PackedVersion] (8 bytes total) */
     uint8_t frame2[8];
     frame2[0] = 0x02U;
     memcpy(&frame2[1], &s_mcu_uid[7], 5U);
     frame2[6] = OTA_MODE_APPLICATION;
     frame2[7] = packed_ver;
-    (void)ota_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame2, sizeof(frame2), s_active_can_inst);
+    (void)ota_can_send_frame(resp_id, frame2, sizeof(frame2), s_active_can_inst);
 
-    safe_printf(TAG, "[DISCOVERY] Responded on 0x01F2F3E9 (%s) after %lu ms slot (UID: %02X%02X%02X%02X...)\r\n",
+    safe_printf(TAG, "[DISCOVERY] Responded on 0x%08lX (%s) after %lu ms slot (UID: %02X%02X%02X%02X...)\r\n",
+                (unsigned long)resp_id,
                 (s_active_can_inst != NULL) ? s_active_can_inst->name : "CAN",
-                slot_delay_ms, s_mcu_uid[0], s_mcu_uid[1], s_mcu_uid[2], s_mcu_uid[3]);
+                (unsigned long)slot_delay_ms, s_mcu_uid[0], s_mcu_uid[1], s_mcu_uid[2], s_mcu_uid[3]);
 }
 
 /**
@@ -544,12 +554,13 @@ void ota_manager_feed_can_frame(const CAN_msg_t *msg)
     if (can_id == CAN_ID_OTA_BROADCAST)
     {
         /* If both CAN1 and CAN2 share the physical bus, drop duplicate discovery frames arriving within 100 ms */
-        if ((s_active_can_inst != NULL) && (rx_inst != s_active_can_inst) &&
+        if (s_discovery_received && (s_active_can_inst != NULL) && (rx_inst != s_active_can_inst) &&
             ((now - s_last_discovery_tick) < pdMS_TO_TICKS(100U)))
         {
             return;
         }
 
+        s_discovery_received = true;
         s_last_discovery_tick = now;
         s_last_ota_rx_tick = now;
         if (rx_inst != NULL)

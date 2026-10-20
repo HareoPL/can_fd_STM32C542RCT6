@@ -250,7 +250,8 @@ def test_1_app_corrupted_crc(bus: can.BusABC,
     t_guard_end = time.time() + 0.25
     while time.time() < t_guard_end:
         rx_guard = bus.recv(timeout=0.02)
-        if rx_guard and rx_guard.arbitration_id in (0x7E8, 0x7E9, can_updater.CAN_ID_OTA_DISCOVERY_RESP, can_updater.CAN_ID_ISOTP_RESP):
+        if rx_guard and (rx_guard.arbitration_id in (0x7E8, 0x7E9, can_updater.CAN_ID_ISOTP_RESP) or
+                         ((rx_guard.arbitration_id & can_updater.CAN_ID_OTA_DISCOVERY_RESP_MASK) == can_updater.CAN_ID_OTA_DISCOVERY_RESP_BASE)):
             return TestResult("T1", "Application", title, "FAIL", time.time() - t_start,
                               f"Collision guard failed: MCU responded to unauthorized frame (ID=0x{rx_guard.arbitration_id:X})!")
     print("  [OK] Collision guard verified: MCU remained 100% silent on unauthorized frames.")
@@ -346,7 +347,7 @@ def test_2_app_power_loss_recovery(bus_holder: List[can.BusABC],
     t_silent_end = time.time() + 1.5
     while time.time() < t_silent_end:
         rx_spont = bus.recv(timeout=0.05)
-        if rx_spont and rx_spont.arbitration_id == can_updater.CAN_ID_OTA_DISCOVERY_RESP:
+        if rx_spont and ((rx_spont.arbitration_id & can_updater.CAN_ID_OTA_DISCOVERY_RESP_MASK) == can_updater.CAN_ID_OTA_DISCOVERY_RESP_BASE):
             return TestResult("T2", "Application", title, "FAIL", time.time() - t_start,
                               "Bootloader emitted unsolicited frame on CAN bus in Recovery Mode!")
     print("  [OK] Silent Recovery verified: 0 unsolicited frames on vehicle CAN bus over 1.5s.")

@@ -17,7 +17,11 @@ extern "C" {
  * Eliminates collisions with standard 11-bit OBD-II / UDS vehicle traffic.
  * =========================================================================== */
 #define CAN_ID_OTA_BROADCAST            0x01F2F3DFUL  /**< PC -> All Nodes: Discovery & Broadcast */
-#define CAN_ID_OTA_DISCOVERY_RESP       0x01F2F3E9UL  /**< Node -> PC: Discovery Response & On-Demand SOS */
+#define CAN_ID_OTA_DISCOVERY_RESP_BASE  0x01F200E9UL  /**< Base Extended ID for node-addressed discovery response */
+#define CAN_ID_OTA_DISCOVERY_RESP_MASK  0x1FFF00FFUL  /**< Mask for matching discovery responses across all nodes */
+#define CAN_ID_OTA_DISCOVERY_RESP       0x01F2F3E9UL  /**< Legacy/Default Discovery Response ID (Node Hash 0xF3) */
+#define CAN_ID_OTA_DISCOVERY_RESP_NODE(hash) \
+    (CAN_ID_OTA_DISCOVERY_RESP_BASE | (((uint32_t)(hash) & 0xFFUL) << 8)) /**< Node-specific Discovery Response ID */
 #define CAN_ID_ISOTP_REQ                0x01F2F3E0UL  /**< PC -> Target Node: ISO-TP Requests (SF/FF/CF) */
 #define CAN_ID_ISOTP_RESP               0x01F2F3E8UL  /**< Target Node -> PC: ISO-TP Responses & Flow Control */
 

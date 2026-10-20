@@ -157,21 +157,39 @@ static void handle_broadcast_discovery(const uint8_t *data, uint8_t len)
         return;
     }
 
+    /* Calculate 8-bit XOR hash and 32-bit CRC32 from our 12-byte UID */
+    uint8_t uid_hash = 0U;
+    for (size_t i = 0; i < STM32C5_UID_LEN_BYTES; i++)
+    {
+        uid_hash ^= s_mcu_uid[i];
+    }
+    uint32_t uid_crc = crc32_calculate(s_mcu_uid, STM32C5_UID_LEN_BYTES);
+
+    /* Anti-collision prime-modulo slot delay: 10 to 332 ms (prevents simultaneous TX in bare-metal) */
+    uint32_t slot_delay_ms = 10U + ((uint32_t)(uid_crc ^ ((uint32_t)uid_hash << 16)) % 47U) * 7U;
+    for (volatile uint32_t i = 0; i < slot_delay_ms * 36000U; i++)
+    {
+        __NOP();
+    }
+
+    /* Node-specific 29-bit CAN Extended ID guarantees non-destructive hardware arbitration */
+    uint32_t resp_id = CAN_ID_OTA_DISCOVERY_RESP_NODE(uid_hash);
+
     uint8_t reported_mode = (s_boot_mode == BOOT_MODE_RECOVERY) ? OTA_MODE_RECOVERY : OTA_MODE_BOOTLOADER;
 
-    /* Frame 1 (0x01F2F3E9): [0x01, UID[0..6]] (8 bytes total) */
+    /* Frame 1: [0x01, UID[0..6]] (8 bytes total) */
     uint8_t frame1[8];
     frame1[0] = 0x01U;
     memcpy(&frame1[1], &s_mcu_uid[0], 7U);
-    (void)boot_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame1, sizeof(frame1));
+    (void)boot_can_send_frame(resp_id, frame1, sizeof(frame1));
 
-    /* Frame 2 (0x01F2F3E9): [0x02, UID[7..11], Mode (BOOTLOADER=0 or RECOVERY=2), PackedVersion] (8 bytes total) */
+    /* Frame 2: [0x02, UID[7..11], Mode (BOOTLOADER=0 or RECOVERY=2), PackedVersion] (8 bytes total) */
     uint8_t frame2[8];
     frame2[0] = 0x02U;
     memcpy(&frame2[1], &s_mcu_uid[7], 5U);
     frame2[6] = reported_mode;
     frame2[7] = PACKED_BOOT_VERSION;
-    (void)boot_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, frame2, sizeof(frame2));
+    (void)boot_can_send_frame(resp_id, frame2, sizeof(frame2));
 
     /* On-demand diagnostic crash beacon in Recovery Mode (zero unsolicited traffic on vehicle bus) */
     if (s_boot_mode == BOOT_MODE_RECOVERY)
@@ -181,9 +199,11 @@ static void handle_broadcast_discovery(const uint8_t *data, uint8_t len)
                                          g_boot_shared.fault_pc);
     }
 
-    safe_printf(TAG, "[DISCOVERY] Responded on 0x01F2F3E9 (%s, mode=%u)\r\n",
+    safe_printf(TAG, "[DISCOVERY] Responded on 0x%08lX (%s, mode=%u) after %lu ms slot\r\n",
+                (unsigned long)resp_id,
                 (s_active_hfdcan == s_hfdcan1) ? "CAN1" : "CAN2",
-                (unsigned int)reported_mode);
+                (unsigned int)reported_mode,
+                (unsigned long)slot_delay_ms);
 }
 
 /**
@@ -616,5 +636,6 @@ void openbl_core_send_recovery_beacon(uint8_t reason, uint8_t fail_cnt, uint32_t
     beacon[6] = (uint8_t)((pc >> 16) & 0xFFU);
     beacon[7] = (uint8_t)((pc >> 24) & 0xFFU);
 
-    (void)boot_can_send_frame(CAN_ID_OTA_DISCOVERY_RESP, beacon, sizeof(beacon));
+    uint32_t resp_id = CAN_ID_OTA_DISCOVERY_RESP_NODE(uid_hash);
+    (void)boot_can_send_frame(resp_id, beacon, sizeof(beacon));
 }

@@ -125,8 +125,8 @@ int main(void)
     return (-1);
   }
 
-  /* 4. Inicjalizacja menedżera aktualizacji OTA (Dummy Update Worker i ISO-TP) */
-  if (!ota_manager_init(&can2_inst))
+  /* 4. Inicjalizacja menedżera aktualizacji OTA (Dummy Update Worker i ISO-TP na CAN1) */
+  if (!ota_manager_init(&can1_inst))
   {
     safe_printf(NULL, "[MAIN] ERROR: OTA manager init failed!\r\n");
     return (-1);
