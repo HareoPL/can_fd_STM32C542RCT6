@@ -2,6 +2,21 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-21]
+### Zmienione
+- **Dynamiczne rozszerzanie tabeli wykrytych węzłów STM32 w GUI (`tools/can_updater_gui.py`):**
+  - Usunięto sztywne limity wysokości grupy i tabeli (`grp.setMaximumHeight(160)` oraz `table_devices.setMaximumHeight(105)`), które ograniczały widok listy do zaledwie ~1.5 wiersza.
+  - Ustawiono współczynnik rozciągania `stretch=1` oraz politykę `Expanding` dla panelu tabeli urządzeń (`TABELA WYKRYTYCH WĘZŁÓW STM32`), dzięki czemu powiększenie lub maksymalizacja okna aplikacji w całości dynamicznie rozszerza tabelę węzłów (umożliwiając wygodny podgląd wielu urządzeń w sieci).
+  - Ustabilizowano pozostałe segmenty interfejsu (panel połączenia, kafelki dashboardu KPI, panel wyboru wsadu i potoku wykonania oraz terminal logów) na stałych, czytelnych pozycjach (`stretch=0`), zapobiegając ich niepożądanemu rozsuwaniu.
+  - Włączono naprzemienne kolorowanie wierszy tabeli (`setAlternatingRowColors(True)`), zablokowano przypadkową edycję komórek (`NoEditTriggers`) oraz dodano dedykowane style w ciemnym motywie inżynierskim (`DARK_ENGINEERING_THEME`) dla `QTableWidget` i `QTableWidget::item`.
+
+### Naprawione
+- **Bezpieczne zamykanie magistrali `CandleBus` oraz eliminacja ostrzeżeń i wyjątków podczas zamykania GUI (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
+  - Wyeliminowano błąd `CandleBus was not properly shut down` oraz wyjątek `Exception ignored in: <function BusABC.__del__>` (powodowany przez nieosłonięte wywołanie `[ch.reset() for ch in self._channels.values()]` w `candle_bus.py` podczas destrukcji obiektów przez Garbage Collector Pythona).
+  - Wdrożono wrapper `_wrap_candle_bus_safe_shutdown(bus)` w `tools/can_updater.py`, który zapewnia idempotentne wywołanie `bus.shutdown()`, bezpieczny reset kanałów w bloku `try...except` bez rzucania wyjątków w procedurze odśmiecania pamięci oraz wczesne ustawienie flagi `_is_shutdown = True`.
+  - W wątku `CanBusMonitorWorker` wprowadzono metodę `_cleanup_bus()` oraz objęto pętlę roboczą blokiem `try ... finally`, gwarantując natychmiastowe i bezwyjątkowe zwalnianie interfejsu CAN przy zatrzymaniu wątku.
+  - W procedurze `closeEvent` oraz rozłączaniu magistrali `_toggle_can_connection` zaimplementowano bezpieczne oczekiwanie na zakończenie wątku monitorującego (`wait(2000)`) i zwolnienie zasobów USB przed zamknięciem okna.
+
 ## [2026-10-20]
 ### Dodane
 - **Bezkolizyjny protokół Automotive-Safe OTA (29-bit Extended ID `0x01F2F3xx` + Token `"VBOX"`) (`app/ota_update/ota_protocol.h`, `cp_boot_ota.c`, `ota_manager.c`, `openbl_core.c`):**

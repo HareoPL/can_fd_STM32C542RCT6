@@ -196,6 +196,59 @@ def resolve_can_interface_and_channel(interface: Optional[str], channel: Optiona
     return iface, ch
 
 
+def _wrap_candle_bus_safe_shutdown(bus: can.BusABC) -> can.BusABC:
+    """
+    Wraps CandleBus/gs_usb shutdown to make it idempotent and exception-safe.
+    Prevents 'CandleBus was not properly shut down' and 'Exception ignored in BusABC.__del__'
+    during Python interpreter teardown or garbage collection.
+    """
+    if bus is None:
+        return bus
+
+    orig_shutdown = getattr(bus, "shutdown", None)
+    if not orig_shutdown or getattr(bus, "_safe_shutdown_wrapped", False):
+        return bus
+
+    def safe_shutdown():
+        if getattr(bus, "_is_shutdown", False):
+            return
+        bus._is_shutdown = True
+
+        channels = getattr(bus, "_channels", None)
+        if isinstance(channels, dict):
+            for ch in list(channels.values()):
+                try:
+                    ch.reset()
+                except Exception:
+                    pass
+            # Clear _channels before calling orig_shutdown so CandleBus.shutdown's
+            # unshielded [ch.reset()] list comprehension does not re-raise during exit
+            bus._channels = {}
+
+        try:
+            orig_shutdown()
+        except Exception:
+            pass
+
+    bus.shutdown = safe_shutdown
+    bus._safe_shutdown_wrapped = True
+
+    # Also patch __del__ on the bus class if not already patched
+    bus_cls = type(bus)
+    if not getattr(bus_cls, "_safe_del_patched", False):
+        def safe_del(self):
+            try:
+                if not getattr(self, "_is_shutdown", False):
+                    self.shutdown()
+            except Exception:
+                pass
+
+        bus_cls.__del__ = safe_del
+        bus_cls._safe_del_patched = True
+
+    return bus
+
+
 def open_can_bus(interface: str,
                  channel: Optional[str] = None,
                  bitrate: int = 500000,
@@ -210,7 +263,7 @@ def open_can_bus(interface: str,
         last_err = None
         if CANDLE_BUS_AVAILABLE:
             try:
-                return can.Bus(
+                bus = can.Bus(
                     interface="candle",
                     channel=ch_idx,
                     bitrate=int(bitrate),
@@ -218,16 +271,18 @@ def open_can_bus(interface: str,
                     fd=False,
                     listen_only=bool(listen_only),
                 )
+                return _wrap_candle_bus_safe_shutdown(bus)
             except Exception as e:
                 last_err = e
         # Fallback to gs_usb if python-can-candle is not installed or failed
         try:
             _init_gs_usb_backend()
-            return can.Bus(
+            bus = can.Bus(
                 interface="gs_usb",
                 channel=ch_idx,
                 bitrate=int(bitrate),
             )
+            return _wrap_candle_bus_safe_shutdown(bus)
         except Exception as e_gs:
             err_msg = str(last_err or e_gs)
             raise RuntimeError(
@@ -238,11 +293,12 @@ def open_can_bus(interface: str,
         ch_idx = parse_candle_channel_index(resolved_ch)
         _init_gs_usb_backend()
         try:
-            return can.Bus(
+            bus = can.Bus(
                 interface="gs_usb",
                 channel=ch_idx,
                 bitrate=int(bitrate),
             )
+            return _wrap_candle_bus_safe_shutdown(bus)
         except Exception as e_gs:
             raise RuntimeError(
                 f"{e_gs} (Upewnij się, że adapter candleLight nie jest zajęty przez inny program, np. Serial Commander)"

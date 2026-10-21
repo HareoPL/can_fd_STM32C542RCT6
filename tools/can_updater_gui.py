@@ -55,7 +55,7 @@ try:
         QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
         QTabWidget, QPlainTextEdit, QFileDialog, QMessageBox,
         QRadioButton, QCheckBox, QGroupBox, QFrame, QSplitter, QButtonGroup,
-        QSpinBox, QMenu
+        QSpinBox, QMenu, QSizePolicy
     )
     from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QPoint
     from PyQt6.QtGui import QColor, QFont, QTextCursor, QIcon, QPalette, QBrush, QAction
@@ -68,6 +68,10 @@ try:
     HEADER_RESIZE_TO_CONTENTS = QHeaderView.ResizeMode.ResizeToContents
     TABLE_SELECT_ROWS = QTableWidget.SelectionBehavior.SelectRows
     TABLE_SINGLE_SELECTION = QTableWidget.SelectionMode.SingleSelection
+    TABLE_NO_EDIT_TRIGGERS = QTableWidget.EditTrigger.NoEditTriggers
+    SIZE_POLICY_EXPANDING = QSizePolicy.Policy.Expanding
+    SIZE_POLICY_FIXED = QSizePolicy.Policy.Fixed
+    SIZE_POLICY_PREFERRED = QSizePolicy.Policy.Preferred
 except ImportError:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -75,7 +79,7 @@ except ImportError:
         QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView,
         QTabWidget, QPlainTextEdit, QFileDialog, QMessageBox,
         QRadioButton, QCheckBox, QGroupBox, QFrame, QSplitter, QButtonGroup,
-        QSpinBox, QMenu, QAction
+        QSpinBox, QMenu, QAction, QSizePolicy
     )
     from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QPoint
     from PyQt5.QtGui import QColor, QFont, QTextCursor, QIcon, QPalette, QBrush
@@ -88,6 +92,10 @@ except ImportError:
     HEADER_RESIZE_TO_CONTENTS = QHeaderView.ResizeToContents
     TABLE_SELECT_ROWS = QTableWidget.SelectRows
     TABLE_SINGLE_SELECTION = QTableWidget.SingleSelection
+    TABLE_NO_EDIT_TRIGGERS = QTableWidget.NoEditTriggers
+    SIZE_POLICY_EXPANDING = QSizePolicy.Expanding
+    SIZE_POLICY_FIXED = QSizePolicy.Fixed
+    SIZE_POLICY_PREFERRED = QSizePolicy.Preferred
 
 # ==============================================================================
 # Dark Engineering Theme (QSS)
@@ -189,12 +197,20 @@ QComboBox QAbstractItemView {
 }
 QTableWidget {
     background-color: #0B0F19;
+    alternate-background-color: #111827;
     border: 1px solid #2D3748;
     border-radius: 6px;
     gridline-color: #1E293B;
     color: #F8FAFC;
     selection-background-color: #1E3A8A;
     selection-color: #FFFFFF;
+}
+QTableWidget::item {
+    padding: 3px 6px;
+}
+QTableWidget::item:selected {
+    background-color: #1D4ED8;
+    color: #FFFFFF;
 }
 QHeaderView::section {
     background-color: #1E293B;
@@ -759,7 +775,19 @@ class CanBusMonitorWorker(QThread):
     def stop(self):
         """Stops the monitoring thread and releases bus resource."""
         self._running = False
-        self.wait(1000)
+        if not self.wait(2000):
+            self._cleanup_bus()
+            self.wait(500)
+
+    def _cleanup_bus(self):
+        """Safely and idempotently shuts down the CAN bus interface."""
+        bus = self.bus
+        self.bus = None
+        if bus:
+            try:
+                bus.shutdown()
+            except Exception:
+                pass
 
     def _emit_log(self, level: str, msg: str):
         self.sig_log.emit(level, msg)
@@ -779,78 +807,73 @@ class CanBusMonitorWorker(QThread):
         # Perform initial scan immediately on connect
         self._scan_requested = True
 
-        while self._running:
-            if self._flashing_active:
-                time.sleep(0.1)
-                continue
+        try:
+            while self._running:
+                if self._flashing_active:
+                    time.sleep(0.1)
+                    continue
 
-            now = time.time()
+                now = time.time()
 
-            # Periodic pruning of stale/expired recovery beacons (every 1.0s)
-            if now - self._last_beacon_prune > 1.0:
-                self._last_beacon_prune = now
-                self._prune_stale_beacons()
-
-            # Check if active discovery scan is requested
-            if self._scan_requested or (self.auto_scan_enabled and (now - self._last_auto_scan) > 3.0):
-                is_manual = self._scan_requested
-                self._scan_requested = False
-                self._last_auto_scan = now
-                try:
-                    new_beacons: List[Dict] = []
-                    log_fn = self._emit_log if is_manual else None
-                    found_devs = can_updater.scan_nodes(self.bus, timeout=0.8, verbose=False,
-                                                         log_cb=log_fn, beacons_out=new_beacons)
-                    self._devices = found_devs
-                    for b in new_beacons:
-                        self._process_beacon(b)
+                # Periodic pruning of stale/expired recovery beacons (every 1.0s)
+                if now - self._last_beacon_prune > 1.0:
+                    self._last_beacon_prune = now
                     self._prune_stale_beacons()
-                    self.sig_devices_updated.emit(self._devices, self._beacons)
-                except Exception as e:
-                    if is_manual:
-                        self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
 
-            # Passive reception of discovery response / crash beacon frames
-            try:
-                rx_msg = self.bus.recv(timeout=0.04)
-            except Exception:
-                rx_msg = None
+                # Check if active discovery scan is requested
+                if self._scan_requested or (self.auto_scan_enabled and (now - self._last_auto_scan) > 3.0):
+                    is_manual = self._scan_requested
+                    self._scan_requested = False
+                    self._last_auto_scan = now
+                    try:
+                        new_beacons: List[Dict] = []
+                        log_fn = self._emit_log if is_manual else None
+                        found_devs = can_updater.scan_nodes(self.bus, timeout=0.8, verbose=False,
+                                                             log_cb=log_fn, beacons_out=new_beacons)
+                        self._devices = found_devs
+                        for b in new_beacons:
+                            self._process_beacon(b)
+                        self._prune_stale_beacons()
+                        self.sig_devices_updated.emit(self._devices, self._beacons)
+                    except Exception as e:
+                        if is_manual:
+                            self.sig_log.emit("WARN", f"Błąd podczas skanowania węzłów: {e}")
 
-            if rx_msg and rx_msg.is_extended_id and ((rx_msg.arbitration_id & can_updater.CAN_ID_OTA_DISCOVERY_RESP_MASK) == can_updater.CAN_ID_OTA_DISCOVERY_RESP_BASE) and len(rx_msg.data) >= 8:
-                sub_idx = rx_msg.data[0]
-                if sub_idx == 0xEE:
-                    reason_code = rx_msg.data[1]
-                    fail_cnt = rx_msg.data[2]
-                    uid_hash = rx_msg.data[3]
-                    pc = rx_msg.data[4] | (rx_msg.data[5] << 8) | (rx_msg.data[6] << 16) | (rx_msg.data[7] << 24)
-                    reason_map = {
-                        0x00: "NONE",
-                        0x01: "HARDFAULT",
-                        0x02: "RTOS_ASSERT",
-                        0x03: "WATCHDOG",
-                        0x04: "NO_APP (Blank/Missing Flash)"
-                    }
-                    beacon_dict = {
-                        "reason_code": reason_code,
-                        "reason_str": reason_map.get(reason_code, f"UNKNOWN(0x{reason_code:02X})"),
-                        "fail_cnt": fail_cnt,
-                        "uid_hash": uid_hash,
-                        "pc": pc,
-                        "timestamp": time.time()
-                    }
-                    self._process_beacon(beacon_dict)
+                # Passive reception of discovery response / crash beacon frames
+                try:
+                    rx_msg = self.bus.recv(timeout=0.04) if self.bus else None
+                except Exception:
+                    rx_msg = None
 
-            time.sleep(0.01)
+                if rx_msg and rx_msg.is_extended_id and ((rx_msg.arbitration_id & can_updater.CAN_ID_OTA_DISCOVERY_RESP_MASK) == can_updater.CAN_ID_OTA_DISCOVERY_RESP_BASE) and len(rx_msg.data) >= 8:
+                    sub_idx = rx_msg.data[0]
+                    if sub_idx == 0xEE:
+                        reason_code = rx_msg.data[1]
+                        fail_cnt = rx_msg.data[2]
+                        uid_hash = rx_msg.data[3]
+                        pc = rx_msg.data[4] | (rx_msg.data[5] << 8) | (rx_msg.data[6] << 16) | (rx_msg.data[7] << 24)
+                        reason_map = {
+                            0x00: "NONE",
+                            0x01: "HARDFAULT",
+                            0x02: "RTOS_ASSERT",
+                            0x03: "WATCHDOG",
+                            0x04: "NO_APP (Blank/Missing Flash)"
+                        }
+                        beacon_dict = {
+                            "reason_code": reason_code,
+                            "reason_str": reason_map.get(reason_code, f"UNKNOWN(0x{reason_code:02X})"),
+                            "fail_cnt": fail_cnt,
+                            "uid_hash": uid_hash,
+                            "pc": pc,
+                            "timestamp": time.time()
+                        }
+                        self._process_beacon(beacon_dict)
 
-        # Cleanup on exit
-        if self.bus:
-            try:
-                self.bus.shutdown()
-            except Exception:
-                pass
-            self.bus = None
-        self.sig_bus_status.emit(False, "Rozłączono")
-        self.sig_log.emit("INFO", "Zamknięto magistralę CAN.")
+                time.sleep(0.01)
+        finally:
+            self._cleanup_bus()
+            self.sig_bus_status.emit(False, "Rozłączono")
+            self.sig_log.emit("INFO", "Zamknięto magistralę CAN.")
 
     def _process_beacon(self, beacon_dict: Dict):
         """Registers beacon and queries full 96-bit UID if needed."""
@@ -1414,29 +1437,37 @@ class CanUpdaterMainWindow(QMainWindow):
         main_vbox.setContentsMargins(14, 8, 14, 8)
         main_vbox.setSpacing(6)
 
-        # Zone 1: Connection Panel
-        main_vbox.addWidget(self._create_connection_panel())
+        # Zone 1: Connection Panel (Fixed/Compact height)
+        panel_conn = self._create_connection_panel()
+        panel_conn.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
+        main_vbox.addWidget(panel_conn, 0)
 
-        # Zone 2: Fleet Dashboard (3 KPI Cards)
-        main_vbox.addWidget(self._create_fleet_dashboard())
+        # Zone 2: Fleet Dashboard (3 KPI Cards, Fixed height)
+        panel_dashboard = self._create_fleet_dashboard()
+        panel_dashboard.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
+        main_vbox.addWidget(panel_dashboard, 0)
 
-        # Zone 3: Device Table Panel
-        main_vbox.addWidget(self._create_device_table_panel())
+        # Zone 3: Device Table Panel (DYNAMIC VERTICAL EXPANSION - STRETCH 1)
+        self.panel_table = self._create_device_table_panel()
+        main_vbox.addWidget(self.panel_table, 1)
 
-        # Zone 4: Lower sub-zone (Config & Pipeline Stepper side by side)
+        # Zone 4: Lower sub-zone (Config & Pipeline Stepper side by side, Fixed height)
         lower_widget = QWidget()
+        lower_widget.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
         lower_hbox = QHBoxLayout(lower_widget)
         lower_hbox.setContentsMargins(0, 0, 0, 0)
         lower_hbox.setSpacing(10)
 
         lower_hbox.addWidget(self._create_firmware_config_panel(), 1)
         lower_hbox.addWidget(self._create_progress_pipeline_panel(), 1)
-        main_vbox.addWidget(lower_widget)
+        main_vbox.addWidget(lower_widget, 0)
 
-        # Zone 5: Dual Terminal Panel (CAN ISO-TP Log + UART2 Serial Monitor)
+        # Zone 5: Dual Terminal Panel (CAN ISO-TP Log + UART2 Serial Monitor - Stable height)
         terminal_panel = self._create_dual_terminal_panel()
-        terminal_panel.setMinimumHeight(140)
-        main_vbox.addWidget(terminal_panel, 1)
+        terminal_panel.setMinimumHeight(160)
+        terminal_panel.setMaximumHeight(210)
+        terminal_panel.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
+        main_vbox.addWidget(terminal_panel, 0)
 
     def _create_connection_panel(self) -> QGroupBox:
         grp = QGroupBox("POŁĄCZENIE MAGISTRALI CAN (candleLight WinUSB / CANable SLCAN)")
@@ -1525,8 +1556,8 @@ class CanUpdaterMainWindow(QMainWindow):
 
     def _create_device_table_panel(self) -> QGroupBox:
         grp = QGroupBox("TABELA WYKRYTYCH WĘZŁÓW STM32")
-        grp.setMinimumHeight(135)
-        grp.setMaximumHeight(160)
+        grp.setMinimumHeight(150)
+        grp.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_EXPANDING)
         layout = QVBoxLayout(grp)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
@@ -1593,10 +1624,12 @@ class CanUpdaterMainWindow(QMainWindow):
         ])
         self.table_devices.setSelectionBehavior(TABLE_SELECT_ROWS)
         self.table_devices.setSelectionMode(TABLE_SINGLE_SELECTION)
+        self.table_devices.setEditTriggers(TABLE_NO_EDIT_TRIGGERS)
+        self.table_devices.setAlternatingRowColors(True)
         self.table_devices.verticalHeader().setVisible(False)
-        self.table_devices.verticalHeader().setDefaultSectionSize(26)
-        self.table_devices.setMinimumHeight(75)
-        self.table_devices.setMaximumHeight(105)
+        self.table_devices.verticalHeader().setDefaultSectionSize(28)
+        self.table_devices.setMinimumHeight(100)
+        self.table_devices.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_EXPANDING)
         if QT_VERSION == 6:
             self.table_devices.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self.table_devices.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -2890,14 +2923,23 @@ class CanUpdaterMainWindow(QMainWindow):
                 event.ignore()
                 return
             self.flash_worker.request_cancel()
-            self.flash_worker.wait(1000)
+            self.flash_worker.wait(1500)
 
-        if self.monitor_worker:
+        if self.monitor_worker and self.monitor_worker.isRunning():
             self.monitor_worker.stop()
-        if self.uart_worker:
+            self.monitor_worker = None
+        elif self.monitor_worker:
+            self.monitor_worker._cleanup_bus()
+            self.monitor_worker = None
+
+        if self.uart_worker and self.uart_worker.isRunning():
             self.uart_worker.stop()
+            self.uart_worker = None
+
         if self.build_worker and self.build_worker.isRunning():
             self.build_worker.terminate()
+            self.build_worker = None
+
         event.accept()
 
 
