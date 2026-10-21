@@ -934,7 +934,7 @@ class OtaFlashWorker(QThread):
 
     def __init__(self, bus: can.BusABC, target_uid: bytes, firmware_data: bytes,
                  update_type: str = "APP", app_address: int = 0x08008000,
-                 block_size: int = 256, verbose: bool = False):
+                 block_size: int = can_updater.DEFAULT_BLOCK_SIZE, verbose: bool = False):
         super().__init__()
         self.bus = bus
         self.target_uid = target_uid
@@ -2693,7 +2693,7 @@ class CanUpdaterMainWindow(QMainWindow):
             firmware_data=payload,
             update_type=target_mode,
             app_address=0x08008000 if target_mode == "APP" else 0x08038000,
-            block_size=256,
+            block_size=can_updater.DEFAULT_BLOCK_SIZE,
             verbose=self.chk_verbose_can.isChecked()
         )
         self.flash_worker.sig_step_changed.connect(self._on_flash_step_changed)

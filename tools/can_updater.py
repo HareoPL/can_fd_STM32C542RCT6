@@ -382,6 +382,36 @@ def decode_nack(resp: Optional[bytes]) -> str:
 # ==============================================================================
 # ISO 15765-2 (ISO-TP) Transport Layer Client
 # ==============================================================================
+
+# Maximum OTA write block size accepted by the firmware (OTA_MAX_BLOCK_SIZE in app/ota_update/ota_protocol.h)
+MAX_BLOCK_SIZE = 1024
+DEFAULT_BLOCK_SIZE = MAX_BLOCK_SIZE
+
+# Below this separation time a busy-wait is used instead of time.sleep() (Windows sleep granularity ~1-15 ms)
+_BUSY_WAIT_THRESHOLD_S = 0.002
+
+# How long a single frame transmission may be retried when the USB-CAN adapter TX buffer is full
+_TX_RETRY_WINDOW_S = 0.1
+
+
+def stmin_to_seconds(st_min: int) -> float:
+    """Decodes an ISO 15765-2 STmin byte: 0x00-0x7F = 0-127 ms, 0xF1-0xF9 = 100-900 us, reserved = 127 ms."""
+    if st_min <= 0x7F:
+        return st_min / 1000.0
+    if 0xF1 <= st_min <= 0xF9:
+        return (st_min - 0xF0) * 100e-6
+    return 0.127
+
+
+def _wait_until(t_target: float) -> None:
+    """Waits until the perf_counter reaches t_target (sleeps for long waits, busy-waits for sub-2 ms precision)."""
+    remaining = t_target - time.perf_counter()
+    if remaining > _BUSY_WAIT_THRESHOLD_S:
+        time.sleep(remaining - _BUSY_WAIT_THRESHOLD_S)
+    while time.perf_counter() < t_target:
+        pass
+
+
 class IsoTpClient:
     """
     Lightweight, pure-python ISO 15765-2 endpoint operating over standard 8-byte CAN frames.
@@ -392,6 +422,42 @@ class IsoTpClient:
         self.tx_id = tx_id
         self.rx_id = rx_id
         self.verbose = verbose
+
+    def _send_frame(self, msg: can.Message) -> None:
+        """Sends one CAN frame, retrying briefly if the adapter TX buffer is temporarily full."""
+        t_deadline = time.perf_counter() + _TX_RETRY_WINDOW_S
+        while True:
+            try:
+                self.bus.send(msg)
+                return
+            except can.CanError:
+                if time.perf_counter() >= t_deadline:
+                    raise
+                time.sleep(0.0005)
+
+    def _wait_flow_control(self, timeout: float) -> Optional[Tuple[int, int]]:
+        """Waits for a Flow Control CTS frame and returns (block_size, st_min), or None on timeout/overflow."""
+        t_deadline = time.time() + timeout
+        while time.time() < t_deadline:
+            rx_msg = self.bus.recv(timeout=0.05)
+            if not rx_msg:
+                continue
+            if rx_msg.is_extended_id and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
+                if (rx_msg.data[0] & 0xF0) != 0x30:
+                    continue
+                fs = rx_msg.data[0] & 0x0F
+                block_size = rx_msg.data[1]
+                st_min = rx_msg.data[2]
+                if self.verbose:
+                    print(f"  [ISO-TP RX FC] FS={fs}, BS={block_size}, STmin=0x{st_min:02X} "
+                          f"({stmin_to_seconds(st_min) * 1e6:.0f} us)")
+                if fs == 0x00:  # Clear To Send (CTS)
+                    return block_size, st_min
+                if fs == 0x02:  # Overflow
+                    print("  [ISO-TP ERROR] Receiver reported buffer overflow (FC Overflow)", file=sys.stderr)
+                    return None
+                # fs == 0x01 (Wait): keep waiting for the next FC within the same deadline
+        return None
 
     def send_pdu(self, pdu: bytes, timeout: float = 1.0) -> bool:
         """Transmits an ISO-TP PDU (Single Frame if <= 7 bytes, Multi-Frame otherwise)."""
@@ -406,7 +472,7 @@ class IsoTpClient:
             msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=frame_data)
             if self.verbose:
                 print(f"  [ISO-TP TX SF] {bytes(frame_data).hex()}")
-            self.bus.send(msg)
+            self._send_frame(msg)
             return True
 
         # Multi-Frame: First Frame (FF)
@@ -415,43 +481,22 @@ class IsoTpClient:
         msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=frame_data)
         if self.verbose:
             print(f"  [ISO-TP TX FF] {bytes(frame_data).hex()} (len={length})")
-        self.bus.send(msg)
+        self._send_frame(msg)
 
         # Wait for Flow Control (FC) frame from receiver
-        t_deadline = time.time() + timeout
-        fc_received = False
-        block_size = 0
-        st_min_ms = 1
-
-        while time.time() < t_deadline:
-            rx_msg = self.bus.recv(timeout=0.05)
-            if not rx_msg:
-                continue
-            if rx_msg.is_extended_id and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
-                pci = rx_msg.data[0] & 0xF0
-                if pci == 0x30:  # Flow Control
-                    fs = rx_msg.data[0] & 0x0F
-                    block_size = rx_msg.data[1]
-                    st_min_ms = rx_msg.data[2]
-                    if self.verbose:
-                        print(f"  [ISO-TP RX FC] FS={fs}, BS={block_size}, STmin={st_min_ms}ms")
-                    if fs == 0x00:  # Clear To Send (CTS)
-                        fc_received = True
-                        break
-                    elif fs == 0x02:  # Overflow
-                        print("  [ISO-TP ERROR] Receiver reported buffer overflow (FC Overflow)", file=sys.stderr)
-                        return False
-
-        if not fc_received:
+        fc = self._wait_flow_control(timeout)
+        if fc is None:
             if self.verbose:
-                print("  [ISO-TP ERROR] Timeout waiting for Flow Control (FC) frame", file=sys.stderr)
+                print("  [ISO-TP ERROR] No Flow Control (FC) CTS frame received", file=sys.stderr)
             return False
+        block_size, st_min = fc
+        st_delay = stmin_to_seconds(st_min)
 
-        # Send Consecutive Frames (CF)
+        # Send Consecutive Frames (CF), honouring the receiver's STmin and Block Size
         offset = 6
         sn = 1
-        st_delay = max(0.002, (st_min_ms / 1000.0) if st_min_ms > 0 else 0.002)
         cf_sent_in_block = 0
+        t_next_tx = time.perf_counter()
 
         while offset < length:
             chunk = pdu[offset : offset + 7]
@@ -462,34 +507,24 @@ class IsoTpClient:
             msg = can.Message(arbitration_id=self.tx_id, is_extended_id=True, data=cf_data)
             if self.verbose:
                 print(f"  [ISO-TP TX CF #{cf_sent_in_block+1} sn={sn}] {bytes(cf_data).hex()}")
-            self.bus.send(msg)
+            if st_delay > 0:
+                _wait_until(t_next_tx)
+            self._send_frame(msg)
+            t_next_tx = time.perf_counter() + st_delay
 
             offset += len(chunk)
             sn = (sn + 1) & 0x0F
             cf_sent_in_block += 1
 
-            if st_delay > 0:
-                time.sleep(st_delay)
-
             # If receiver requested a limited Block Size (BS > 0), wait for the next Flow Control frame
             if block_size > 0 and cf_sent_in_block >= block_size and offset < length:
                 cf_sent_in_block = 0
-                fc_next = False
-                t_fc_deadline = time.time() + timeout
-                while time.time() < t_fc_deadline:
-                    rx_msg = self.bus.recv(timeout=0.05)
-                    if not rx_msg:
-                        continue
-                    if rx_msg.is_extended_id and rx_msg.arbitration_id == self.rx_id and len(rx_msg.data) >= 3:
-                        if (rx_msg.data[0] & 0xF0) == 0x30 and (rx_msg.data[0] & 0x0F) == 0x00:
-                            block_size = rx_msg.data[1]
-                            st_min_ms = rx_msg.data[2]
-                            st_delay = max(0.002, (st_min_ms / 1000.0) if st_min_ms > 0 else 0.002)
-                            fc_next = True
-                            break
-                if not fc_next:
+                fc = self._wait_flow_control(timeout)
+                if fc is None:
                     print("  [ISO-TP ERROR] Timeout waiting for subsequent Flow Control (FC) frame", file=sys.stderr)
                     return False
+                block_size, st_min = fc
+                st_delay = stmin_to_seconds(st_min)
 
         return True
 
@@ -712,7 +747,7 @@ def run_update_session(bus: can.BusABC,
                        target_uid: bytes,
                        firmware_data: bytes,
                        app_address: int = 0x08008000,
-                       block_size: int = 256,
+                       block_size: int = DEFAULT_BLOCK_SIZE,
                        is_dummy: bool = True,
                        verbose: bool = False,
                        abort_after_blocks: Optional[int] = None,
@@ -989,7 +1024,7 @@ def run_update_session(bus: can.BusABC,
 def run_bootloader_update_session(bus: can.BusABC,
                                   target_uid: bytes,
                                   bootloader_data: bytes,
-                                  block_size: int = 256,
+                                  block_size: int = DEFAULT_BLOCK_SIZE,
                                   verbose: bool = False,
                                   abort_after_blocks: Optional[int] = None,
                                   force_crc: Optional[int] = None,
@@ -1303,10 +1338,14 @@ def main():
     parser.add_argument("--file", type=str, default=None, help="Path to binary firmware file (.bin) to flash (Main Application)")
     parser.add_argument("--update-bootloader", type=str, default=None, metavar="BOOT_BIN",
                         help="Update Bootloader firmware using binary file via Staging Slot")
-    parser.add_argument("--block-size", type=int, default=256, help="Block size per write transaction (default: 256 bytes)")
+    parser.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE,
+                        help=f"Block size per write transaction (8..{MAX_BLOCK_SIZE} bytes, default: {DEFAULT_BLOCK_SIZE})")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose debug logging for all ISO-TP frames")
 
     args = parser.parse_args()
+
+    if not 8 <= args.block_size <= MAX_BLOCK_SIZE:
+        parser.error(f"--block-size must be between 8 and {MAX_BLOCK_SIZE} bytes")
 
     resolved_iface, resolved_channel = resolve_can_interface_and_channel(args.interface, args.port)
 
