@@ -5,13 +5,14 @@
 
 #include "openbl_flash_c5.h"
 #include "boot_shared.h"
+#include "ota_protocol.h"
 #include <string.h>
 
 #define STM32C5_FLASH_PAGE_SIZE       2048U   /**< Flash page size: 2 KB */
 
 static hal_flash_handle_t s_hflash;
 static bool s_flash_initialized = false;
-static uint32_t s_aligned_flash_buf[128]; /**< 512-byte buffer in BSS ensuring 32-bit alignment */
+static uint32_t s_aligned_flash_buf[OTA_MAX_BLOCK_SIZE / 4U]; /**< One OTA block in BSS ensuring 32-bit alignment */
 
 hal_status_t openbl_flash_init(void)
 {

@@ -16,7 +16,13 @@
 #include <string.h>
 
 #define TAG                     "BOOT"
-#define PACKED_BOOT_VERSION     0x11U   /**< Bootloader version v1.1 */
+#define PACKED_BOOT_VERSION     0x12U   /**< Bootloader version v1.2 */
+
+/** @brief ISO-TP Flow Control Block Size: bare-metal polling drains RX FIFO0 every ~10 us, no limit needed. */
+#define BOOT_ISOTP_FC_BLOCK_SIZE    0U
+
+/** @brief ISO-TP Flow Control STmin: back-to-back frames (raise to 0xF5 = 500 us if the PC adapter drops frames). */
+#define BOOT_ISOTP_FC_ST_MIN        0U
 
 _Static_assert((OTA_MAX_BLOCK_SIZE + OTA_WRITE_PDU_OVERHEAD) <= ISOTP_RX_BUF_SIZE,
                "ISO-TP RX buffer too small for the largest OTA write block");
@@ -31,6 +37,7 @@ static bool s_target_selected = false;
 static uint32_t s_stream_crc = 0U;
 static uint32_t s_total_bytes_written = 0U;
 static uint32_t s_expected_addr = BOOT_APP_START_ADDR;
+static uint32_t s_rx_fifo_lost_events = 0U;   /**< RX FIFO0 overflow events observed since the last erase */
 
 /**
  * @brief Deferred vector table block (0x08008000) buffer.
@@ -38,7 +45,7 @@ static uint32_t s_expected_addr = BOOT_APP_START_ADDR;
  *          Guarantees that an interrupted download leaves Flash at 0x08008000 in erased state
  *          (0xFFFFFFFF), forcing the Bootloader into Recovery Mode instead of jumping to partial code.
  */
-static uint8_t s_deferred_vector_block[512];
+static uint8_t s_deferred_vector_block[OTA_MAX_BLOCK_SIZE];
 static uint16_t s_deferred_vector_len = 0U;
 static bool s_deferred_vector_pending = false;
 
@@ -295,6 +302,7 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                 s_expected_addr = erase_addr;
                 s_deferred_vector_pending = false;
                 s_deferred_vector_len = 0U;
+                s_rx_fifo_lost_events = 0U;
 
                 uint8_t ack[1] = {OTA_RESP_ACK};
                 (void)isotp_send_pdu(&s_boot_isotp, ack, sizeof(ack));
@@ -329,7 +337,7 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                             ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
             uint16_t blk_len = (uint16_t)payload[5] | ((uint16_t)payload[6] << 8);
 
-            if (length < (7U + blk_len + 4U))
+            if ((blk_len > OTA_MAX_BLOCK_SIZE) || (length < (7U + blk_len + 4U)))
             {
                 uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_SEQUENCE};
                 (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
@@ -358,25 +366,12 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
              * that an interrupted update leaves 0x08008000 in erased state (0xFFFFFFFF). */
             if (addr == BOOT_APP_START_ADDR)
             {
-                if (blk_len <= sizeof(s_deferred_vector_block))
-                {
-                    memcpy(s_deferred_vector_block, &payload[7], blk_len);
-                    s_deferred_vector_len = blk_len;
-                    s_deferred_vector_pending = true;
-                    safe_printf(TAG, "[WRITE] Deferred vector table at 0x%08lX (%u B) until verification\r\n",
-                                addr, (unsigned int)blk_len);
-                }
-                else
-                {
-                    hal_status_t st = openbl_flash_write(addr, &payload[7], blk_len);
-                    if (st != HAL_OK)
-                    {
-                        safe_printf(TAG, "[WRITE] Flash write/verify failed at 0x%08lX (st=%d)\r\n", addr, (int)st);
-                        uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_FLASH};
-                        (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
-                        return;
-                    }
-                }
+                /* blk_len <= OTA_MAX_BLOCK_SIZE is guaranteed above, so the block always fits */
+                memcpy(s_deferred_vector_block, &payload[7], blk_len);
+                s_deferred_vector_len = blk_len;
+                s_deferred_vector_pending = true;
+                safe_printf(TAG, "[WRITE] Deferred vector table at 0x%08lX (%u B) until verification\r\n",
+                            addr, (unsigned int)blk_len);
             }
             else
             {
@@ -441,14 +436,15 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                     safe_printf(TAG, "[VERIFY] Vector table committed to 0x%08lX successfully!\r\n", BOOT_APP_START_ADDR);
                 }
 
-                safe_printf(TAG, "[VERIFY] Success! Size=%lu B, CRC32=0x%08lX\r\n", s_total_bytes_written, final_crc);
+                safe_printf(TAG, "[VERIFY] Success! Size=%lu B, CRC32=0x%08lX, RX FIFO lost events=%lu\r\n",
+                            s_total_bytes_written, final_crc, s_rx_fifo_lost_events);
                 uint8_t ack[1] = {OTA_RESP_ACK};
                 (void)isotp_send_pdu(&s_boot_isotp, ack, sizeof(ack));
             }
             else
             {
-                safe_printf(TAG, "[VERIFY] FAILED! Written=%lu/Exp=%lu, CalcCRC=0x%08lX/ExpCRC=0x%08lX\r\n",
-                            s_total_bytes_written, exp_size, final_crc, exp_crc);
+                safe_printf(TAG, "[VERIFY] FAILED! Written=%lu/Exp=%lu, CalcCRC=0x%08lX/ExpCRC=0x%08lX, RX FIFO lost events=%lu\r\n",
+                            s_total_bytes_written, exp_size, final_crc, exp_crc, s_rx_fifo_lost_events);
                 uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_CRC};
                 (void)isotp_send_pdu(&s_boot_isotp, nack, sizeof(nack));
             }
@@ -490,6 +486,46 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
     }
 }
 
+/**
+ * @brief Restricts FDCAN RX FIFO0 acceptance to the two OTA identifiers used by the bootloader.
+ * @details The 3-element hardware FIFO would otherwise be shared with all foreign vehicle traffic,
+ *          which can evict back-to-back ISO-TP consecutive frames on a loaded bus. A single extended
+ *          dual-ID filter accepts CAN_ID_ISOTP_REQ and CAN_ID_OTA_BROADCAST; everything else is
+ *          rejected in hardware. Falls back to accept-all if the filter cannot be programmed.
+ * @param[in] hfdcan FDCAN peripheral handle (must be in IDLE state).
+ */
+static void boot_fdcan_config_ota_filter(hal_fdcan_handle_t *hfdcan)
+{
+    FDCAN_GlobalTypeDef *p_fdcanx = (FDCAN_GlobalTypeDef *)((uint32_t)hfdcan->instance);
+
+    /* Generated Message RAM config reserves no filter elements: enable one extended filter */
+    STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSS, (0U << FDCAN_RXGFC_LSS_Pos));
+    STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSE, (1U << FDCAN_RXGFC_LSE_Pos));
+
+    hal_fdcan_filter_t f_cfg = {0};
+    f_cfg.id_type       = HAL_FDCAN_ID_EXTENDED;
+    f_cfg.filter_index  = 0U;
+    f_cfg.filter_type   = HAL_FDCAN_FILTER_TYPE_DUAL;
+    f_cfg.filter_config = HAL_FDCAN_FILTER_TO_RX_FIFO_0;
+    f_cfg.filter_id1    = CAN_ID_ISOTP_REQ;
+    f_cfg.filter_id2    = CAN_ID_OTA_BROADCAST;
+
+    bool filter_ok = (HAL_FDCAN_SetFilter(hfdcan, &f_cfg) == HAL_OK);
+    if (!filter_ok)
+    {
+        STM32_MODIFY_REG(p_fdcanx->RXGFC, FDCAN_RXGFC_LSE, (0U << FDCAN_RXGFC_LSE_Pos));
+        safe_printf(TAG, "[INIT] OTA ID filter setup failed, accepting all frames\r\n");
+    }
+
+    hal_fdcan_global_filter_config_t g_filter = {
+        .acceptance_non_matching_std = filter_ok ? HAL_FDCAN_NO_MATCH_REJECT : HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_non_matching_ext = filter_ok ? HAL_FDCAN_NO_MATCH_REJECT : HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
+        .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
+        .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
+    };
+    (void)HAL_FDCAN_SetGlobalFilter(hfdcan, &g_filter);
+}
+
 void openbl_core_init(bool session_selected_init, boot_mode_t boot_mode, uint8_t active_can_bus)
 {
     s_target_selected = session_selected_init;
@@ -513,26 +549,20 @@ void openbl_core_init(bool session_selected_init, boot_mode_t boot_mode, uint8_t
 
     /* Initialize ISO-TP link */
     isotp_init(&s_boot_isotp, CAN_ID_ISOTP_REQ, CAN_ID_ISOTP_RESP, boot_isotp_can_tx_fn, boot_isotp_pdu_cb, NULL);
-
-    hal_fdcan_global_filter_config_t g_filter = {
-        .acceptance_non_matching_std = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
-        .acceptance_non_matching_ext = HAL_FDCAN_NO_MATCH_TO_RX_FIFO_0,
-        .acceptance_remote_std       = HAL_FDCAN_REMOTE_REJECT,
-        .acceptance_remote_ext       = HAL_FDCAN_REMOTE_REJECT
-    };
+    isotp_set_flow_control(&s_boot_isotp, BOOT_ISOTP_FC_BLOCK_SIZE, BOOT_ISOTP_FC_ST_MIN);
 
     /* Initialize and start both FDCAN1 and FDCAN2 so single-CAN and dual-CAN boards both work seamlessly */
     s_hfdcan1 = mx_fdcan1_init();
     if (s_hfdcan1 != NULL)
     {
-        (void)HAL_FDCAN_SetGlobalFilter(s_hfdcan1, &g_filter);
+        boot_fdcan_config_ota_filter(s_hfdcan1);
         (void)HAL_FDCAN_Start(s_hfdcan1);
     }
 
     s_hfdcan2 = mx_fdcan2_init();
     if (s_hfdcan2 != NULL)
     {
-        (void)HAL_FDCAN_SetGlobalFilter(s_hfdcan2, &g_filter);
+        boot_fdcan_config_ota_filter(s_hfdcan2);
         (void)HAL_FDCAN_Start(s_hfdcan2);
     }
 
@@ -559,6 +589,14 @@ static void poll_fdcan_instance(hal_fdcan_handle_t *hfdcan)
     if (hfdcan == NULL)
     {
         return;
+    }
+
+    /* Count RX FIFO0 overflow events (RF0L is write-1-to-clear) for transfer diagnostics */
+    FDCAN_GlobalTypeDef *p_fdcanx = (FDCAN_GlobalTypeDef *)((uint32_t)hfdcan->instance);
+    if ((p_fdcanx->IR & FDCAN_IR_RF0L) != 0U)
+    {
+        p_fdcanx->IR = FDCAN_IR_RF0L;
+        s_rx_fifo_lost_events++;
     }
 
     uint32_t fill_level = 0U;
