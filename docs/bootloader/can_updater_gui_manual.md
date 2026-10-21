@@ -155,7 +155,7 @@ Prawy środkowy panel wizualizuje przebieg sesji programowania krok po kroku ora
   1. **`1. Cel UID`** – zaadresowanie wybranego węzła po jego 96-bitowym identyfikatorze (`CMD_SELECT_TARGET`).
   2. **`2. Reset Boot`** – automatyczne przełączenie układu z Aplikacji do Bootloadera (`CMD_ENTER_BOOTLOADER`), odczekanie na inicjalizację i ponowne zestawienie sesji.
   3. **`3. Kasowanie`** – wykasowanie sektorów pamięci Flash aplikacji od adresu `0x08008000` (`CMD_ERASE_APP`).
-  4. **`4. Zapis Bloków`** – strumieniowe przesyłanie bloków po 256 bajtów przez protokół **ISO-TP** (`CMD_WRITE_MEMORY`). Każdy blok jest natychmiast weryfikowany własną sumą CRC32.
+  4. **`4. Zapis Bloków`** – strumieniowe przesyłanie bloków po 1024 bajty przez protokół **ISO-TP** (`CMD_WRITE_MEMORY`), z odstępami między ramkami `CF` dyktowanymi przez urządzenie (`STmin` / `BlockSize` z ramki Flow Control). Każdy blok jest natychmiast weryfikowany własną sumą CRC32.
      > [!IMPORTANT]
      > **Mechanizm Deferred Vector Table Commit:** Pierwszy blok (`Blok 0` zawierający tablicę wektorów startowych pod `0x08008000`) nie jest od razu zapisywany do Flash, lecz buforowany w pamięci RAM Bootloadera. Zostaje fizycznie wgrany do Flash dopiero w Kroku 5 po potwierdzeniu poprawności całego obrazu! Dzięki temu przerwanie zasilania lub odłączenie kabla CAN w trakcie Kroku 4 nigdy nie uszkodzi urządzenia – po resecie Bootloader wykryje brak wektorów i bezpiecznie pozostanie w trybie Recovery.
   5. **`5. Weryfikacja`** – sprawdzenie całościowej sumy kontrolnej CRC32 (`CMD_VERIFY_FIRMWARE`), zatwierdzenie `Bloku 0`, restart do nowej aplikacji (`CMD_GO_EXECUTE`) oraz automatyczny **Post-Flash Health Check** (weryfikacja na magistrali CAN, że układ zgłosił się jako `APPLICATION`).

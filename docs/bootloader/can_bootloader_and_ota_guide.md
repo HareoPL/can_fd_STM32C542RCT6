@@ -124,10 +124,17 @@ Komunikacja aktualizacyjna oraz diagnostyczna OTA obsługuje jednocześnie oba k
 ---
 
 ### 2.2. Warstwa Transportowa ISO 15765-2 (ISO-TP)
-Ponieważ klasyczna ramka CAN 2.0 mieści maksymalnie 8 bajtów danych, a bloki obrazu firmware mają rozmiar **256 bajtów** (+ 11 bajtów nagłówka i sumy kontrolnej = **267 bajtów**), w plikach [isotp.h](file:///c:/WORK/5_v-box/app/can_bus/isotp/isotp.h) oraz [isotp.c](file:///c:/WORK/5_v-box/app/can_bus/isotp/isotp.c) zaimplementowano w czystym języku C lekki stos **ISO 15765-2**:
+Ponieważ klasyczna ramka CAN 2.0 mieści maksymalnie 8 bajtów danych, a bloki obrazu firmware mają rozmiar do **1024 bajtów** (`OTA_MAX_BLOCK_SIZE`, + 11 bajtów nagłówka i sumy kontrolnej = **1035 bajtów**), w plikach [isotp.h](file:///c:/WORK/5_v-box/app/can_bus/isotp/isotp.h) oraz [isotp.c](file:///c:/WORK/5_v-box/app/can_bus/isotp/isotp.c) zaimplementowano w czystym języku C lekki stos **ISO 15765-2**:
 * **Single Frame (`SF`, PCI `0x0N`):** Dla krótkich komend i odpowiedzi (do 7 bajtów payloadu, np. `ACK`, `NACK`, `SELECT_TARGET`, `VERIFY_FIRMWARE`).
-* **First Frame (`FF`, PCI `0x1L 0xLL`):** Rozpoczyna wieloramkowy transfer bloku pamięci (np. 267 B), niosąc pierwsze 6 bajtów payloadu oraz 12-bitową długość całkowitą.
-* **Flow Control (`FC`, PCI `0x30 0x00 0x01`):** Po odebraniu `FF` mikrokontroler natychmiast odsyła na ID `0x7E8` ramkę `FC (Clear To Send)` z parametrami `BlockSize = 0` (brak konieczności potwierdzania podbloków) oraz `STmin = 1 ms` (minimalny odstęp między kolejnymi ramkami `CF`, zapobiegający przepełnieniu sprzętowego FIFO 0 kontrolera FDCAN2).
+* **First Frame (`FF`, PCI `0x1L 0xLL`):** Rozpoczyna wieloramkowy transfer bloku pamięci (np. 267 B), niosąc pierwsze 6 bajtów payloadu oraz 12-bitową długość całkowitą. Bufor odbiorczy ma `ISOTP_RX_BUF_SIZE = 1040 B`; dłuższe PDU są odrzucane ramką `FC Overflow` (`0x32`).
+* **Flow Control (`FC`, PCI `0x30 BS STmin`):** Po odebraniu `FF` mikrokontroler natychmiast odsyła ramkę `FC (Clear To Send)`. Parametry ustawia każdy odbiorca przez `isotp_set_flow_control()`:
+
+  | Odbiorca | `BlockSize` | `STmin` | Uzasadnienie |
+  |---|---|---|---|
+  | Bootloader (`openbl_core.c`) | `0` (bez limitu) | `0x00` | Pętla bare-metal opróżnia RX FIFO0 co ~10 µs, ramki przychodzą co ~260 µs; filtr sprzętowy przepuszcza wyłącznie ID OTA |
+  | Aplikacja (`ota_manager.c`) | `16` | `0x00` | Ramki przechodzą przez kolejkę `ota_rx_queue` (64 elementy) do zadania `ota_worker`; po każdych 16 ramkach `CF` urządzenie wysyła kolejną ramkę `FC`, co wyklucza przepełnienie kolejki |
+
+  Wartości `STmin` kodowane są zgodnie z ISO 15765-2: `0x00–0x7F` = 0–127 ms, `0xF1–0xF9` = 100–900 µs. Jeżeli adapter USB-CAN nie nadąża z nadawaniem ramek bez przerw, wystarczy podnieść `BOOT_ISOTP_FC_ST_MIN` np. do `0xF5` (500 µs).
 * **Consecutive Frame (`CF`, PCI `0x2N`):** Przenosi kolejne porcje po 7 bajtów danych z inkrementowanym modulo-16 numerem sekwencyjnym `SN` (`0x21..0x2F, 0x20..`). Przerwanie ciągłości `SN` natychmiast przerywa transakcję i zgłasza błąd.
 
 ---
@@ -153,7 +160,7 @@ W środowisku docelowym do jednej magistrali CAN może być podłączonych wiele
 | `CMD_SELECT_TARGET` | `0xA1` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA1, UID[0..11]]` (13 B) | Wybór i autoryzacja konkretnego mikrokontrolera po 96-bitowym UID |
 | `CMD_ENTER_BOOTLOADER` | `0xA2` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA2]` (1 B) | Zapis żądania i `active_can_bus` do `SHARED_RAM`, odesłanie `ACK` i `NVIC_SystemReset()` |
 | `CMD_ERASE_APP` | `0x44` | PC $\rightarrow$ `0x01F2F3E0` | `[0x44, Addr(4B), Size(4B)]` (9 B) | Kasowanie stron Flash (obszar `0x08008000` w Boot lub `0x08038000` w App) |
-| `CMD_WRITE_MEMORY` | `0x31` | PC $\rightarrow$ `0x01F2F3E0` | `[0x31, Addr(4B), Len(2B), Data(N), CRC32(4B)]` | Zapis bloku 256 B z weryfikacją CRC32 bloku przed dotknięciem Flash |
+| `CMD_WRITE_MEMORY` | `0x31` | PC $\rightarrow$ `0x01F2F3E0` | `[0x31, Addr(4B), Len(2B), Data(N), CRC32(4B)]` | Zapis bloku ≤ 1024 B z weryfikacją CRC32 bloku przed dotknięciem Flash |
 | `CMD_VERIFY_FIRMWARE` | `0xA3` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA3, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja CRC32 całego obrazu + **atomowy commit bloku 0 (`0x08008000`)** |
 | `CMD_UPDATE_BOOTLOADER` | `0xA4` | PC $\rightarrow$ `0x01F2F3E0` | `[0xA4, TotalSize(4B), ExpectedCRC32(4B)]` (9 B) | Walidacja obrazu w Staging Slot (`0x08038000`) i przepisanie do `0x08000000` |
 | `CMD_GO_EXECUTE` | `0x21` | PC $\rightarrow$ `0x01F2F3E0` | `[0x21]` (1 B) | Skok z Bootloadera do Aplikacji lub restart MCU po aktualizacji Boota |
@@ -176,9 +183,9 @@ W środowisku docelowym do jednej magistrali CAN może być podłączonych wiele
 Gdyby podczas aktualizacji Aplikacji Głównej pierwszy blok (`0x08008000` – zawierający wskaźnik stosu `MSP` i adres wejścia `Reset_Handler`) został od razu zapisany do pamięci Flash, a w połowie wgrywania nastąpiłoby odcięcie zasilania, to po ponownym włączeniu zasilania Bootloader zobaczyłby poprawny nagłówek wektorów pod `0x08008000` i wykonał skok do niekompletnego kodu, powodując natychmiastowy `Lockup` procesora.
 
 Aby całkowicie wyeliminować to ryzyko, w [`openbl_core.c`](file:///c:/WORK/5_v-box/app/bootloader/openbl_core.c) wdrożono mechanizm **Deferred Vector Table Commit**:
-* Podczas odbioru komendy `CMD_WRITE_MEMORY (0x31)` dla adresu bazowego `0x08008000` (pierwsze 256 bajtów obrazu), dane **nie są zapisywane do pamięci Flash** – trafiają do bufora `s_deferred_vector_block[256]` w pamięci RAM, a strona `0x08008000` we Flash pozostaje skasowana (`0xFFFFFFFF`).
-* Wszystkie pozostałe bloki (`0x08008100`, `0x08008200`, ...) są normalnie programowane do pamięci Flash.
-* Dopiero podczas komendy `CMD_VERIFY_FIRMWARE (0xA3)` Bootloader oblicza hybrydową sumę kontrolną CRC32 (pierwsze 256 B z bufora RAM + reszta obrazu bezpośrednio z pamięci Flash).
+* Podczas odbioru komendy `CMD_WRITE_MEMORY (0x31)` dla adresu bazowego `0x08008000` (pierwszy blok obrazu, do 1024 bajtów), dane **nie są zapisywane do pamięci Flash** – trafiają do bufora `s_deferred_vector_block[OTA_MAX_BLOCK_SIZE]` w pamięci RAM, a strona `0x08008000` we Flash pozostaje skasowana (`0xFFFFFFFF`).
+* Wszystkie pozostałe bloki (`0x08008400`, `0x08008800`, ...) są normalnie programowane do pamięci Flash.
+* Dopiero podczas komendy `CMD_VERIFY_FIRMWARE (0xA3)` Bootloader oblicza hybrydową sumę kontrolną CRC32 (pierwszy blok z bufora RAM + reszta obrazu bezpośrednio z pamięci Flash).
 * **Tylko jeśli obliczona suma CRC32 całego obrazu w 100% zgadza się z sumą oczekiwaną**, Bootloader programuje bufor `s_deferred_vector_block` pod adres `0x08008000` i wykonuje końcową weryfikację odczytu z Flash.
 * Jeżeli zasilanie zostanie odcięte w dowolnym momencie przed końcową weryfikacją CRC32, pod adresem `0x08008000` pozostaje wartość `0xFFFFFFFF`. Po powrocie zasilania Bootloader natychmiast rozpoznaje brak aplikacji (`BOOT_FAULT_NO_APP`), wchodzi w `BOOT_MODE_RECOVERY` i czeka na ponowne wgranie wsadu.
 
@@ -316,11 +323,11 @@ sequenceDiagram
     PC->>Boot: ISO-TP 0x7E0: [0xA1, UID(12B)] (Ponowna autoryzacja w Bootloaderze)
     Boot-->>PC: ISO-TP 0x7E8: [0x79, 0xA1, Mode=BOOT] (ACK)
 
-    Note over PC,Boot: Etap 3: Kasowanie i strumieniowe programowanie bloków (256 B)
+    Note over PC,Boot: Etap 3: Kasowanie i strumieniowe programowanie bloków (1024 B)
     PC->>Boot: ISO-TP 0x7E0: [0x44, Addr=0x08008000, Size] (CMD_ERASE_APP)
     Boot-->>PC: ISO-TP 0x7E8: [0x79, 0x44] (ACK po skasowaniu stron Flash)
-    loop Dla każdego bloku 256 B (Blok 0 buforowany w RAM!)
-        PC->>Boot: ISO-TP 0x7E0 (FF + CF): [0x31, Addr, Len=256, BlockCRC32, Data...]
+    loop Dla każdego bloku 1024 B (Blok 0 buforowany w RAM!)
+        PC->>Boot: ISO-TP 0x7E0 (FF + CF): [0x31, Addr, Len=1024, Data..., BlockCRC32]
         Boot-->>PC: ISO-TP 0x7E8: [0x79, 0x31] (ACK po weryfikacji CRC32 i zapisie)
     end
 
@@ -457,7 +464,7 @@ $ python tools/can_updater.py --interface slcan --channel COM17 --file build/deb
   Target UID      : 46009900-19513531-31343039
   Flash Target    : 0x08008000
   Payload Size    : 62656 bytes (61.2 KB)
-  Block Size      : 256 bytes
+  Block Size      : 1024 bytes
   Full CRC32      : 0x8592C677 (IEEE 802.3)
 ============================================================================
 
@@ -472,7 +479,7 @@ $ python tools/can_updater.py --interface slcan --channel COM17 --file build/deb
 [Step 2/5] Requesting Flash Erase (0x08008000, size=62656 B)...
   [OK] Erase confirmed by device!
 
-[Step 3/5] Streaming 62656 bytes in blocks of 256 B...
+[Step 3/5] Streaming 62656 bytes in blocks of 1024 B...
   Flashing: [██████████████████████████████] 100.0% | 62656/62656 B |   0.4 KB/s | ETA:  0.0s
   [OK] All blocks successfully transmitted and verified!
 
@@ -533,7 +540,7 @@ $ python tools/can_updater.py --interface slcan --channel COM17 --update-bootloa
   Target UID      : 46009900-19513531-31343039
   Staging Address : 0x08038000 -> Install to 0x08000000
   Payload Size    : 20928 bytes (20.4 KB)
-  Block Size      : 256 bytes
+  Block Size      : 1024 bytes
   Full CRC32      : 0x07E70C2A (IEEE 802.3)
 ============================================================================
 

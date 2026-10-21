@@ -3,7 +3,17 @@
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-21]
+### Dodane
+- **ISO-TP – konfigurowalna kontrola przepływu (`app/can_bus/isotp/`):** nowe API `isotp_set_flow_control(link, block_size, st_min)`, obsługa `BlockSize` po stronie odbiorczej (kolejna ramka `FC CTS` po każdych BS ramkach `CF`) oraz rozdzielenie buforów na `ISOTP_RX_BUF_SIZE` (1040 B) i `ISOTP_TX_BUF_SIZE` (64 B).
+- **Protokół OTA (`app/ota_update/ota_protocol.h`):** stałe `OTA_MAX_BLOCK_SIZE` (1024 B) i `OTA_WRITE_PDU_OVERHEAD` (11 B) z asercją `_Static_assert` względem bufora ISO-TP.
+- **Plan wdrożenia:** `docs/bootloader/ota_fast_transfer_plan.md`.
+
 ### Zmienione
+- **Przyspieszenie transferu OTA na klasycznym CAN 500 kbps (szacunkowo ~20 s → ~3–5 s dla obrazu 63.7 KB):**
+  - **Bootloader v1.2 (`app/bootloader/`):** Flow Control `BS=0, STmin=0` (wcześniej `STmin=2 ms`), bufor odroczonego zapisu wektorów `s_deferred_vector_block` oraz bufor zapisu Flash powiększone do `OTA_MAX_BLOCK_SIZE`, odrzucanie bloków > 1024 B, sprzętowy filtr FDCAN przepuszczający wyłącznie ID OTA (`0x01F2F3E0`, `0x01F2F3DF`), licznik utraconych ramek RX FIFO0 (`RF0L`) raportowany przy `CMD_VERIFY_FIRMWARE`, `PACKED_BOOT_VERSION = 0x12`.
+  - **Aplikacja v1.2.0 (`app/ota_update/`):** Flow Control `BS=16, STmin=0` chroniący kolejkę `ota_rx_queue` (64 ramki) przed przepełnieniem, bufor zapisu slotu staging powiększony do `OTA_MAX_BLOCK_SIZE`, odrzucanie bloków > 1024 B.
+  - **Narzędzia PC (`tools/can_updater.py`, `tools/can_updater_gui.py`):** dekodowanie `STmin` wg ISO 15765-2 (0–127 ms oraz 100–900 µs), usunięcie sztywnego minimum 2 ms między ramkami `CF`, precyzyjne odstępy `perf_counter` (busy-wait poniżej 2 ms), ponawianie nadania przy chwilowo pełnym buforze adaptera, domyślny blok 1024 B (`--block-size` z walidacją 8–1024).
+  - Wymagana jednoczesna aktualizacja Bootloadera i Aplikacji (brak zgodności wstecz z Bootloaderem v1.1 dla bloków > 512 B).
 - **Dynamiczne rozszerzanie tabeli wykrytych węzłów STM32 w GUI (`tools/can_updater_gui.py`):**
   - Usunięto sztywne limity wysokości grupy i tabeli (`grp.setMaximumHeight(160)` oraz `table_devices.setMaximumHeight(105)`), które ograniczały widok listy do zaledwie ~1.5 wiersza.
   - Ustawiono współczynnik rozciągania `stretch=1` oraz politykę `Expanding` dla panelu tabeli urządzeń (`TABELA WYKRYTYCH WĘZŁÓW STM32`), dzięki czemu powiększenie lub maksymalizacja okna aplikacji w całości dynamicznie rozszerza tabelę węzłów (umożliwiając wygodny podgląd wielu urządzeń w sieci).
