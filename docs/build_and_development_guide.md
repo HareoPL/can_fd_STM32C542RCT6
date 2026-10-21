@@ -204,6 +204,22 @@ Jeśli chcesz debugować bezpośrednio z wnętrza Linuksa (np. przez `openocd` l
 1. Podłącz programator do Dockera: zadanie **`[USB] Attach ST-Link to Docker`** (lub skrypt `.devcontainer/stlink_attach.bat`). Skrypt automatycznie wymusza flagę `--force`, eliminując kolizje z filtrem Wireshark / USBPcap.
 2. Po zakończeniu pracy zwróć programator do Windowsa: zadanie **`[USB] Detach ST-Link from Docker`** (lub skrypt `.devcontainer/stlink_detach.bat`).
 
+### Wersjonowanie firmware i wydania (tag git)
+Jedynym źródłem wersji firmware jest **ostatni tag git w formacie `vX.Y.Z`**. W kodzie i w `CMakeLists.txt` nie ma ręcznie wpisywanych numerów wersji. Przy każdym buildzie skrypt [`cmake/version.cmake`](../cmake/version.cmake) generuje `build/<preset>/generated_version/version_config.h`:
+
+| Makro | Źródło | Przykład |
+|---|---|---|
+| `FW_VERSION_MAJOR/MINOR/PATCH`, `FW_VERSION_STRING` | ostatni tag `vX.Y.Z` | `v2.0.0` |
+| `FW_GIT_DESCRIBE` | `git describe --tags --match "v[0-9]*" --always --dirty` | `v2.0.0-6-g52797a0-dirty` |
+| `FW_GIT_COMMIT` | `git rev-parse --short HEAD` | `52797a0` |
+
+**Wydanie nowej wersji:**
+```bash
+git tag v2.1.0
+git push origin v2.1.0
+```
+Następnie zwykły build – nie trzeba edytować żadnego pliku ani ponownie uruchamiać CMake configure. Bez repozytorium git lub tagu firmware dostaje wersję `v0.0.0` (z ostrzeżeniem CMake). `MAJOR` i `MINOR` muszą mieścić się w zakresie 0–15 (pakowane w jeden bajt ramki OTA Discovery).
+
 ---
 
 ## 7. Automatyczny Raport Pamięci FLASH i RAM

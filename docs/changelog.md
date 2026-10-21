@@ -9,9 +9,14 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 - **Plan wdrożenia:** `docs/bootloader/ota_fast_transfer_plan.md`.
 
 ### Zmienione
+- **Wersjonowanie firmware – jedno źródło prawdy: tag git (`CMakeLists.txt`, `cmake/version.cmake`):**
+  - Usunięto ręcznie utrzymywane `FW_VERSION_MAJOR/MINOR/PATCH` z `CMakeLists.txt`. Wersja jest wyliczana z ostatniego tagu `vX.Y.Z` (`git describe --tags --match "v[0-9]*" --abbrev=0`), a `FW_GIT_DESCRIBE` używa tego samego dopasowania tagów.
+  - `version_config.h` generowany jest przy każdym buildzie przez target `generate_version` (wcześniej tylko przy configure, co dawało nieaktualny hash/describe). Plik jest nadpisywany wyłącznie przy zmianie stanu git, więc build przyrostowy nie rekompiluje niepotrzebnie.
+  - Brak repozytorium lub tagu skutkuje wersją `v0.0.0` i ostrzeżeniem CMake. Komendy git używają `-c safe.directory=*` (build w kontenerze Docker).
+
 - **Przyspieszenie transferu OTA na klasycznym CAN 500 kbps (szacunkowo ~20 s → ~3–5 s dla obrazu 63.7 KB):**
   - **Bootloader v1.2 (`app/bootloader/`):** Flow Control `BS=0, STmin=0` (wcześniej `STmin=2 ms`), bufor odroczonego zapisu wektorów `s_deferred_vector_block` oraz bufor zapisu Flash powiększone do `OTA_MAX_BLOCK_SIZE`, odrzucanie bloków > 1024 B, sprzętowy filtr FDCAN przepuszczający wyłącznie ID OTA (`0x01F2F3E0`, `0x01F2F3DF`), licznik utraconych ramek RX FIFO0 (`RF0L`) raportowany przy `CMD_VERIFY_FIRMWARE`, `PACKED_BOOT_VERSION = 0x12`.
-  - **Aplikacja v1.2.0 (`app/ota_update/`):** Flow Control `BS=16, STmin=0` chroniący kolejkę `ota_rx_queue` (64 ramki) przed przepełnieniem, bufor zapisu slotu staging powiększony do `OTA_MAX_BLOCK_SIZE`, odrzucanie bloków > 1024 B.
+  - **Aplikacja (`app/ota_update/`):** Flow Control `BS=16, STmin=0` chroniący kolejkę `ota_rx_queue` (64 ramki) przed przepełnieniem, bufor zapisu slotu staging powiększony do `OTA_MAX_BLOCK_SIZE`, odrzucanie bloków > 1024 B.
   - **Narzędzia PC (`tools/can_updater.py`, `tools/can_updater_gui.py`):** dekodowanie `STmin` wg ISO 15765-2 (0–127 ms oraz 100–900 µs), usunięcie sztywnego minimum 2 ms między ramkami `CF`, precyzyjne odstępy `perf_counter` (busy-wait poniżej 2 ms), ponawianie nadania przy chwilowo pełnym buforze adaptera, domyślny blok 1024 B (`--block-size` z walidacją 8–1024).
   - Wymagana jednoczesna aktualizacja Bootloadera i Aplikacji (brak zgodności wstecz z Bootloaderem v1.1 dla bloków > 512 B).
 - **Dynamiczne rozszerzanie tabeli wykrytych węzłów STM32 w GUI (`tools/can_updater_gui.py`):**
@@ -21,6 +26,7 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Włączono naprzemienne kolorowanie wierszy tabeli (`setAlternatingRowColors(True)`), zablokowano przypadkową edycję komórek (`NoEditTriggers`) oraz dodano dedykowane style w ciemnym motywie inżynierskim (`DARK_ENGINEERING_THEME`) dla `QTableWidget` i `QTableWidget::item`.
 
 ### Naprawione
+- **Znacznik czasu builda (`FW_BUILD_TIMESTAMP`):** czas był generowany w strefie lokalnej, a opisywany jako `UTC`; teraz faktycznie jest w UTC.
 - **Bezpieczne zamykanie magistrali `CandleBus` oraz eliminacja ostrzeżeń i wyjątków podczas zamykania GUI (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
   - Wyeliminowano błąd `CandleBus was not properly shut down` oraz wyjątek `Exception ignored in: <function BusABC.__del__>` (powodowany przez nieosłonięte wywołanie `[ch.reset() for ch in self._channels.values()]` w `candle_bus.py` podczas destrukcji obiektów przez Garbage Collector Pythona).
   - Wdrożono wrapper `_wrap_candle_bus_safe_shutdown(bus)` w `tools/can_updater.py`, który zapewnia idempotentne wywołanie `bus.shutdown()`, bezpieczny reset kanałów w bloku `try...except` bez rzucania wyjątków w procedurze odśmiecania pamięci oraz wczesne ustawienie flagi `_is_shutdown = True`.

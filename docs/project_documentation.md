@@ -391,12 +391,19 @@ typedef struct {
 } app_version_info_t;
 ```
 
-### 8.2. CMake Build Automation
-During CMake configuration, `CMakeLists.txt` executes Git queries and dynamically generates `version_config.h` in the binary build directory:
-* `git describe --tags --always --dirty` $\rightarrow$ full tag or commit hash with dirty state.
-* `git rev-parse --short HEAD` $\rightarrow$ short commit hash.
-* `string(TIMESTAMP BUILD_TIMESTAMP_STR "%Y-%m-%d %H:%M:%S UTC")` $\rightarrow$ reproducible build timestamp.
-* Template substitution via `configure_file()` ensures only [app/version/version.c](file:///c:/WORK/5_v-box/app/version/version.c) is recompiled when commit metadata changes, preserving fast incremental build times.
+### 8.2. CMake Build Automation (Single Source of Truth: Git Tag)
+The firmware version is defined **exclusively by the latest annotated or lightweight git tag matching `vX.Y.Z`**. There are no manually maintained version numbers in `CMakeLists.txt`.
+
+* The `generate_version` custom target runs [cmake/version.cmake](file:///c:/WORK/5_v-box/cmake/version.cmake) on **every build** (not only at configure time), so new tags, commits and the `-dirty` state are always reflected without re-running CMake.
+* `git describe --tags --match "v[0-9]*" --abbrev=0` $ightarrow$ latest release tag, parsed into `FW_VERSION_MAJOR/MINOR/PATCH` and `FW_VERSION_STRING` (e.g. `v2.0.0`).
+* `git describe --tags --match "v[0-9]*" --always --dirty` $ightarrow$ `FW_GIT_DESCRIBE` with distance from the tag, commit and dirty flag (e.g. `v2.0.0-6-g52797a0-dirty`).
+* `git rev-parse --short HEAD` $ightarrow$ `FW_GIT_COMMIT`.
+* `FW_BUILD_TIMESTAMP` $ightarrow$ UTC time of the build that last changed the version metadata.
+* The header is rewritten only when the git state or build configuration changes, so incremental builds recompile only [app/version/version.c](file:///c:/WORK/5_v-box/app/version/version.c) after a commit or tag.
+* Without a git repository or a matching tag the build falls back to `v0.0.0` and prints a CMake warning.
+* `FW_VERSION_MAJOR/MINOR` are reported over CAN (OTA discovery packs them into one byte as `major << 4 | minor`, so each must stay in the range 0–15).
+
+**Release procedure:** commit the changes, then `git tag v2.1.0` (and `git push origin v2.1.0`) and build. No source file needs to be edited.
 
 ### 8.3. Diagnostic Boot Banner (UART)
 During early boot (before FreeRTOS scheduler initialization), `main()` invokes `version_printBootBanner()`. The output is transmitted over USART2 at 115200 baud:
