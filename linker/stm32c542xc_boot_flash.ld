@@ -32,6 +32,14 @@ SECTIONS
     . = ALIGN(8);
   } > ROM
 
+  /* Bootloader version record at a fixed offset (BOOT_VERSION_RECORD_OFFSET in boot_version_record.h).
+   * Read by the Main Application from 0x08000200 and from staged images before installation. */
+  ASSERT(SIZEOF(.vectors) <= 0x200, "Vector table overlaps the bootloader version record at offset 0x200")
+  .boot_version_record ORIGIN(ROM) + 0x200 :
+  {
+    KEEP(*(.boot_version_record));
+  } > ROM
+
   .text :
   {
     . = ALIGN(8);

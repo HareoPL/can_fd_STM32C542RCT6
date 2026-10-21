@@ -2274,6 +2274,8 @@ class CanUpdaterMainWindow(QMainWindow):
             hash_val = dev.get('uid_hash', 0) if dev else (beacon.get('uid_hash', 0) if beacon else 0)
             hash_str = f"0x{hash_val:02X}"
             ver_str = dev.get("version", "—") if dev else "—"
+            if dev and dev.get("mode") == "APPLICATION" and dev.get("boot_version"):
+                ver_str = f"{ver_str} | BL {dev['boot_version']}"
 
             self.table_devices.setItem(row, 0, status_item)
             self.table_devices.setItem(row, 1, QTableWidgetItem(uid_str))

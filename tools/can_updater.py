@@ -681,6 +681,18 @@ def scan_nodes(bus: can.BusABC,
                     devices.append(dev_entry)
                     if log_cb:
                         log_cb("INFO", f"Discovered node: UID={dev_entry['uid_str']} (Hash=0x{uid_hash:02X}) Mode={mode_str} FW={dev_entry['version']}")
+            elif sub_idx == 0x03:
+                # Frame 3: full 8-bit versions [AppMaj, AppMin, AppPatch, BootMaj, BootMin, BootPatch] (0xFF = unknown)
+                dev_entry = next((d for d in reversed(devices) if d["can_id"] == node_can_id), None)
+                if dev_entry is not None:
+                    app_ver = tuple(rx.data[1:4])
+                    boot_ver = tuple(rx.data[4:7])
+                    if boot_ver != (0xFF, 0xFF, 0xFF):
+                        dev_entry["boot_version"] = "v{}.{}.{}".format(*boot_ver)
+                    if app_ver != (0xFF, 0xFF, 0xFF):
+                        dev_entry["version"] = "v{}.{}.{}".format(*app_ver)
+                    elif "boot_version" in dev_entry:
+                        dev_entry["version"] = dev_entry["boot_version"]
             elif sub_idx == 0xEE:
                 reason_code = rx.data[1]
                 fail_cnt = rx.data[2]
@@ -717,7 +729,8 @@ def scan_nodes(bus: can.BusABC,
     else:
         print(f"\n[OK] Found {len(devices)} device(s) on CAN bus:")
         for idx, dev in enumerate(devices, 1):
-            print(f"  [{idx}] UID: {dev['uid_str']} (Hash: 0x{dev['uid_hash']:02X}) | Mode: {dev['mode']:<12} | FW: {dev['version']}")
+            print(f"  [{idx}] UID: {dev['uid_str']} (Hash: 0x{dev['uid_hash']:02X}) | Mode: {dev['mode']:<12} | "
+                  f"FW: {dev['version']} | BL: {dev.get('boot_version', '?')}")
         print()
         if log_cb:
             log_cb("OK", f"Discovery finished: {len(devices)} device(s) active on CAN bus.")

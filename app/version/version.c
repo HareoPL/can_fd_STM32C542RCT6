@@ -5,6 +5,8 @@
 #include "version.h"
 #include "version_config.h"
 #include "safe_printf.h"
+#include "boot_version_record.h"
+#include "ota_protocol.h"
 #include <stdio.h>
 
 static const app_version_info_t s_version_info = {
@@ -45,6 +47,21 @@ void version_printBootBanner(void)
                 (unsigned int)s_version_info.hw_major,
                 (unsigned int)s_version_info.hw_minor);
     safe_printf(NULL, "  Build Time : %s\r\n", s_version_info.build_timestamp);
+
+    const boot_version_record_t *boot_rec = boot_version_record_get(BOOTLOADER_FLASH_BASE);
+    if (boot_rec != NULL)
+    {
+        safe_printf(NULL, "  Bootloader : v%u.%u.%u (%s)\r\n",
+                    (unsigned int)boot_rec->major,
+                    (unsigned int)boot_rec->minor,
+                    (unsigned int)boot_rec->patch,
+                    boot_rec->git_commit);
+    }
+    else
+    {
+        safe_printf(NULL, "  Bootloader : unknown (no version record at 0x%08lX)\r\n",
+                    (unsigned long)(BOOTLOADER_FLASH_BASE + BOOT_VERSION_RECORD_OFFSET));
+    }
     safe_printf(NULL, "======================================================================\r\n");
     safe_printf(NULL, "\r\n");
 }

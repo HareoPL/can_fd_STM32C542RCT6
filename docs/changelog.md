@@ -4,6 +4,7 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-21]
 ### Dodane
+- **Rekord wersji Bootloadera (`app/bootloader/boot_version_record.h/.c`, `linker/stm32c542xc_boot_flash.ld`):** 32-bajtowa struktura `boot_version_record_t` (magic `"VBVR"`, wersja z tagu `boot-vX.Y.Z`, hash commita) pod stałym adresem `0x08000200`. Aplikacja raportuje wersję zainstalowanego Bootloadera w bannerze UART i w nowej ramce Discovery `0x03` (pełne 8-bitowe wersje aplikacji i Bootloadera), a przed instalacją Bootloadera ze Staging Slot loguje wersję wgrywanego obrazu. Narzędzia PC (`can_updater.py`, GUI) wyświetlają `FW vX.Y.Z | BL vX.Y.Z`; węzły bez ramki `0x03` są nadal obsługiwane.
 - **ISO-TP – konfigurowalna kontrola przepływu (`app/can_bus/isotp/`):** nowe API `isotp_set_flow_control(link, block_size, st_min)`, obsługa `BlockSize` po stronie odbiorczej (kolejna ramka `FC CTS` po każdych BS ramkach `CF`) oraz rozdzielenie buforów na `ISOTP_RX_BUF_SIZE` (1040 B) i `ISOTP_TX_BUF_SIZE` (64 B).
 - **Protokół OTA (`app/ota_update/ota_protocol.h`):** stałe `OTA_MAX_BLOCK_SIZE` (1024 B) i `OTA_WRITE_PDU_OVERHEAD` (11 B) z asercją `_Static_assert` względem bufora ISO-TP.
 - **Plan wdrożenia:** `docs/bootloader/ota_fast_transfer_plan.md`.

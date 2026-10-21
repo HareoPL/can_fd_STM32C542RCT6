@@ -4,6 +4,7 @@
  */
 
 #include "bootloader_updater.h"
+#include "boot_version_record.h"
 #include "crc32.h"
 #include "safe_printf.h"
 #include "stm32_hal.h"
@@ -181,6 +182,21 @@ bool bootloader_updater_install(uint32_t expected_size, uint32_t expected_crc32)
     {
         safe_printf(TAG, "[INSTALL] Staged vector table validation FAILED!\r\n");
         return false;
+    }
+
+    /* Step 2b: Report the staged bootloader version (images built before the record existed carry none) */
+    const boot_version_record_t *staged_rec = boot_version_record_get(BOOTLOADER_STAGING_BASE);
+    const boot_version_record_t *active_rec = boot_version_record_get(BOOTLOADER_FLASH_BASE);
+    if (staged_rec != NULL)
+    {
+        safe_printf(TAG, "[INSTALL] Staged bootloader v%u.%u.%u (%s), installed: %s\r\n",
+                    (unsigned int)staged_rec->major, (unsigned int)staged_rec->minor,
+                    (unsigned int)staged_rec->patch, staged_rec->git_commit,
+                    (active_rec != NULL) ? active_rec->git_commit : "unknown");
+    }
+    else
+    {
+        safe_printf(TAG, "[INSTALL] WARNING: staged image has no bootloader version record\r\n");
     }
 
     safe_printf(TAG, "[INSTALL] Integrity validated (CRC=0x%08lX, Size=%lu B). Installing to 0x08000000...\r\n",

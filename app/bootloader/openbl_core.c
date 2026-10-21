@@ -207,6 +207,14 @@ static void handle_broadcast_discovery(const uint8_t *data, uint8_t len)
     frame2[7] = PACKED_BOOT_VERSION;
     (void)boot_can_send_frame(resp_id, frame2, sizeof(frame2));
 
+    /* Frame 3: [0x03, AppMaj, AppMin, AppPatch, BootMaj, BootMin, BootPatch, 0x00]
+     * Full 8-bit versions; application version is unknown (0xFF) while running the bootloader */
+    uint8_t frame3[8] = {
+        0x03U, 0xFFU, 0xFFU, 0xFFU,
+        BOOT_VERSION_MAJOR, BOOT_VERSION_MINOR, BOOT_VERSION_PATCH, 0x00U
+    };
+    (void)boot_can_send_frame(resp_id, frame3, sizeof(frame3));
+
     /* On-demand diagnostic crash beacon in Recovery Mode (zero unsolicited traffic on vehicle bus) */
     if (s_boot_mode == BOOT_MODE_RECOVERY)
     {

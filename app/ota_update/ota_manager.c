@@ -17,6 +17,7 @@
 #include "boot_shared.h"
 #include "fault_recovery.h"
 #include "bootloader_updater.h"
+#include "boot_version_record.h"
 #include <string.h>
 
 #define TAG "OTA_MGR"
@@ -133,6 +134,18 @@ static void handle_discovery_cmd(void)
     frame2[6] = OTA_MODE_APPLICATION;
     frame2[7] = packed_ver;
     (void)ota_can_send_frame(resp_id, frame2, sizeof(frame2), s_active_can_inst);
+
+    /* Frame 3: [0x03, AppMaj, AppMin, AppPatch, BootMaj, BootMin, BootPatch, 0x00]
+     * Full 8-bit versions; installed bootloader version read from its Flash record (0xFF if absent) */
+    const boot_version_record_t *boot_rec = boot_version_record_get(BOOTLOADER_FLASH_BASE);
+    uint8_t frame3[8] = {
+        0x03U, ver->fw_major, ver->fw_minor, ver->fw_patch,
+        (boot_rec != NULL) ? boot_rec->major : 0xFFU,
+        (boot_rec != NULL) ? boot_rec->minor : 0xFFU,
+        (boot_rec != NULL) ? boot_rec->patch : 0xFFU,
+        0x00U
+    };
+    (void)ota_can_send_frame(resp_id, frame3, sizeof(frame3), s_active_can_inst);
 
     safe_printf(TAG, "[DISCOVERY] Responded on 0x%08lX (%s) after %lu ms slot (UID: %02X%02X%02X%02X...)\r\n",
                 (unsigned long)resp_id,

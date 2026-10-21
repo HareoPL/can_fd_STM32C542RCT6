@@ -15,8 +15,26 @@
 #include "boot_jump.h"
 #include "openbl_core.h"
 #include "boot_version_config.h"
+#include "boot_version_record.h"
 
 #define TAG                 "BOOT"
+
+/**
+ * @brief Bootloader version record placed at 0x08000200 by the linker script.
+ * @details Lets the Main Application identify the installed Bootloader version without
+ *          entering bootloader mode, and validate staged Bootloader images before installation.
+ */
+__attribute__((section(".boot_version_record"), used))
+const boot_version_record_t g_boot_version_record = {
+    .magic      = BOOT_VERSION_RECORD_MAGIC,
+    .format     = BOOT_VERSION_RECORD_FORMAT,
+    .major      = BOOT_VERSION_MAJOR,
+    .minor      = BOOT_VERSION_MINOR,
+    .patch      = BOOT_VERSION_PATCH,
+    .git_commit = BOOT_GIT_COMMIT,
+    .magic_inv  = ~BOOT_VERSION_RECORD_MAGIC,
+    .reserved   = {0U, 0U}
+};
 
 /**
  * @brief Simple delay based on ARM cycle execution.

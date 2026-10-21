@@ -65,6 +65,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/ota_update/bootloader_updater.c
   app/ota_update/fault_recovery.c
   app/bootloader/boot_shared.c
+  app/bootloader/boot_version_record.c
   app/io/io_manager.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
@@ -147,6 +148,7 @@ target_link_options(${BOOT_TARGET} PUBLIC ${CPU_FLAGS})
 target_sources(${BOOT_TARGET} PRIVATE
   app/bootloader/boot_main.c
   app/bootloader/boot_shared.c
+  app/bootloader/boot_version_record.c
   app/bootloader/boot_jump.c
   app/bootloader/openbl_core.c
   app/bootloader/openbl_flash_c5.c

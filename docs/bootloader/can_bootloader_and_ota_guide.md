@@ -147,8 +147,34 @@ W środowisku docelowym do jednej magistrali CAN może być podłączonych wiele
    > Na mikrokontrolerze STM32C542 obszar systemowy `0x08FFF800` nie zezwala na odczyty 8-bitowe (`ldrb` powoduje natychmiastowy wyjątek `HardFault` / `BusFault`). W funkcji [`ota_get_mcu_uid()`](file:///c:/WORK/5_v-box/app/ota_update/ota_manager.c#L50-L60) oraz w Bootloaderze odczyt realizowany jest wyłącznie jako **trzy wyrównane słowa 32-bitowe (`volatile const uint32_t *`)**.
 3. Z 12 bajtów UID wyliczany jest skrót `uid_hash8` (`CRC32(UID) & 0xFF`), na podstawie którego wyznaczane jest deterministyczne opóźnienie slotu odpowiedzi:
    $$\text{Delay}_{\text{slot}} = (\text{uid\_hash8} \bmod 64) \times 1\text{ ms} \quad (0 \dots 63\text{ ms})$$
-4. Po upływie swojego slotu węzeł nadaje na ID `0x7E9` parę ramek ogłoszeniowych zawierających pełne 96 bitów UID, bieżący tryb pracy (`0x00` = Bootloader, `0x01` = Application, `0xEE` = Recovery) oraz wersję firmware (`vMajor.Minor`).
+4. Po upływie swojego slotu węzeł nadaje na swoim ID odpowiedzi trzy ramki ogłoszeniowe:
+
+   | Ramka | Payload (8 B) | Zawartość |
+   |---|---|---|
+   | `0x01` | `[0x01, UID[0..6]]` | Pierwsze 7 bajtów UID |
+   | `0x02` | `[0x02, UID[7..11], Mode, PackedVer]` | Reszta UID, tryb pracy (`0x00` = Bootloader, `0x01` = Application, `0x02` = Recovery), wersja `Major<<4 \| Minor` (zgodność wsteczna) |
+   | `0x03` | `[0x03, AppMaj, AppMin, AppPatch, BootMaj, BootMin, BootPatch, 0x00]` | Pełne wersje 8-bitowe. Aplikacja raportuje wersję zainstalowanego Bootloadera odczytaną z rekordu wersji we Flash (`0x08000200`); w trybie Bootloadera pola aplikacji mają wartość `0xFF`. Wartość `0xFF 0xFF 0xFF` oznacza wersję nieznaną |
+
+   Narzędzie PC traktuje ramkę `0x03` jako opcjonalną – węzły ze starszym firmware (bez tej ramki) są nadal wykrywane z wersją `vMajor.Minor`.
 5. Aby rozpocząć programowanie wybranego urządzenia, narzędzie PC wysyła komendę `CMD_SELECT_TARGET (0xA1)` wraz z jego 12-bajtowym UID. Tylko węzeł o zgodnym UID ustawia flagę autoryzacji sesji `s_target_selected = true` i odpowiada `OTA_RESP_ACK (0x79)`.
+
+---
+
+### 2.3a. Rekord Wersji Bootloadera (`boot_version_record.h`)
+Obraz Bootloadera zawiera 32-bajtowy rekord `boot_version_record_t` pod stałym adresem **`0x08000200`** (`BOOT_VERSION_RECORD_OFFSET = 0x200`, bezpośrednio za tablicą wektorów; linker script weryfikuje brak nakładania się sekcji `ASSERT`em):
+
+| Pole | Rozmiar | Opis |
+|---|---|---|
+| `magic` | 4 B | `0x52564256` (`"VBVR"`) |
+| `format` | 1 B | Wersja układu rekordu (`1`) |
+| `major` / `minor` / `patch` | 3 × 1 B | Wersja Bootloadera z tagu `boot-vX.Y.Z` |
+| `git_commit` | 12 B | Skrócony hash commita (NUL-terminated) |
+| `magic_inv` | 4 B | `~magic` (kontrola spójności) |
+| `reserved` | 8 B | Zarezerwowane (`0`) |
+
+Zastosowania:
+* Aplikacja odczytuje rekord z `0x08000200` i raportuje wersję Bootloadera w bannerze UART (`Bootloader : vX.Y.Z (hash)`) oraz w ramce Discovery `0x03` – bez wchodzenia w tryb Bootloadera.
+* Przed instalacją nowego Bootloadera (`CMD_UPDATE_BOOTLOADER`) aplikacja loguje wersję obrazu w Staging Slot oraz hash obecnie zainstalowanego Bootloadera. Obraz bez rekordu (zbudowany przed wprowadzeniem rekordu) generuje ostrzeżenie, ale nie blokuje instalacji.
 
 ---
 

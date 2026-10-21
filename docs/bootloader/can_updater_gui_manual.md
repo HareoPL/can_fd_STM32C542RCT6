@@ -108,7 +108,7 @@ Centralna tabela prezentuje szczegółowe informacje o każdym węźle wykrytym 
 * **`96-bitowy UID`:** unikalny, 12-bajtowy identyfikator fabryczny układu STM32 (np. `46009900-19513531-31343039`). Kliknięcie dowolnego wiersza tabeli automatycznie kopiuje ten UID do pola aktualizacji poniżej.
 * **`Hash`:** 1-bajtowy skrót XOR wszystkich 12 bajtów UID (np. `0x9F`). Służy do błyskawicznego łączenia ramek ratunkowych `0xEE` z pełnym wpisem urządzenia w jednym wierszu tabeli.
 * **`Tryb Pracy`:** `APPLICATION`, `BOOTLOADER` lub `BOOTLOADER [RECOVERY]`.
-* **`Wersja FW`:** wersja oprogramowania odczytana z ramki Discovery (np. `v1.1`).
+* **`Wersja FW`:** wersja oprogramowania odczytana z ramki Discovery. Dla aplikacji z nowszym firmware wyświetlana jest pełna wersja aplikacji i zainstalowanego Bootloadera (np. `v2.0.0 | BL v1.2.0`), dla starszego firmware skrócona wersja `vMajor.Minor` (np. `v1.1`).
 * **`Diagnostyka / Crash Info`:**
   * Dla sprawnych układów: `Praca stabilna (OK)` lub `Tryb serwisowy / Programowanie Flash (OK)`.
   * Dla układów w trybie SOS: scalona informacja diagnostyczna w jednym wierszu, np.:  
