@@ -17,44 +17,34 @@ include(cmake/components.cmake)
 # ==============================================================================
 # Automated Firmware & Hardware Versioning
 # ==============================================================================
-set(FW_VERSION_MAJOR 1)
-set(FW_VERSION_MINOR 2)
-set(FW_VERSION_PATCH 0)
-set(FW_VERSION_STRING "v${FW_VERSION_MAJOR}.${FW_VERSION_MINOR}.${FW_VERSION_PATCH}")
-
+# Firmware version comes exclusively from the latest vX.Y.Z git tag (release: `git tag v2.1.0`).
+# version_config.h is regenerated on every build by cmake/version.cmake, so new tags, commits
+# and the -dirty flag are picked up without re-running CMake configure.
 set(HW_TARGET_NAME "NUCLEO-C542RC")
 set(HW_TARGET_MCU "STM32C542RCT6")
 set(HW_VERSION_MAJOR 1)
 set(HW_VERSION_MINOR 0)
 
 find_package(Git QUIET)
-if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
-  execute_process(
-    COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    OUTPUT_VARIABLE GIT_DESCRIBE_STR
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
-  execute_process(
-    COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    OUTPUT_VARIABLE GIT_COMMIT_HASH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-  )
-else()
-  set(GIT_DESCRIBE_STR "${FW_VERSION_STRING}")
-  set(GIT_COMMIT_HASH "unknown")
-endif()
+set(VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated_version/version_config.h")
 
-string(TIMESTAMP BUILD_TIMESTAMP_STR "%Y-%m-%d %H:%M:%S UTC")
-
-configure_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/app/version/version_config.h.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/generated_version/version_config.h"
-  @ONLY
+add_custom_target(generate_version
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+    -DVERSION_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/app/version/version_config.h.in
+    -DVERSION_OUTPUT=${VERSION_HEADER}
+    -DBUILD_TYPE=${CMAKE_BUILD_TYPE}
+    -DHW_TARGET_NAME=${HW_TARGET_NAME}
+    -DHW_TARGET_MCU=${HW_TARGET_MCU}
+    -DHW_VERSION_MAJOR=${HW_VERSION_MAJOR}
+    -DHW_VERSION_MINOR=${HW_VERSION_MINOR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+  BYPRODUCTS ${VERSION_HEADER}
+  COMMENT "Resolving firmware version from git tag"
+  VERBATIM
 )
+add_dependencies(${CMAKE_PROJECT_NAME} generate_version)
 
 set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
   CUSTOM_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/linker/stm32c542xc_app_flash.ld"
