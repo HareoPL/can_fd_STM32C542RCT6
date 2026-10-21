@@ -17,9 +17,9 @@ static hal_flash_handle_t s_hflash;
 static bool s_flash_inited = false;
 
 /**
- * @brief Static 512-byte buffer in BSS to guarantee 32-bit alignment for HAL flash writes.
+ * @brief Static buffer holding one OTA block in BSS to guarantee 32-bit alignment for HAL flash writes.
  */
-static uint32_t s_aligned_buf[128];
+static uint32_t s_aligned_buf[OTA_MAX_BLOCK_SIZE / 4U];
 
 bool bootloader_updater_init(void)
 {

@@ -24,8 +24,21 @@
 _Static_assert((OTA_MAX_BLOCK_SIZE + OTA_WRITE_PDU_OVERHEAD) <= ISOTP_RX_BUF_SIZE,
                "ISO-TP RX buffer too small for the largest OTA write block");
 
-/** @brief Length of the incoming frame queue (must buffer at least one full multi-frame PDU: 39 frames for 256 B block). */
+/** @brief Length of the incoming frame queue (must hold at least one ISO-TP block of OTA_ISOTP_FC_BLOCK_SIZE frames plus FF/FC slack). */
 #define OTA_QUEUE_LENGTH                64U
+
+/**
+ * @brief ISO-TP Flow Control Block Size advertised to the PC tool.
+ * @details Frames travel ISR -> can_rx_task -> s_ota_rx_queue -> ota_worker. Limiting the sender to 16
+ *          back-to-back frames per Flow Control guarantees the queue never overflows, even when the
+ *          low-priority ota_worker is delayed by other tasks.
+ */
+#define OTA_ISOTP_FC_BLOCK_SIZE         16U
+
+/** @brief ISO-TP Flow Control STmin advertised to the PC tool (0 = back-to-back frames within a block). */
+#define OTA_ISOTP_FC_ST_MIN             0U
+
+_Static_assert(OTA_ISOTP_FC_BLOCK_SIZE < OTA_QUEUE_LENGTH, "OTA queue must hold a full ISO-TP block");
 
 /** @brief Static storage for cached 96-bit MCU UID. */
 static uint8_t s_mcu_uid[STM32C5_UID_LEN_BYTES];
@@ -270,7 +283,7 @@ static void handle_isotp_pdu(const uint8_t *payload, uint16_t length, void *user
                                   ((uint32_t)payload[3] << 16) | ((uint32_t)payload[4] << 24);
             uint16_t block_len  = (uint16_t)payload[5] | ((uint16_t)payload[6] << 8);
 
-            if (length < (7U + block_len + 4U))
+            if ((block_len > OTA_MAX_BLOCK_SIZE) || (length < (7U + block_len + 4U)))
             {
                 uint8_t nack[2] = {OTA_RESP_NACK, OTA_ERR_SEQUENCE};
                 (void)isotp_send_pdu(&s_isotp_link, nack, sizeof(nack));
@@ -525,6 +538,7 @@ bool ota_manager_init(can_instance_t *can2_inst)
                ota_can_send_frame,
                handle_isotp_pdu,
                s_active_can_inst);
+    isotp_set_flow_control(&s_isotp_link, OTA_ISOTP_FC_BLOCK_SIZE, OTA_ISOTP_FC_ST_MIN);
 
     /* Create OTA worker task */
     BaseType_t ret = xTaskCreate(ota_worker_task,
