@@ -60,6 +60,12 @@ extern "C" {
 #define BOOTLOADER_STAGING_SIZE_BYTES   0x8000UL        /**< Bootloader Staging Slot size: 32 KB (16 pages) */
 
 /* ===========================================================================
+ * Transfer Parameters
+ * =========================================================================== */
+#define OTA_MAX_BLOCK_SIZE              1024U   /**< Maximum data bytes carried by a single CMD_WRITE_MEMORY block */
+#define OTA_WRITE_PDU_OVERHEAD          11U     /**< CMD_WRITE_MEMORY framing: cmd(1) + addr(4) + len(2) + crc32(4) */
+
+/* ===========================================================================
  * Protocol Response Codes
  * =========================================================================== */
 #define OTA_RESP_ACK                    0x79U   /**< Positive acknowledgment */

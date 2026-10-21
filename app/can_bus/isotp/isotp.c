@@ -6,6 +6,27 @@
 #include "isotp.h"
 #include <string.h>
 
+/**
+ * @brief Transmits a Flow Control "Clear To Send" frame with the link's configured BS/STmin.
+ * @param[in,out] link Pointer to link structure.
+ */
+static void isotp_send_fc_cts(isotp_link_t *link)
+{
+    uint8_t fc_frame[8] = {
+        ISOTP_PCI_TYPE_FLOW_CONTROL | ISOTP_FC_FS_CTS,
+        link->rx_fc_block_size,
+        link->rx_fc_st_min,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U
+    };
+
+    link->rx_cf_in_block = 0U;
+
+    if (link->tx_fn != NULL)
+    {
+        (void)link->tx_fn(link->tx_can_id, fc_frame, sizeof(fc_frame), link->user_ctx);
+    }
+}
+
 void isotp_init(isotp_link_t *link,
                 uint32_t rx_can_id,
                 uint32_t tx_can_id,
@@ -26,6 +47,19 @@ void isotp_init(isotp_link_t *link,
     link->user_ctx  = user_ctx;
     link->rx_state  = ISOTP_RX_STATE_IDLE;
     link->tx_state  = ISOTP_TX_STATE_IDLE;
+    link->rx_fc_block_size = ISOTP_DEFAULT_FC_BLOCK_SIZE;
+    link->rx_fc_st_min     = ISOTP_DEFAULT_FC_ST_MIN;
+}
+
+void isotp_set_flow_control(isotp_link_t *link, uint8_t block_size, uint8_t st_min)
+{
+    if (link == NULL)
+    {
+        return;
+    }
+
+    link->rx_fc_block_size = block_size;
+    link->rx_fc_st_min     = st_min;
 }
 
 void isotp_reset_rx(isotp_link_t *link)
@@ -39,6 +73,7 @@ void isotp_reset_rx(isotp_link_t *link)
     link->rx_total_len = 0U;
     link->rx_received_len = 0U;
     link->rx_sn = 0U;
+    link->rx_cf_in_block = 0U;
 }
 
 void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data, uint8_t len)
@@ -84,7 +119,7 @@ void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data
             uint16_t ff_dl = ((uint16_t)(data[0] & 0x0FU) << 8) | data[1];
 
             /* If payload exceeds our reassembly buffer, reject with Overflow */
-            if (ff_dl > ISOTP_MAX_BUF_SIZE)
+            if (ff_dl > ISOTP_RX_BUF_SIZE)
             {
                 uint8_t fc_overflow[8] = {0x32U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
                 if (link->tx_fn != NULL)
@@ -101,12 +136,8 @@ void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data
             link->rx_sn = 1U;
             link->rx_state = ISOTP_RX_STATE_RECEIVING_CF;
 
-            /* Send Flow Control: Clear To Send (FS=0), BlockSize=0 (no limit), STmin=2ms */
-            uint8_t fc_frame[8] = {0x30U, 0x00U, 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U};
-            if (link->tx_fn != NULL)
-            {
-                link->tx_fn(link->tx_can_id, fc_frame, sizeof(fc_frame), link->user_ctx);
-            }
+            /* Send Flow Control: Clear To Send with configured BlockSize and STmin */
+            isotp_send_fc_cts(link);
             break;
         }
 
@@ -144,6 +175,15 @@ void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data
                 if (link->rx_cb != NULL)
                 {
                     link->rx_cb(link->rx_buf, total_len, link->user_ctx);
+                }
+            }
+            else if (link->rx_fc_block_size != 0U)
+            {
+                /* Block complete: grant the sender the next block of consecutive frames */
+                link->rx_cf_in_block++;
+                if (link->rx_cf_in_block >= link->rx_fc_block_size)
+                {
+                    isotp_send_fc_cts(link);
                 }
             }
             break;
@@ -197,7 +237,7 @@ void isotp_on_can_frame(isotp_link_t *link, uint32_t can_id, const uint8_t *data
 
 bool isotp_send_pdu(isotp_link_t *link, const uint8_t *payload, uint16_t length)
 {
-    if (link == NULL || payload == NULL || length == 0U || length > ISOTP_MAX_BUF_SIZE)
+    if (link == NULL || payload == NULL || length == 0U || length > ISOTP_TX_BUF_SIZE)
     {
         return false;
     }

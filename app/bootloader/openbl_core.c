@@ -18,6 +18,9 @@
 #define TAG                     "BOOT"
 #define PACKED_BOOT_VERSION     0x11U   /**< Bootloader version v1.1 */
 
+_Static_assert((OTA_MAX_BLOCK_SIZE + OTA_WRITE_PDU_OVERHEAD) <= ISOTP_RX_BUF_SIZE,
+               "ISO-TP RX buffer too small for the largest OTA write block");
+
 static hal_fdcan_handle_t *s_hfdcan1 = NULL;
 static hal_fdcan_handle_t *s_hfdcan2 = NULL;
 static hal_fdcan_handle_t *s_active_hfdcan = NULL;

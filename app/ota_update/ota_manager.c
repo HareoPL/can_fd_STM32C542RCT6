@@ -21,6 +21,9 @@
 
 #define TAG "OTA_MGR"
 
+_Static_assert((OTA_MAX_BLOCK_SIZE + OTA_WRITE_PDU_OVERHEAD) <= ISOTP_RX_BUF_SIZE,
+               "ISO-TP RX buffer too small for the largest OTA write block");
+
 /** @brief Length of the incoming frame queue (must buffer at least one full multi-frame PDU: 39 frames for 256 B block). */
 #define OTA_QUEUE_LENGTH                64U
 
