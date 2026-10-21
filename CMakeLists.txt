@@ -157,7 +157,27 @@ target_sources(${BOOT_TARGET} PRIVATE
   stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c
 )
 
+# Bootloader version comes exclusively from the latest boot-vX.Y.Z git tag (release: `git tag boot-v1.3.0`),
+# independent of the Main Application release line.
+set(BOOT_VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated_version/boot_version_config.h")
+
+add_custom_target(generate_boot_version
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+    -DTAG_PREFIX=boot-v
+    -DVERSION_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/app/bootloader/boot_version_config.h.in
+    -DVERSION_OUTPUT=${BOOT_VERSION_HEADER}
+    -DBUILD_TYPE=${CMAKE_BUILD_TYPE}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+  BYPRODUCTS ${BOOT_VERSION_HEADER}
+  COMMENT "Resolving bootloader version from git tag"
+  VERBATIM
+)
+add_dependencies(${BOOT_TARGET} generate_boot_version)
+
 target_include_directories(${BOOT_TARGET} PUBLIC
+  ${CMAKE_CURRENT_BINARY_DIR}/generated_version
   .
   arch/cmsis/CMSIS/Core/Include
   generated/hal

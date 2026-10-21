@@ -1,0 +1,17 @@
+/**
+ * @file boot_version_config.h
+ * @brief Auto-generated Bootloader version metadata (latest boot-vX.Y.Z git tag).
+ * @note Automatically generated file by CMake (cmake/version.cmake) - DO NOT EDIT MANUALLY.
+ */
+#ifndef BOOT_VERSION_CONFIG_H
+#define BOOT_VERSION_CONFIG_H
+
+#define BOOT_VERSION_MAJOR      @FW_VERSION_MAJOR@U
+#define BOOT_VERSION_MINOR      @FW_VERSION_MINOR@U
+#define BOOT_VERSION_PATCH      @FW_VERSION_PATCH@U
+#define BOOT_VERSION_STRING     "@FW_VERSION_STRING@"
+#define BOOT_GIT_COMMIT         "@GIT_COMMIT_HASH@"
+#define BOOT_GIT_DESCRIBE       "@GIT_DESCRIBE_STR@"
+#define BOOT_BUILD_TIMESTAMP    "@BUILD_TIMESTAMP_STR@"
+
+#endif /* BOOT_VERSION_CONFIG_H */

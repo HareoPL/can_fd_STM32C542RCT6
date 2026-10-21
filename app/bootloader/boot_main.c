@@ -14,6 +14,7 @@
 #include "boot_shared.h"
 #include "boot_jump.h"
 #include "openbl_core.h"
+#include "boot_version_config.h"
 
 #define TAG                 "BOOT"
 
@@ -40,7 +41,8 @@ int main(void)
     (void)mx_usart2_uart_init();
 
     safe_printf(TAG, "\r\n==============================================\r\n");
-    safe_printf(TAG, "  STM32C542 CAN Bootloader (v_box_boot v1.2)-OTA  \r\n");
+    safe_printf(TAG, "  STM32C542 CAN Bootloader (v_box_boot %s)-OTA  \r\n", BOOT_VERSION_STRING);
+    safe_printf(TAG, "  Git: %s | Built: %s\r\n", BOOT_GIT_DESCRIBE, BOOT_BUILD_TIMESTAMP);
     safe_printf(TAG, "==============================================\r\n");
 
     /* Inspect Shared RAM structure */

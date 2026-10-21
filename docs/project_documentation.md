@@ -395,15 +395,21 @@ typedef struct {
 The firmware version is defined **exclusively by the latest annotated or lightweight git tag matching `vX.Y.Z`**. There are no manually maintained version numbers in `CMakeLists.txt`.
 
 * The `generate_version` custom target runs [cmake/version.cmake](file:///c:/WORK/5_v-box/cmake/version.cmake) on **every build** (not only at configure time), so new tags, commits and the `-dirty` state are always reflected without re-running CMake.
-* `git describe --tags --match "v[0-9]*" --abbrev=0` $ightarrow$ latest release tag, parsed into `FW_VERSION_MAJOR/MINOR/PATCH` and `FW_VERSION_STRING` (e.g. `v2.0.0`).
-* `git describe --tags --match "v[0-9]*" --always --dirty` $ightarrow$ `FW_GIT_DESCRIBE` with distance from the tag, commit and dirty flag (e.g. `v2.0.0-6-g52797a0-dirty`).
-* `git rev-parse --short HEAD` $ightarrow$ `FW_GIT_COMMIT`.
-* `FW_BUILD_TIMESTAMP` $ightarrow$ UTC time of the build that last changed the version metadata.
+* `git describe --tags --match "v[0-9]*" --abbrev=0` $
+ightarrow$ latest release tag, parsed into `FW_VERSION_MAJOR/MINOR/PATCH` and `FW_VERSION_STRING` (e.g. `v2.0.0`).
+* `git describe --tags --match "v[0-9]*" --always --dirty` $
+ightarrow$ `FW_GIT_DESCRIBE` with distance from the tag, commit and dirty flag (e.g. `v2.0.0-6-g52797a0-dirty`).
+* `git rev-parse --short HEAD` $
+ightarrow$ `FW_GIT_COMMIT`.
+* `FW_BUILD_TIMESTAMP` $
+ightarrow$ UTC time of the build that last changed the version metadata.
 * The header is rewritten only when the git state or build configuration changes, so incremental builds recompile only [app/version/version.c](file:///c:/WORK/5_v-box/app/version/version.c) after a commit or tag.
 * Without a git repository or a matching tag the build falls back to `v0.0.0` and prints a CMake warning.
 * `FW_VERSION_MAJOR/MINOR` are reported over CAN (OTA discovery packs them into one byte as `major << 4 | minor`, so each must stay in the range 0–15).
 
 **Release procedure:** commit the changes, then `git tag v2.1.0` (and `git push origin v2.1.0`) and build. No source file needs to be edited.
+
+**Bootloader release line:** the Bootloader (`v_box_boot`) is versioned independently from tags `boot-vX.Y.Z` (e.g. `git tag boot-v1.3.0`). The `generate_boot_version` target runs the same script with `TAG_PREFIX=boot-v` and produces `boot_version_config.h` (`BOOT_VERSION_MAJOR/MINOR/PATCH`, `BOOT_VERSION_STRING`, `BOOT_GIT_DESCRIBE`), used by the UART banner, the packed discovery version byte and the `CMD_SELECT_TARGET` response.
 
 ### 8.3. Diagnostic Boot Banner (UART)
 During early boot (before FreeRTOS scheduler initialization), `main()` invokes `version_printBootBanner()`. The output is transmitted over USART2 at 115200 baud:

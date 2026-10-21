@@ -220,6 +220,12 @@ git push origin v2.1.0
 ```
 Następnie zwykły build – nie trzeba edytować żadnego pliku ani ponownie uruchamiać CMake configure. Bez repozytorium git lub tagu firmware dostaje wersję `v0.0.0` (z ostrzeżeniem CMake). `MAJOR` i `MINOR` muszą mieścić się w zakresie 0–15 (pakowane w jeden bajt ramki OTA Discovery).
 
+**Bootloader ma osobną linię wydań** – tagi z prefiksem `boot-v` (np. `boot-v1.2.0`), z których ten sam skrypt generuje `generated_version/boot_version_config.h` (`BOOT_VERSION_MAJOR/MINOR/PATCH`, `BOOT_VERSION_STRING`, `BOOT_GIT_DESCRIBE`). Wersja Bootloadera trafia do bannera UART, bajtu wersji w odpowiedzi OTA Discovery oraz odpowiedzi na `CMD_SELECT_TARGET`. Tagi obu linii są od siebie niezależne (`v*` nie dopasowuje `boot-v*` i odwrotnie):
+```bash
+git tag boot-v1.3.0          # wydanie Bootloadera
+git push origin boot-v1.3.0
+```
+
 ---
 
 ## 7. Automatyczny Raport Pamięci FLASH i RAM

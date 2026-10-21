@@ -13,10 +13,16 @@
 #include "mx_fdcan1.h"
 #include "mx_fdcan2.h"
 #include "safe_printf.h"
+#include "boot_version_config.h"
 #include <string.h>
 
 #define TAG                     "BOOT"
-#define PACKED_BOOT_VERSION     0x12U   /**< Bootloader version v1.2 */
+
+_Static_assert((BOOT_VERSION_MAJOR <= 15U) && (BOOT_VERSION_MINOR <= 15U),
+               "Bootloader MAJOR/MINOR must fit the 4-bit fields of the packed discovery version byte");
+
+/** @brief Bootloader version packed as (major << 4 | minor) for the discovery response (from boot-vX.Y.Z tag). */
+#define PACKED_BOOT_VERSION     ((uint8_t)((BOOT_VERSION_MAJOR << 4) | BOOT_VERSION_MINOR))
 
 /** @brief ISO-TP Flow Control Block Size: bare-metal polling drains RX FIFO0 every ~10 us, no limit needed. */
 #define BOOT_ISOTP_FC_BLOCK_SIZE    0U
@@ -245,7 +251,7 @@ static void boot_isotp_pdu_cb(const uint8_t *payload, uint16_t length, void *use
                 uint8_t resp[5] = {
                     OTA_RESP_ACK,
                     OTA_MODE_BOOTLOADER,
-                    1U, 0U, 0U /* v1.0.0 */
+                    BOOT_VERSION_MAJOR, BOOT_VERSION_MINOR, BOOT_VERSION_PATCH
                 };
                 (void)isotp_send_pdu(&s_boot_isotp, resp, sizeof(resp));
                 safe_printf(TAG, "[SELECT] Device SELECTED by UID! ACK sent.\r\n");
