@@ -95,6 +95,28 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional defined symbols here
 )
 
+# CAN FD bus test build (tools/can_fd_test.py). Never enable for production images.
+option(CAN_FD_TEST "Build CAN FD test module (CP_FD_TEST parser replaces V_BOX on CAN1)" OFF)
+if(CAN_FD_TEST)
+  message(WARNING "CAN_FD_TEST=ON: building CAN FD TEST firmware, not for production")
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    app/can_bus/can_fd_test/can_fd_test.c
+    app/can_bus/can_parser/parsers/cp_fd_test.c
+  )
+  target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
+    app/can_bus/can_fd_test
+  )
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC
+    CAN_FD_TEST=1
+    CAN_MANAGER_TX_LOG=0
+  )
+  # CAN1 <-> CAN2 loop test: requires a CAN FD capable transceiver on FDCAN2 on the same bus
+  option(CAN_FD_TEST_LOOP "Use CAN2 as CAN FD loop partner of CAN1 in the test build" OFF)
+  if(CAN_FD_TEST_LOOP)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC CAN_FD_TEST_LOOP=1)
+  endif()
+endif()
+
 target_compile_options(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional compiler flags here
 )

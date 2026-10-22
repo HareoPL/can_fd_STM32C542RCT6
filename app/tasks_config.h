@@ -36,4 +36,8 @@
 #define TASK_PRIO_OTA_WORKER    (tskIDLE_PRIORITY + 2U)
 #define TASK_STACK_OTA_WORKER   512U   // * 4 = 2048 bytes
 
+// CAN FD TEST TASK (only with CAN_FD_TEST build option)
+#define TASK_PRIO_CAN_FD_TEST   (tskIDLE_PRIORITY + 3U)
+#define TASK_STACK_CAN_FD_TEST  512U   // * 4 = 2048 bytes
+
 #endif /* TASKS_CONFIG_H */

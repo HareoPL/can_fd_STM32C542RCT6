@@ -30,6 +30,9 @@
 #include "ota_manager.h"
 #include "version.h"
 #include "safe_printf.h"
+#if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
+#include "can_fd_test.h"
+#endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -85,6 +88,22 @@ int main(void)
     return (-1);
   }
 
+#if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
+  /* CAN FD test build: CP_FD_TEST parser (with BOOT_OTA) replaces V_BOX on CAN1. On the test bench CAN2
+   * shares the physical bus, so a fixed Classic 500 kbps CAN2 would disturb every other bit rate:
+   * - CAN_FD_TEST_LOOP=1: CAN2 is the loop partner and follows every CAN1 configuration,
+   * - otherwise CAN2 is not started (stays in INIT, silent on the bus). */
+#if defined(CAN_FD_TEST_LOOP) && (CAN_FD_TEST_LOOP == 1)
+  if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2") ||
+      !can_fd_test_init(&can1_inst, &can2_inst))
+#else
+  if (!can_fd_test_init(&can1_inst, NULL))
+#endif
+  {
+    safe_printf(NULL, "[MAIN] ERROR: CAN1 FD test init failed!\r\n");
+    return (-1);
+  }
+#else
   if (!can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX))
   {
     safe_printf(NULL, "[MAIN] ERROR: CAN1 parser select failed!\r\n");
@@ -97,7 +116,9 @@ int main(void)
     safe_printf(NULL, "[MAIN] ERROR: CAN1 attach BOOT_OTA parser failed!\r\n");
     return (-1);
   }
+#endif
 
+#if !defined(CAN_FD_TEST) || (CAN_FD_TEST == 0)
   /* 3. Inicjalizacja instancji CAN2 (tryb i prędkości ustawia wybrany profil parsera) */
   if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2"))
   {
@@ -110,6 +131,7 @@ int main(void)
     safe_printf(NULL, "[MAIN] ERROR: CAN2 parser select failed!\r\n");
     return (-1);
   }
+#endif
 
   /* 4. Inicjalizacja menedżera aktualizacji OTA (Dummy Update Worker i ISO-TP na CAN1) */
   if (!ota_manager_init(&can1_inst))
@@ -130,6 +152,9 @@ int main(void)
     safe_printf(NULL, "[MAIN] ERROR: app_synctasks_init failed!\r\n");
     return (-1);
   }
+
+  /* Report remaining FreeRTOS heap after all tasks and queues are created */
+  safe_printf(NULL, "[MAIN] FreeRTOS heap free: %u B\r\n", (unsigned int)xPortGetFreeHeapSize());
 
   /* Start the FreeRTOS scheduler */
   vTaskStartScheduler();
