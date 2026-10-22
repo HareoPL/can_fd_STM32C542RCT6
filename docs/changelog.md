@@ -2,6 +2,17 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-22]
+### Dodane
+- **Moduł testu CAN FD (`app/can_bus/can_fd_test/`, `cp_fd_test`, `tools/can_fd_test.py`):** opcja CMake `CAN_FD_TEST` (osobny katalog builda) – parser `CP_FD_TEST` ze zmienną konfiguracją magistrali przełączaną przez `can_parser_select()`, protokół testowy (PING, SET_CONFIG z powrotem awaryjnym po 5 s, GET_STATS, BURST, TX_PROBE, LOOP), echo wszystkich długości DLC, opcjonalna pętla CAN1↔CAN2 (`CAN_FD_TEST_LOOP`). Narzędzie PC: matryca 13 konfiguracji + testy negatywne, log UART, raport Markdown. Instrukcja: `docs/can_bus/can_fd_test_guide.md`, wyniki: `docs/can_bus/can_fd_test_report.md`.
+- **Diagnostyka magistrali w porcie (`can_interface_t::get_status`, `can_manager_getStatus()`):** TEC/REC, error passive / bus-off, LEC/DLEC, TDCV, akumulowany licznik błędów protokołu (ECR.CEL) oraz błędy per typ zliczane w przerwaniu PEA/PED.
+- **`can_manager_waitTxIdle()`**, licznik odrzuconych ramek TX (`tx_error_cnt`) i restartów po bus-off (`bus_off_cnt`) w `can_instance_t`, przełącznik `CAN_MANAGER_TX_LOG` (logi każdej ramki TX).
+- **`open_can_bus()` (`tools/can_updater.py`):** opcjonalne parametry CAN FD (`fd`, `data_bitrate`, `sample_point`, `data_sample_point`) dla adaptera candleLight.
+
+### Naprawione
+- **Brak wyjścia z bus-off:** M_CAN po bus-off zostawał w INIT na stałe (stan HAL nadal ACTIVE), węzeł przestawał nadawać do resetu. Task TX menedżera nadzoruje teraz bus-off (co 100 ms i po błędzie TX) i restartuje kontroler.
+- **Wyczerpanie sterty FreeRTOS:** po zwiększeniu `CAN_msg_t` do 72 B kolejki CAN/OTA nie mieściły się w 24 KB (`app_synctasks_init failed`). `configTOTAL_HEAP_SIZE` = 28 KB, wolna sterta logowana po starcie.
+
 ## [2026-10-21]
 ### Dodane
 - **CAN FD – konfiguracja szyny w profilu parsera (`app/can_bus/can_parser/`, `app/port/can_port.h`):** `can_parser_profile_t` ma nowe pole `bus_config` (tryb `CAN_MODE_CLASSIC` / `CAN_MODE_FD_NO_BRS` / `CAN_MODE_FD_BRS` oraz prędkości), stosowane przez `can_parser_select()` przez nową funkcję `can_manager_setBusConfig()`. Przy błędzie przywracana jest poprzednia konfiguracja. Profil `BOOT_OTA` (`bus_config = NULL`) nie zmienia trybu szyny. Usunięto ręczne ustawianie `can_config` z `main.c`.
