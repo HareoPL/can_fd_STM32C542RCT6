@@ -12,6 +12,7 @@
 #include "mx_fdcan1.h"
 #include "mx_fdcan2.h"
 #include <stddef.h>
+#include <string.h>
 
 /**
  * @brief Variables storing RX notification callback and context for CAN1.
@@ -23,7 +24,7 @@ static void* s_can1_rx_context = NULL;
  * @brief Active configuration cached for CAN1 instance.
  */
 static can_config_t s_can1_config = {
-    .frame_format = CAN_MSG_FRAME_FORMAT_CAN,
+    .mode = CAN_MODE_CLASSIC,
     .baudrate_normal = CAN_BAUDRATE_500K,
     .baudrate_FD = CAN_BAUDRATE_CUSTOM
 };
@@ -38,7 +39,7 @@ static void* s_can2_rx_context = NULL;
  * @brief Active configuration cached for CAN2 instance.
  */
 static can_config_t s_can2_config = {
-    .frame_format = CAN_MSG_FRAME_FORMAT_CAN,
+    .mode = CAN_MODE_CLASSIC,
     .baudrate_normal = CAN_BAUDRATE_500K,
     .baudrate_FD = CAN_BAUDRATE_CUSTOM
 };
@@ -89,124 +90,249 @@ static uint8_t fdcan_dlc_to_bytes(hal_fdcan_data_length_code_t dlc)
     }
 }
 
+/** @brief Nominal (arbitration) phase sample point in per mille. */
+#define STM32C5_NOMINAL_SAMPLE_POINT 875U
+
+/** @brief Data phase sample point in per mille. */
+#define STM32C5_DATA_SAMPLE_POINT    750U
+
+/** @brief Maximum accepted deviation from the requested sample point in per mille. */
+#define STM32C5_SAMPLE_POINT_TOLERANCE 30U
+
+/** @brief Minimum number of time quanta per bit accepted by the bit timing calculator. */
+#define STM32C5_MIN_TQ_PER_BIT       8U
+
+/** @brief Highest data prescaler for which Transmitter Delay Compensation is allowed (M_CAN constraint). */
+#define STM32C5_TDC_MAX_PRESCALER    2U
+
 /**
- * @brief Configures nominal bit rate timing for 144 MHz clock and 87.5% sample point.
- * @param[in] hfdcan FDCAN peripheral handle.
- * @param[in] baudrate Nominal bit rate.
- * @return true on success, false if unsupported bit rate or HAL error.
+ * @brief Register field limits of one bit timing phase (Prescaler, TSEG1, TSEG2, SJW).
  */
-static bool stm32c5_set_nominal_baudrate(hal_fdcan_handle_t *hfdcan, can_baudrate_t baudrate)
+typedef struct
 {
-    if (baudrate == CAN_BAUDRATE_CUSTOM)
-    {
-        /* Preserve default hardware configuration */
-        return true;
-    }
+    uint32_t prescaler_max;
+    uint32_t tseg1_max;
+    uint32_t tseg2_max;
+    uint32_t sjw_max;
+} stm32c5_timing_limits_t;
 
-    hal_fdcan_nominal_bit_timing_t timing = {0};
-    timing.nominal_jump_width = 1;
+/**
+ * @brief Calculated bit timing of one phase.
+ */
+typedef struct
+{
+    uint32_t prescaler; /**< Time quantum prescaler */
+    uint32_t tseg1;     /**< Prop_Seg + Phase_Seg1 in time quanta */
+    uint32_t tseg2;     /**< Phase_Seg2 in time quanta */
+    uint32_t sjw;       /**< Synchronization jump width in time quanta */
+} stm32c5_bit_timing_t;
 
-    switch (baudrate)
-    {
-        case CAN_BAUDRATE_1000K:
-            timing.nominal_prescaler = 1;
-            timing.nominal_time_seg1 = 125;
-            timing.nominal_time_seg2 = 18;
-            break;
+/** @brief FDCAN NBTP register limits (nominal phase). */
+static const stm32c5_timing_limits_t s_nominal_limits = { 512U, 256U, 128U, 128U };
 
-        case CAN_BAUDRATE_500K:
-            timing.nominal_prescaler = 1;
-            timing.nominal_time_seg1 = 251;
-            timing.nominal_time_seg2 = 36;
-            break;
+/** @brief FDCAN DBTP register limits (data phase). */
+static const stm32c5_timing_limits_t s_data_limits = { 32U, 32U, 16U, 16U };
 
-        case CAN_BAUDRATE_250K:
-            timing.nominal_prescaler = 2;
-            timing.nominal_time_seg1 = 251;
-            timing.nominal_time_seg2 = 36;
-            break;
+/**
+ * @brief Returns the FDCAN time quantum source clock (kernel clock after the common divider).
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @return Clock frequency in Hz.
+ */
+static uint32_t stm32c5_get_can_clock_hz(const hal_fdcan_handle_t *hfdcan)
+{
+    /* CKDIV encoding: 0 = /1, n = /(2*n) */
+    uint32_t div_code = (uint32_t)HAL_FDCAN_GetClockDivider(hfdcan);
+    uint32_t divider = (div_code == 0U) ? 1U : (2U * div_code);
 
-        case CAN_BAUDRATE_125K:
-            timing.nominal_prescaler = 4;
-            timing.nominal_time_seg1 = 251;
-            timing.nominal_time_seg2 = 36;
-            break;
-
-        default:
-            return false;
-    }
-
-    /* Set Synchronization Jump Width equal to Phase_Seg2 for robust bit resynchronization */
-    timing.nominal_jump_width = timing.nominal_time_seg2;
-
-    return (HAL_FDCAN_SetNominalBitTiming(hfdcan, &timing) == HAL_OK);
+    return HAL_FDCAN_GetClockFreq(hfdcan) / divider;
 }
 
 /**
- * @brief Configures fast data bit rate timing for CAN FD (144 MHz clock, 75% sample point).
- * @param[in] hfdcan FDCAN peripheral handle.
- * @param[in] baudrate Fast data bit rate.
- * @return true on success, false if unsupported bit rate or HAL error.
+ * @brief Calculates bit timing for an exact bit rate, searching from the smallest prescaler
+ *        (highest time quantum resolution) within the given prescaler range.
+ * @param[in] clock_hz FDCAN clock frequency in Hz.
+ * @param[in] bitrate Requested bit rate in bit/s.
+ * @param[in] sample_point Requested sample point in per mille.
+ * @param[in] prescaler_min Lowest prescaler to try.
+ * @param[in] prescaler_max Highest prescaler to try (clipped to the register limit).
+ * @param[in] limits Register field limits of the phase.
+ * @param[out] out Calculated timing.
+ * @return true if an exact timing was found, false otherwise.
  */
-static bool stm32c5_set_data_baudrate(hal_fdcan_handle_t *hfdcan, can_baudrate_t baudrate)
+static bool stm32c5_calc_bit_timing(uint32_t clock_hz,
+                                    uint32_t bitrate,
+                                    uint32_t sample_point,
+                                    uint32_t prescaler_min,
+                                    uint32_t prescaler_max,
+                                    const stm32c5_timing_limits_t *limits,
+                                    stm32c5_bit_timing_t *out)
 {
-    if (baudrate == CAN_BAUDRATE_CUSTOM)
-    {
-        return true;
-    }
-
-    hal_fdcan_data_bit_timing_t timing = {0};
-    timing.data_time_seg1 = 26;
-    timing.data_time_seg2 = 9;
-    timing.data_jump_width = 4;
-
-    switch (baudrate)
-    {
-        case CAN_BAUDRATE_4000K:
-            timing.data_prescaler = 1;
-            break;
-
-        case CAN_BAUDRATE_2000K:
-            timing.data_prescaler = 2;
-            break;
-
-        case CAN_BAUDRATE_1000K:
-            timing.data_prescaler = 4;
-            break;
-
-        case CAN_BAUDRATE_500K:
-            timing.data_prescaler = 8;
-            break;
-
-        default:
-            return false;
-    }
-
-    return (HAL_FDCAN_SetDataBitTiming(hfdcan, &timing) == HAL_OK);
-}
-
-/**
- * @brief Checks if Bit Rate Switch (BRS) is enabled for the current configuration.
- * @param[in] config Pointer to CAN configuration parameters.
- * @return true if BRS is active (CAN FD with faster data phase bit rate), false otherwise.
- */
-static bool stm32c5_is_brs_enabled(const can_config_t *config)
-{
-    if (config == NULL)
+    if (clock_hz == 0U || bitrate == 0U || limits == NULL || out == NULL)
     {
         return false;
     }
 
-    return (config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN) &&
-           (config->baudrate_FD != CAN_BAUDRATE_CUSTOM) &&
-           (config->baudrate_FD > config->baudrate_normal);
+    if (prescaler_max > limits->prescaler_max)
+    {
+        prescaler_max = limits->prescaler_max;
+    }
+
+    for (uint32_t prescaler = prescaler_min; prescaler <= prescaler_max; prescaler++)
+    {
+        /* Bit rate must be reachable exactly, CAN has no tolerance for rounding */
+        uint32_t clocks_per_bit = prescaler * bitrate;
+        if ((clock_hz % clocks_per_bit) != 0U)
+        {
+            continue;
+        }
+
+        uint32_t tq_per_bit = clock_hz / clocks_per_bit;
+        if (tq_per_bit < STM32C5_MIN_TQ_PER_BIT || tq_per_bit > (1U + limits->tseg1_max + limits->tseg2_max))
+        {
+            continue;
+        }
+
+        uint32_t tseg2 = ((tq_per_bit * (1000U - sample_point)) + 500U) / 1000U;
+        if (tseg2 < 1U)
+        {
+            tseg2 = 1U;
+        }
+        if (tseg2 > limits->tseg2_max)
+        {
+            tseg2 = limits->tseg2_max;
+        }
+
+        uint32_t tseg1 = tq_per_bit - 1U - tseg2;
+        if (tseg1 > limits->tseg1_max)
+        {
+            tseg1 = limits->tseg1_max;
+            tseg2 = tq_per_bit - 1U - tseg1;
+        }
+
+        if (tseg1 < 1U || tseg2 > limits->tseg2_max)
+        {
+            continue;
+        }
+
+        /* Segment clipping may move the sample point; try a larger prescaler instead */
+        uint32_t actual_sp = ((1U + tseg1) * 1000U) / tq_per_bit;
+        uint32_t sp_error = (actual_sp > sample_point) ? (actual_sp - sample_point) : (sample_point - actual_sp);
+        if (sp_error > STM32C5_SAMPLE_POINT_TOLERANCE)
+        {
+            continue;
+        }
+
+        out->prescaler = prescaler;
+        out->tseg1 = tseg1;
+        out->tseg2 = tseg2;
+        out->sjw = (tseg2 < limits->sjw_max) ? tseg2 : limits->sjw_max;
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief Configures nominal and data phase bit timing plus transmitter delay compensation.
+ *        Peripheral must be in IDLE state.
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @param[in] config Desired bus configuration.
+ * @return true on success, false if a bit rate is not reachable with the current clock or HAL error.
+ */
+static bool stm32c5_apply_bit_timing(hal_fdcan_handle_t *hfdcan, const can_config_t *config)
+{
+    const uint32_t clock_hz = stm32c5_get_can_clock_hz(hfdcan);
+    const bool brs = (config->mode == CAN_MODE_FD_BRS);
+    stm32c5_bit_timing_t data = {0};
+
+    if (brs)
+    {
+        /* Bit rate switching requires an explicit data phase bit rate */
+        if (config->baudrate_FD == CAN_BAUDRATE_CUSTOM)
+        {
+            return false;
+        }
+
+        if (!stm32c5_calc_bit_timing(clock_hz, (uint32_t)config->baudrate_FD, STM32C5_DATA_SAMPLE_POINT,
+                                     1U, s_data_limits.prescaler_max, &s_data_limits, &data))
+        {
+            return false;
+        }
+    }
+
+    /* CAN_BAUDRATE_CUSTOM keeps the nominal timing generated by CubeMX */
+    if (config->baudrate_normal != CAN_BAUDRATE_CUSTOM)
+    {
+        stm32c5_bit_timing_t nominal = {0};
+
+        /* Prefer the data phase prescaler for both phases (identical time quantum, CiA 601-3) */
+        bool found = brs && stm32c5_calc_bit_timing(clock_hz, (uint32_t)config->baudrate_normal,
+                                                    STM32C5_NOMINAL_SAMPLE_POINT, data.prescaler,
+                                                    data.prescaler, &s_nominal_limits, &nominal);
+        if (!found)
+        {
+            found = stm32c5_calc_bit_timing(clock_hz, (uint32_t)config->baudrate_normal,
+                                            STM32C5_NOMINAL_SAMPLE_POINT, 1U,
+                                            s_nominal_limits.prescaler_max, &s_nominal_limits, &nominal);
+        }
+        if (!found)
+        {
+            return false;
+        }
+
+        hal_fdcan_nominal_bit_timing_t nominal_timing = {
+            .nominal_prescaler  = nominal.prescaler,
+            .nominal_time_seg1  = nominal.tseg1,
+            .nominal_time_seg2  = nominal.tseg2,
+            .nominal_jump_width = nominal.sjw
+        };
+        if (HAL_FDCAN_SetNominalBitTiming(hfdcan, &nominal_timing) != HAL_OK)
+        {
+            return false;
+        }
+    }
+
+    if (!brs)
+    {
+        return (HAL_FDCAN_DisableTxDelayCompensation(hfdcan) == HAL_OK);
+    }
+
+    hal_fdcan_data_bit_timing_t data_timing = {
+        .data_prescaler  = data.prescaler,
+        .data_time_seg1  = data.tseg1,
+        .data_time_seg2  = data.tseg2,
+        .data_jump_width = data.sjw
+    };
+    if (HAL_FDCAN_SetDataBitTiming(hfdcan, &data_timing) != HAL_OK)
+    {
+        return false;
+    }
+
+    /* The DBTP write above clears the TDC bit, so compensation is enabled only afterwards.
+     * TDC is valid for data prescaler 1 or 2; slower data phases do not need it. */
+    if (data.prescaler > STM32C5_TDC_MAX_PRESCALER)
+    {
+        return true;
+    }
+
+    /* Secondary sample point placed at the data sample point, in FDCAN clock periods (mtq) */
+    hal_fdcan_tx_delay_comp_config_t tdc = {
+        .tx_delay_comp_offset     = data.prescaler * data.tseg1,
+        .tx_delay_comp_win_length = 0U
+    };
+    if (HAL_FDCAN_SetConfigTxDelayCompensation(hfdcan, &tdc) != HAL_OK)
+    {
+        return false;
+    }
+
+    return (HAL_FDCAN_EnableTxDelayCompensation(hfdcan) == HAL_OK);
 }
 
 /**
  * @brief Generic initialization routine for any FDCAN instance.
  * @param[in] hfdcan FDCAN peripheral handle.
- * @param[in,out] p_cached_config Pointer to cached config structure.
- * @param[in] config Pointer to desired CAN configuration.
+ * @param[in,out] p_cached_config Pointer to cached config structure (updated only on success).
+ * @param[in] config Pointer to desired CAN configuration (NULL = Classic CAN 500 kbps).
  * @param[in] irq_n NVIC IRQ number for this FDCAN instance line 0.
  * @return true on success, false on error.
  */
@@ -229,56 +355,36 @@ static bool stm32c5_can_init_generic(hal_fdcan_handle_t *hfdcan,
         }
     }
 
-    /* Cache active configuration */
+    can_config_t new_config = {
+        .mode = CAN_MODE_CLASSIC,
+        .baudrate_normal = CAN_BAUDRATE_500K,
+        .baudrate_FD = CAN_BAUDRATE_CUSTOM
+    };
     if (config != NULL)
     {
-        *p_cached_config = *config;
-    }
-    else
-    {
-        p_cached_config->frame_format = CAN_MSG_FRAME_FORMAT_CAN;
-        p_cached_config->baudrate_normal = CAN_BAUDRATE_500K;
-        p_cached_config->baudrate_FD = CAN_BAUDRATE_CUSTOM;
+        new_config = *config;
     }
 
-    /* Configure nominal bit rate */
-    if (!stm32c5_set_nominal_baudrate(hfdcan, p_cached_config->baudrate_normal))
+    hal_fdcan_frame_format_t frame_format;
+    switch (new_config.mode)
+    {
+        case CAN_MODE_CLASSIC:   frame_format = HAL_FDCAN_FRAME_FORMAT_CLASSIC_CAN; break;
+        case CAN_MODE_FD_NO_BRS: frame_format = HAL_FDCAN_FRAME_FORMAT_FD_NO_BRS;   break;
+        case CAN_MODE_FD_BRS:    frame_format = HAL_FDCAN_FRAME_FORMAT_FD_BRS;      break;
+        default:                 return false;
+    }
+
+    if (!stm32c5_apply_bit_timing(hfdcan, &new_config))
     {
         return false;
     }
 
-    /* Configure frame format (Classic CAN vs CAN FD) */
-    if (p_cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
+    if (HAL_FDCAN_SetFrameFormat(hfdcan, frame_format) != HAL_OK)
     {
-        if (stm32c5_is_brs_enabled(p_cached_config))
-        {
-            if (HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_BRS) != HAL_OK)
-            {
-                return false;
-            }
+        return false;
+    }
 
-            if (!stm32c5_set_data_baudrate(hfdcan, p_cached_config->baudrate_FD))
-            {
-                return false;
-            }
-        }
-        else
-        {
-            /* CAN FD mode without bit rate switching */
-            if (HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_NO_BRS) != HAL_OK)
-            {
-                return false;
-            }
-        }
-    }
-    else
-    {
-        /* Classic CAN mode */
-        if (HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_CLASSIC_CAN) != HAL_OK)
-        {
-            return false;
-        }
-    }
+    *p_cached_config = new_config;
 
     /* Set safe interrupt priority for FreeRTOS (>= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY) */
     HAL_CORTEX_NVIC_SetPriority(irq_n, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, HAL_CORTEX_NVIC_SUB_PRIORITY_0);
@@ -302,18 +408,22 @@ static bool stm32c5_can_init_generic(hal_fdcan_handle_t *hfdcan,
  * @brief Generic message transmission routine for any FDCAN instance.
  * @param[in] hfdcan FDCAN peripheral handle.
  * @param[in] cached_config Pointer to active configuration.
- * @param[in] id CAN Identifier (Standard or Extended).
- * @param[in] data Pointer to payload data buffer.
- * @param[in] len Length of data in bytes.
- * @return true on success, false if TX FIFO is full or parameter error.
+ * @param[in] msg Frame to send; msg->format selects Classic or FD frame.
+ * @return true on success, false if TX FIFO is full, FD frame on Classic bus or parameter error.
  */
 static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
                                          const can_config_t *cached_config,
-                                         uint32_t id,
-                                         const uint8_t* data,
-                                         uint8_t len)
+                                         const CAN_msg_t *msg)
 {
-    if (hfdcan == NULL || cached_config == NULL || data == NULL)
+    if (hfdcan == NULL || cached_config == NULL || msg == NULL)
+    {
+        return false;
+    }
+
+    const bool is_fd = (msg->format == CAN_MSG_FRAME_FORMAT_FD_CAN);
+
+    /* FD frame would be destroyed by error frames on a Classic CAN bus */
+    if (is_fd && cached_config->mode == CAN_MODE_CLASSIC)
     {
         return false;
     }
@@ -332,19 +442,23 @@ static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
         return false;
     }
 
-    hal_fdcan_tx_header_t tx_header = {0};
-    uint8_t max_payload = (cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? 64U : 8U;
-    uint8_t payload_len = (len > max_payload) ? max_payload : len;
+    uint8_t max_payload = is_fd ? 64U : 8U;
+    uint8_t payload_len = (msg->len > max_payload) ? max_payload : msg->len;
 
+    /* FD lengths above 8 are quantized (e.g. 10 -> 12 bytes), unused tail is padded with zeros */
+    uint8_t tx_data[64] = {0};
+    memcpy(tx_data, msg->data, payload_len);
+
+    hal_fdcan_tx_header_t tx_header = {0};
     tx_header.b.data_length = bytes_to_fdcan_dlc(payload_len);
-    tx_header.b.identifier_type = CAN_msg_is_extended_id(id) ? HAL_FDCAN_ID_EXTENDED : HAL_FDCAN_ID_STANDARD;
-    tx_header.b.identifier = CAN_msg_get_can_id(id);
+    tx_header.b.identifier_type = CAN_msg_is_extended_id(msg->ident) ? HAL_FDCAN_ID_EXTENDED : HAL_FDCAN_ID_STANDARD;
+    tx_header.b.identifier = CAN_msg_get_can_id(msg->ident);
     tx_header.b.frame_type = HAL_FDCAN_FRAME_DATA;
 
-    if (cached_config->frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
+    if (is_fd)
     {
         tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN;
-        tx_header.b.bit_rate_switch = stm32c5_is_brs_enabled(cached_config)
+        tx_header.b.bit_rate_switch = (cached_config->mode == CAN_MODE_FD_BRS)
                                       ? HAL_FDCAN_BIT_RATE_SWITCH_ON
                                       : HAL_FDCAN_BIT_RATE_SWITCH_OFF;
     }
@@ -354,7 +468,7 @@ static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
         tx_header.b.bit_rate_switch = HAL_FDCAN_BIT_RATE_SWITCH_OFF;
     }
 
-    if (HAL_FDCAN_ReqTransmitMsgFromFIFOQ(hfdcan, &tx_header, data) != HAL_OK)
+    if (HAL_FDCAN_ReqTransmitMsgFromFIFOQ(hfdcan, &tx_header, tx_data) != HAL_OK)
     {
         return false;
     }
@@ -365,17 +479,12 @@ static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
 /**
  * @brief Generic message reception routine from Rx FIFO 0.
  * @param[in] hfdcan FDCAN peripheral handle.
- * @param[out] id Pointer to variable storing received identifier.
- * @param[out] data Buffer for received payload.
- * @param[out] len Pointer to variable storing received data length.
+ * @param[out] msg Received frame (identifier, length, payload and actual frame format).
  * @return true on success, false if FIFO is empty or error occurred.
  */
-static bool stm32c5_can_receive_generic(hal_fdcan_handle_t *hfdcan,
-                                        uint32_t* id,
-                                        uint8_t* data,
-                                        uint8_t* len)
+static bool stm32c5_can_receive_generic(hal_fdcan_handle_t *hfdcan, CAN_msg_t *msg)
 {
-    if (hfdcan == NULL || id == NULL || data == NULL || len == NULL)
+    if (hfdcan == NULL || msg == NULL)
     {
         return false;
     }
@@ -388,19 +497,22 @@ static bool stm32c5_can_receive_generic(hal_fdcan_handle_t *hfdcan,
     }
 
     hal_fdcan_rx_header_t rx_header = {0};
-    if (HAL_FDCAN_GetReceivedMessage(hfdcan, HAL_FDCAN_RX_FIFO_0, &rx_header, data) != HAL_OK)
+    if (HAL_FDCAN_GetReceivedMessage(hfdcan, HAL_FDCAN_RX_FIFO_0, &rx_header, msg->data) != HAL_OK)
     {
         return false;
     }
 
-    *len = fdcan_dlc_to_bytes(rx_header.b.data_length);
+    msg->len = fdcan_dlc_to_bytes(rx_header.b.data_length);
+    msg->format = (rx_header.b.frame_format == HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN)
+                  ? CAN_MSG_FRAME_FORMAT_FD_CAN
+                  : CAN_MSG_FRAME_FORMAT_CAN;
     if (rx_header.b.identifier_type == HAL_FDCAN_ID_EXTENDED)
     {
-        *id = CAN_msg_set_extended_id(rx_header.b.identifier);
+        msg->ident = CAN_msg_set_extended_id(rx_header.b.identifier);
     }
     else
     {
-        *id = CAN_msg_set_standard_id(rx_header.b.identifier);
+        msg->ident = CAN_msg_set_standard_id(rx_header.b.identifier);
     }
 
     return true;
@@ -544,14 +656,14 @@ static bool stm32c5_can1_init(const can_config_t *config)
     return stm32c5_can_init_generic(mx_fdcan1_gethandle(), &s_can1_config, config, FDCAN1_IT0_IRQn);
 }
 
-static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
+static bool stm32c5_can1_transmit(const CAN_msg_t *msg)
 {
-    return stm32c5_can_transmit_generic(mx_fdcan1_gethandle(), &s_can1_config, id, data, len);
+    return stm32c5_can_transmit_generic(mx_fdcan1_gethandle(), &s_can1_config, msg);
 }
 
-static bool stm32c5_can1_receive(uint32_t* id, uint8_t* data, uint8_t* len)
+static bool stm32c5_can1_receive(CAN_msg_t *msg)
 {
-    return stm32c5_can_receive_generic(mx_fdcan1_gethandle(), id, data, len);
+    return stm32c5_can_receive_generic(mx_fdcan1_gethandle(), msg);
 }
 
 static void stm32c5_can1_attach_rx_callback(can_rx_notify_fn cb, void* context)
@@ -587,14 +699,14 @@ static bool stm32c5_can2_init(const can_config_t *config)
     return stm32c5_can_init_generic(mx_fdcan2_gethandle(), &s_can2_config, config, FDCAN2_IT0_IRQn);
 }
 
-static bool stm32c5_can2_transmit(uint32_t id, const uint8_t* data, uint8_t len)
+static bool stm32c5_can2_transmit(const CAN_msg_t *msg)
 {
-    return stm32c5_can_transmit_generic(mx_fdcan2_gethandle(), &s_can2_config, id, data, len);
+    return stm32c5_can_transmit_generic(mx_fdcan2_gethandle(), &s_can2_config, msg);
 }
 
-static bool stm32c5_can2_receive(uint32_t* id, uint8_t* data, uint8_t* len)
+static bool stm32c5_can2_receive(CAN_msg_t *msg)
 {
-    return stm32c5_can_receive_generic(mx_fdcan2_gethandle(), id, data, len);
+    return stm32c5_can_receive_generic(mx_fdcan2_gethandle(), msg);
 }
 
 static void stm32c5_can2_attach_rx_callback(can_rx_notify_fn cb, void* context)

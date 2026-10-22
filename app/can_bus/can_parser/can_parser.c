@@ -37,6 +37,7 @@ static can_parser_id_t s_active_parser = CAN_PARSER_COUNT;
 
 /**
  * @brief Dynamically selects and activates a CAN parser profile by its numerical ID.
+ *        Applies the profile bus configuration first, then its acceptance filters.
  * @param[in,out] can_inst Pointer to target CAN instance (e.g. &can1_inst).
  * @param[in] id Parser profile identifier (CAN_PARSER_ID_V_BOX, CAN_PARSER_ID_EXAMPLE).
  * @return true on success, false on error.
@@ -50,6 +51,11 @@ bool can_parser_select(can_instance_t *can_inst, can_parser_id_t id)
 
     const can_parser_profile_t *profile = s_parsers[id]();
     if (profile == NULL)
+    {
+        return false;
+    }
+
+    if (profile->bus_config != NULL && !can_manager_setBusConfig(can_inst, profile->bus_config))
     {
         return false;
     }

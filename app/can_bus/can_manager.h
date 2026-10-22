@@ -62,6 +62,15 @@ bool can_manager_send(can_instance_t* inst, const CAN_msg_t* msg);
 bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, uint32_t num_filters);
 
 /**
+ * @brief Reconfigures bus mode and bit rates of an initialized CAN instance.
+ *        On failure the previous configuration is restored.
+ * @param[in,out] inst Pointer to CAN instance.
+ * @param[in] config Desired bus configuration.
+ * @return true on success (or configuration unchanged), false on error.
+ */
+bool can_manager_setBusConfig(can_instance_t* inst, const can_config_t *config);
+
+/**
  * @brief Returns the CAN instance currently executing an RX filter callback.
  * @return Pointer to the active can_instance_t during callback dispatch, or NULL.
  */

@@ -24,12 +24,21 @@ typedef enum {
 } can_baudrate_t;
 
 /**
+ * @brief Operating mode of the CAN/FDCAN bus.
+ */
+typedef enum {
+    CAN_MODE_CLASSIC = 0, /**< Classic CAN 2.0 only (max 8 bytes payload) */
+    CAN_MODE_FD_NO_BRS,   /**< CAN FD frames allowed, data phase at nominal bit rate */
+    CAN_MODE_FD_BRS       /**< CAN FD frames allowed, data phase switched to baudrate_FD */
+} can_frame_mode_t;
+
+/**
  * @brief Configuration parameters for CAN/FDCAN bus instance.
  */
 typedef struct {
-    uint32_t frame_format;          /**< Frame format: CAN_MSG_FRAME_FORMAT_CAN or CAN_MSG_FRAME_FORMAT_FD_CAN */
+    can_frame_mode_t mode;          /**< Bus operating mode (Classic / FD / FD with BRS) */
     can_baudrate_t baudrate_normal; /**< Nominal bit rate for arbitration phase */
-    can_baudrate_t baudrate_FD;     /**< Data bit rate for CAN FD fast data phase */
+    can_baudrate_t baudrate_FD;     /**< Data bit rate for CAN FD fast data phase (used only in CAN_MODE_FD_BRS) */
 } can_config_t;
 
 #include "can_msg_types.h"
@@ -65,9 +74,9 @@ typedef void (*can_rx_notify_fn)(void* context);
  * @brief Generic hardware interface structure for CAN controllers.
  */
 typedef struct {
-    bool (*init)(const can_config_t *config);
-    bool (*transmit)(uint32_t id, const uint8_t* data, uint8_t len);
-    bool (*receive)(uint32_t* id, uint8_t* data, uint8_t* len);
+    bool (*init)(const can_config_t *config);              /**< (Re)configures and starts the controller */
+    bool (*transmit)(const CAN_msg_t *msg);                /**< Sends frame using msg->format (FD rejected on Classic bus) */
+    bool (*receive)(CAN_msg_t *msg);                       /**< Reads one frame, msg->format reflects the received frame */
     void (*attach_rx_callback)(can_rx_notify_fn cb, void* context);
     bool (*set_filter)(const can_filter_t *filters, uint32_t num_filters); /**< Hardware filter setup */
 } can_interface_t;

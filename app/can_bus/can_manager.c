@@ -47,18 +47,18 @@ static void can_tx_task(void *pvParameters)
         /* Wait for frame to be queued */
         if (xQueueReceive(inst->tx_queue, &can_msg, portMAX_DELAY) == pdTRUE)
         {
-            uint8_t payload_len = can_msg.len;
-            if (payload_len > sizeof(can_msg.data))
+            if (can_msg.len > sizeof(can_msg.data))
             {
-                payload_len = (uint8_t)sizeof(can_msg.data);
+                can_msg.len = (uint8_t)sizeof(can_msg.data);
             }
 
-            safe_printf(inst->name, "queue msg ID=0x%03lX len=%u\r\n",
+            safe_printf(inst->name, "queue msg ID=0x%03lX len=%u %s\r\n",
                         (unsigned long)CAN_msg_get_can_id(can_msg.ident),
-                        (unsigned int)payload_len);
+                        (unsigned int)can_msg.len,
+                        (can_msg.format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? "FD" : "CAN");
 
             if (inst->hw_interface->transmit != NULL &&
-                inst->hw_interface->transmit(can_msg.ident, can_msg.data, payload_len))
+                inst->hw_interface->transmit(&can_msg))
             {
                 safe_printf(inst->name, "sent ID=0x%03lX OK\r\n", CAN_msg_get_can_id(can_msg.ident));
             }
@@ -138,20 +138,11 @@ static void can_rx_task(void *pvParameters)
         {
             if (inst->hw_interface->receive != NULL)
             {
-                uint32_t rx_id = 0;
-                uint8_t rx_data[64] = {0};
-                uint8_t rx_len = 0;
+                CAN_msg_t rx_msg = {0};
 
                 /* Flush all pending frames from the hardware FIFO */
-                while (inst->hw_interface->receive(&rx_id, rx_data, &rx_len))
+                while (inst->hw_interface->receive(&rx_msg))
                 {
-                    CAN_msg_t rx_msg = {0};
-                    rx_msg.ident = rx_id;
-                    rx_msg.len = rx_len;
-                    rx_msg.format = inst->can_config.frame_format;
-                    uint8_t copy_len = (rx_len > sizeof(rx_msg.data)) ? (uint8_t)sizeof(rx_msg.data) : rx_len;
-                    memcpy(rx_msg.data, rx_data, copy_len);
-
                     /* Dispatch received frame to matching filter callback */
                     can_manager_dispatch_rx(inst, &rx_msg);
                 }
@@ -182,7 +173,7 @@ bool can_manager_init(can_instance_t* inst,
     if (inst->can_config.baudrate_normal == 0)
     {
         inst->can_config.baudrate_normal = CAN_BAUDRATE_500K;
-        inst->can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN;
+        inst->can_config.mode = CAN_MODE_CLASSIC;
         inst->can_config.baudrate_FD = CAN_BAUDRATE_CUSTOM;
     }
 
@@ -278,6 +269,63 @@ bool can_manager_send(can_instance_t* inst, const CAN_msg_t* msg)
     }
 
     return (xQueueSend(inst->tx_queue, msg, 0) == pdPASS);
+}
+
+/**
+ * @brief Returns printable name of a bus operating mode.
+ * @param[in] mode Bus operating mode.
+ * @return Constant string.
+ */
+static const char *can_manager_mode_name(can_frame_mode_t mode)
+{
+    switch (mode)
+    {
+        case CAN_MODE_CLASSIC:   return "Classic";
+        case CAN_MODE_FD_NO_BRS: return "FD";
+        case CAN_MODE_FD_BRS:    return "FD+BRS";
+        default:                 return "?";
+    }
+}
+
+/**
+ * @brief Reconfigures bus mode and bit rates of an initialized CAN instance.
+ *        The controller is stopped, reconfigured and restarted; on failure the previous
+ *        configuration is restored. Must not race with frames in flight (call during
+ *        startup or while the bus is idle).
+ * @param[in,out] inst Pointer to CAN instance.
+ * @param[in] config Desired bus configuration.
+ * @return true on success (or configuration unchanged), false on error.
+ */
+bool can_manager_setBusConfig(can_instance_t* inst, const can_config_t *config)
+{
+    if (inst == NULL || inst->hw_interface == NULL || config == NULL)
+    {
+        return false;
+    }
+
+    if (inst->can_config.mode == config->mode &&
+        inst->can_config.baudrate_normal == config->baudrate_normal &&
+        inst->can_config.baudrate_FD == config->baudrate_FD)
+    {
+        return true;
+    }
+
+    if (inst->hw_interface->init != NULL && !inst->hw_interface->init(config))
+    {
+        safe_printf(inst->name, "ERROR: bus config %s %lu/%lu bps not supported, restoring previous\r\n",
+                    can_manager_mode_name(config->mode),
+                    (unsigned long)config->baudrate_normal,
+                    (unsigned long)config->baudrate_FD);
+        (void)inst->hw_interface->init(&inst->can_config);
+        return false;
+    }
+
+    inst->can_config = *config;
+    safe_printf(inst->name, "bus config: %s nominal=%lu bps data=%lu bps\r\n",
+                can_manager_mode_name(config->mode),
+                (unsigned long)config->baudrate_normal,
+                (unsigned long)((config->mode == CAN_MODE_FD_BRS) ? config->baudrate_FD : config->baudrate_normal));
+    return true;
 }
 
 /**

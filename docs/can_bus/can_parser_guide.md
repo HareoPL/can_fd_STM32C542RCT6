@@ -170,8 +170,19 @@ static const can_filter_t s_filters[] = {
     }
 };
 
+/**
+ * @brief Konfiguracja szyny ustawiana przy wyborze profilu (can_parser_select).
+ *        Tryby: CAN_MODE_CLASSIC, CAN_MODE_FD_NO_BRS, CAN_MODE_FD_BRS (wymaga baudrate_FD).
+ */
+static const can_config_t s_bus_config = {
+    .mode            = CAN_MODE_FD_BRS,
+    .baudrate_normal = CAN_BAUDRATE_500K,
+    .baudrate_FD     = CAN_BAUDRATE_2000K
+};
+
 /** @brief Immutable profile descriptor. */
 static const can_parser_profile_t s_profile = {
+    .bus_config  = &s_bus_config, /* NULL = profil nie zmienia konfiguracji szyny */
     .filters     = s_filters,
     .num_filters = (uint8_t)(sizeof(s_filters) / sizeof(s_filters[0]))
 };
@@ -183,6 +194,13 @@ const can_parser_profile_t *cp_<nazwa>_profile_get(void)
     return &s_profile;
 }
 ```
+
+> [!NOTE]
+> **Konfiguracja szyny w profilu:** `can_parser_select()` najpierw stosuje `bus_config`
+> (`can_manager_setBusConfig()`: stop → rekonfiguracja → start, przy błędzie przywracana jest
+> poprzednia konfiguracja), a dopiero potem filtry. Profil nakładkowy `BOOT_OTA` ma
+> `bus_config = NULL`, więc nie zmienia trybu szyny. Ramki OTA są nadawane jako Classic CAN
+> (`msg.format`), także na szynie pracującej w trybie FD.
 
 > [!IMPORTANT]
 > **Maski filtrów:**

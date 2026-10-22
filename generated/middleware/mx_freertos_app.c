@@ -136,7 +136,7 @@ static void main_task(void *pvParameters)
     
     /* Create a test CAN message */
     
-    // test_msg.format = CAN_MSG_FRAME_FORMAT_CAN; // todo aktualnie nie bierze tego pod uwage podczas wysylki. 
+    // test_msg.format = CAN_MSG_FRAME_FORMAT_CAN; /* FD wymaga profilu z CAN_MODE_FD_NO_BRS / CAN_MODE_FD_BRS, len do 64 */
     // // test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
     
     // // test_msg.ident = CAN_msg_set_standard_id(0x1AA); /* Standard ID = 0x1AA */

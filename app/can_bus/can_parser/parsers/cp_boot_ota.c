@@ -78,6 +78,7 @@ static const can_filter_t s_filters[] = {
 
 /** @brief Immutable profile descriptor (rule count calculated automatically). */
 static const can_parser_profile_t s_profile = {
+    .bus_config  = NULL, /* Overlay profile: keeps the bus configuration of the host parser */
     .filters     = s_filters,
     .num_filters = (uint8_t)(sizeof(s_filters) / sizeof(s_filters[0]))
 };

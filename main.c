@@ -78,17 +78,7 @@ int main(void)
   /* Print system boot banner with FW/HW version and build metadata */
   version_printBootBanner();
 
-  /* 2. Inicjalizacja instancji CAN1 (domyślna konfiguracja 500k lub z can1_inst.can_config) */
- // CAN NORMAL
-  can1_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN; // CAN_MSG_FRAME_FORMAT_FD_CAN
-  can1_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
-
-  // todo przetestowac CANFD
-  // trzeba tez w main_task zmienic testowa ramke test_msg.format = CAN_MSG_FRAME_FORMAT_FD_CAN;
-  // can1_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_FD_CAN; // CAN_MSG_FRAME_FORMAT_CAN
-  // can1_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
-  // can1_inst.can_config.baudrate_FD = CAN_BAUDRATE_500K;
-
+  /* 2. Inicjalizacja instancji CAN1 (tryb i prędkości ustawia wybrany profil parsera) */
   if (!can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1"))
   {
     safe_printf(NULL, "[MAIN] ERROR: CAN1 manager init failed!\r\n");
@@ -108,11 +98,7 @@ int main(void)
     return (-1);
   }
 
-  /* 3. Inicjalizacja instancji CAN2 dla Bootloadera / OTA (Classic CAN 2.0 @ 500 kbps) */
-  can2_inst.can_config.frame_format = CAN_MSG_FRAME_FORMAT_CAN;
-  can2_inst.can_config.baudrate_normal = CAN_BAUDRATE_500K;
-  can2_inst.can_config.baudrate_FD = CAN_BAUDRATE_CUSTOM;
-
+  /* 3. Inicjalizacja instancji CAN2 (tryb i prędkości ustawia wybrany profil parsera) */
   if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2"))
   {
     safe_printf(NULL, "[MAIN] ERROR: CAN2 manager init failed!\r\n");

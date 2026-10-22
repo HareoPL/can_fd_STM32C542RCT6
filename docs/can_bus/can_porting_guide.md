@@ -133,23 +133,35 @@ Plik: `app/port/can_port.h`
 #include <stdbool.h>
 
 /**
- * @brief Dozwolone prędkości transmisji magistrali CAN.
+ * @brief Dozwolone prędkości transmisji magistrali CAN / fazy danych CAN FD.
  */
 typedef enum {
     CAN_BAUDRATE_CUSTOM = 0,       /**< Domyślna konfiguracja sprzętowa (np. z CubeMX) */
     CAN_BAUDRATE_125K   = 125000,  /**< 125 kbps */
     CAN_BAUDRATE_250K   = 250000,  /**< 250 kbps */
     CAN_BAUDRATE_500K   = 500000,  /**< 500 kbps */
-    CAN_BAUDRATE_1000K  = 1000000  /**< 1 Mbps */
+    CAN_BAUDRATE_1000K  = 1000000, /**< 1 Mbps */
+    CAN_BAUDRATE_2000K  = 2000000, /**< 2 Mbps (faza danych CAN FD) */
+    CAN_BAUDRATE_4000K  = 4000000, /**< 4 Mbps (faza danych CAN FD) */
+    CAN_BAUDRATE_8000K  = 8000000  /**< 8 Mbps (faza danych CAN FD) */
 } can_baudrate_t;
+
+/**
+ * @brief Tryb pracy szyny.
+ */
+typedef enum {
+    CAN_MODE_CLASSIC = 0, /**< Tylko Classic CAN 2.0 (max 8 B) */
+    CAN_MODE_FD_NO_BRS,   /**< Ramki CAN FD, faza danych z prędkością nominalną */
+    CAN_MODE_FD_BRS       /**< Ramki CAN FD, faza danych przełączana na baudrate_FD */
+} can_frame_mode_t;
 
 /**
  * @brief Struktura konfiguracyjna parametrów pracy szyny CAN/FDCAN.
  */
 typedef struct {
-    uint32_t frame_format;          /**< Format ramki: CAN_MSG_FRAME_FORMAT_CAN lub CAN_MSG_FRAME_FORMAT_FD_CAN */
-    can_baudrate_t baudrate_normal; /**< Wybrana prędkość transmisji nominalnej */
-    can_baudrate_t baudrate_FD;     /**< Wybrana prędkość transmisji danych (dla CAN FD) */
+    can_frame_mode_t mode;          /**< Tryb pracy szyny */
+    can_baudrate_t baudrate_normal; /**< Prędkość fazy arbitrażu (nominalna) */
+    can_baudrate_t baudrate_FD;     /**< Prędkość fazy danych (tylko CAN_MODE_FD_BRS) */
 } can_config_t;
 
 /**
@@ -162,17 +174,20 @@ typedef void (*can_rx_notify_fn)(void* context);
  * @brief Generyczna struktura interfejsu sprzętowego magistrali CAN.
  */
 typedef struct {
-    /** Inicjalizacja kontrolera o parametrach z can_config_t */
+    /** (Re)konfiguracja i start kontrolera o parametrach z can_config_t */
     bool (*init)(const can_config_t *config);
 
-    /** Nadanie ramki: id (standard/extended), bufor danych, długość w bajtach */
-    bool (*transmit)(uint32_t id, const uint8_t* data, uint8_t len);
+    /** Nadanie ramki; msg->format wybiera Classic / FD (ramka FD na szynie Classic jest odrzucana) */
+    bool (*transmit)(const CAN_msg_t *msg);
 
-    /** Odbiór ramki ze sprzętowego FIFO: wypełnia id, bufor danych oraz odebraną długość */
-    bool (*receive)(uint32_t* id, uint8_t* data, uint8_t* len);
+    /** Odbiór ramki ze sprzętowego FIFO; msg->format odpowiada faktycznie odebranej ramce */
+    bool (*receive)(CAN_msg_t *msg);
 
     /** Podpięcie callbacku powiadomienia z przerwania ISR */
     void (*attach_rx_callback)(can_rx_notify_fn cb, void* context);
+
+    /** Konfiguracja sprzętowych filtrów akceptacji */
+    bool (*set_filter)(const can_filter_t *filters, uint32_t num_filters);
 } can_interface_t;
 
 #endif // CAN_PORT_H
@@ -216,115 +231,46 @@ static void* s_can1_rx_context = NULL;
 ```
 
 2. **Inicjalizacja i konfiguracja trybu (`init`):**
-```c
-static bool stm32c5_can1_init(const can_config_t *config)
-{
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
-    if (hfdcan == NULL) return false;
 
-    if (HAL_FDCAN_GetState(hfdcan) == HAL_FDCAN_STATE_ACTIVE)
-    {
-        HAL_FDCAN_Stop(hfdcan);
-    }
+`stm32c5_can_init_generic()` zatrzymuje peryferium, wylicza bit timing, ustawia format ramki
+(`CAN_MODE_*` → `HAL_FDCAN_FRAME_FORMAT_*`) i ponownie startuje FDCAN. Konfiguracja jest
+zapamiętywana w adapterze dopiero po poprawnym zastosowaniu.
 
-    can_config_t cfg = (config != NULL) ? *config : (can_config_t){
-        .frame_format = CAN_MSG_FRAME_FORMAT_CAN,
-        .baudrate_normal = CAN_BAUDRATE_500K,
-        .baudrate_FD = CAN_BAUDRATE_CUSTOM
-    };
+**Kalkulator bit timingu (`stm32c5_calc_bit_timing`)** zamiast tablic:
+* Zegar kwantu czasu: `HAL_FDCAN_GetClockFreq()` / dzielnik `CKDIV` (obecnie PCLK1 = 144 MHz, `/1`).
+* Szuka najmniejszego prescalera (najwyższa rozdzielczość), dla którego prędkość jest **dokładna**,
+  liczba tq mieści się w limitach rejestru (NBTP: presc ≤ 512, TSEG1 ≤ 256, TSEG2 ≤ 128;
+  DBTP: presc ≤ 32, TSEG1 ≤ 32, TSEG2 ≤ 16), a sample point odbiega o ≤ 3% od zadanego
+  (nominal 87.5%, data 75%). SJW = TSEG2.
+* W trybie BRS faza nominalna preferuje ten sam prescaler co faza danych (identyczny tq, CiA 601-3).
+* `CAN_BAUDRATE_CUSTOM` w `baudrate_normal` zachowuje timing z CubeMX. `CAN_MODE_FD_BRS` wymaga
+  jawnego `baudrate_FD`.
 
-    /* 1. Ustawienie nominalnego baudrate */
-    stm32c5_set_nominal_baudrate(hfdcan, cfg.baudrate_normal);
+Wyniki dla 144 MHz:
 
-    /* 2. Ustawienie formatu ramki (Classic CAN vs CAN FD z/bez BRS) */
-    if (cfg.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
-    {
-        bool is_brs = (cfg.baudrate_FD != CAN_BAUDRATE_CUSTOM) && (cfg.baudrate_FD > cfg.baudrate_normal);
-        if (is_brs)
-        {
-            HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_BRS);
-            stm32c5_set_data_baudrate(hfdcan, cfg.baudrate_FD);
-        }
-        else
-        {
-            /* CAN FD bez BRS (gdy prędkość danych jest równa nominalnej lub nieokreślona) */
-            HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_FD_NO_BRS);
-        }
-    }
-    else
-    {
-        HAL_FDCAN_SetFrameFormat(hfdcan, HAL_FDCAN_FRAME_FORMAT_CLASSIC_CAN);
-    }
+| Konfiguracja | Nominal (presc / TSEG1 / TSEG2) | Data (presc / TSEG1 / TSEG2) | TDCO |
+|---|---|---|---|
+| Classic 125k / 250k / 500k / 1M | 4/251/36, 2/251/36, 1/251/36, 1/125/18 | – | – |
+| 500k + 1M | 4 / 62 / 9 | 4 / 26 / 9 (75%) | – |
+| 500k + 2M | 2 / 125 / 18 | 2 / 26 / 9 (75%) | 52 |
+| 500k + 4M | 1 / 251 / 36 | 1 / 26 / 9 (75%) | 26 |
+| 500k + 8M | 1 / 251 / 36 | 1 / 12 / 5 (72.2%) | 12 |
+| 5M | niedostępne przy 144 MHz (144/5 nie jest całkowite) | | |
 
-    /* 3. Konfiguracja NVIC, przerwań FIFO 0 i start peryferium */
-    HAL_CORTEX_NVIC_SetPriority(FDCAN1_IT0_IRQn, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, 0);
-    HAL_CORTEX_NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
-    HAL_FDCAN_SetInterruptGroupsToLine(hfdcan, HAL_FDCAN_IT_GROUP_RX_FIFO_0, HAL_FDCAN_IT_LINE_0);
-    HAL_FDCAN_EnableInterruptLines(hfdcan, HAL_FDCAN_IT_LINE_0);
-    HAL_FDCAN_EnableInterrupts(hfdcan, HAL_FDCAN_IT_RX_FIFO_0_NEW_MSG);
-
-    return (HAL_FDCAN_Start(hfdcan) == HAL_OK);
-}
-```
+**Transmitter Delay Compensation (TDC):** przy BRS i prescalerze danych ≤ 2 włączana jest
+kompensacja opóźnienia transceivera (`TDCO = presc × TSEG1`, filtr 0). Bez niej przy 2–8 Mbps
+opóźnienie pętli TX→RX transceivera (MCP2562FD: do ~120 ns) powoduje błędy bitu nadajnika.
+TDC musi być włączane **po** `HAL_FDCAN_SetDataBitTiming()`, bo zapis rejestru DBTP kasuje bit `TDC`.
 
 3. **Obsługa nadawania (`transmit`):**
-```c
-static bool stm32c5_can1_transmit(uint32_t id, const uint8_t* data, uint8_t len)
-{
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
-    if (hfdcan == NULL || data == NULL) return false;
-
-    hal_fdcan_tx_header_t tx_header = {0};
-    uint8_t max_payload = (s_can1_config.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? 64U : 8U;
-    uint8_t payload_len = (len > max_payload) ? max_payload : len;
-
-    tx_header.b.data_length = bytes_to_fdcan_dlc(payload_len);
-    tx_header.b.identifier_type = CAN_msg_is_extended_id(id) ? HAL_FDCAN_ID_EXTENDED : HAL_FDCAN_ID_STANDARD;
-    tx_header.b.identifier = CAN_msg_get_can_id(id);
-    tx_header.b.frame_type = HAL_FDCAN_FRAME_DATA;
-
-    if (s_can1_config.frame_format == CAN_MSG_FRAME_FORMAT_FD_CAN)
-    {
-        tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN;
-        tx_header.b.bit_rate_switch = stm32c5_is_brs_enabled(&s_can1_config)
-                                      ? HAL_FDCAN_BIT_RATE_SWITCH_ON
-                                      : HAL_FDCAN_BIT_RATE_SWITCH_OFF;
-    }
-    else
-    {
-        tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_CAN;
-        tx_header.b.bit_rate_switch = HAL_FDCAN_BIT_RATE_SWITCH_OFF;
-    }
-
-    return (HAL_FDCAN_ReqTransmitMsgFromFIFOQ(hfdcan, &tx_header, data) == HAL_OK);
-}
-```
+* Format ramki pochodzi z `msg->format`, a nie z konfiguracji szyny. Dzięki temu na szynie FD
+  ramki Classic (np. odpowiedzi OTA / ISO-TP) nadal wychodzą jako Classic.
+* Ramka FD na szynie `CAN_MODE_CLASSIC` jest odrzucana (`false`).
+* BRS jest ustawiany tylko dla ramek FD w trybie `CAN_MODE_FD_BRS`.
+* Długości FD > 8 B są kwantowane (np. 10 → 12 B); niewykorzystany ogon jest dopełniany zerami.
 
 4. **Obsługa odbioru (`receive`):**
-```c
-static bool stm32c5_can1_receive(uint32_t* id, uint8_t* data, uint8_t* len)
-{
-    hal_fdcan_handle_t *hfdcan = mx_fdcan1_gethandle();
-    if (hfdcan == NULL || id == NULL || data == NULL || len == NULL) return false;
-
-    uint32_t fill_level = 0;
-    HAL_FDCAN_GetRxFifoFillLevel(hfdcan, HAL_FDCAN_RX_FIFO_0, &fill_level);
-    if (fill_level == 0) return false;
-
-    hal_fdcan_rx_header_t rx_header = {0};
-    if (HAL_FDCAN_GetReceivedMessage(hfdcan, HAL_FDCAN_RX_FIFO_0, &rx_header, data) != HAL_OK)
-    {
-        return false;
-    }
-
-    *len = fdcan_dlc_to_bytes(rx_header.b.data_length);
-    *id = (rx_header.b.identifier_type == HAL_FDCAN_ID_EXTENDED) 
-            ? CAN_msg_set_extended_id(rx_header.b.identifier) 
-            : CAN_msg_set_standard_id(rx_header.b.identifier);
-
-    return true;
-}
-```
+* Wypełnia `ident`, `len`, `data` (do 64 B) oraz `format` na podstawie bitu FDF odebranej ramki.
 
 4. **Callback przerwania z obsługą powiadomienia:**
 ```c
@@ -501,7 +447,7 @@ int main(void)
         return (-1);
     }
 
-    /* 2. Inicjalizacja instancji CAN1 ze wstrzyknięciem adaptera (domyślnie 500k lub z can1_inst.can_config) */
+    /* 2. Inicjalizacja instancji CAN1 ze wstrzyknięciem adaptera (Classic 500k; docelowy tryb ustawia profil parsera) */
     if (!can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1"))
     {
         return (-1);

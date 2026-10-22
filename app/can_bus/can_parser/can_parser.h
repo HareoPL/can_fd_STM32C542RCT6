@@ -27,17 +27,19 @@ typedef enum
 } can_parser_id_t;
 
 /**
- * @brief Parser profile descriptor holding acceptance filters and rules count.
+ * @brief Parser profile descriptor holding bus configuration, acceptance filters and rules count.
  */
 typedef struct
 {
-    const can_filter_t *filters; /**< Pointer to profile filter table */
-    uint8_t num_filters;         /**< Number of filter rules in the profile */
+    const can_config_t *bus_config; /**< Bus mode and bit rates applied on select (NULL = keep current bus config) */
+    const can_filter_t *filters;    /**< Pointer to profile filter table */
+    uint8_t num_filters;            /**< Number of filter rules in the profile */
 } can_parser_profile_t;
 
 /**
  * @brief Dynamically selects and activates a CAN parser profile by its numerical ID.
- *        Configures hardware filters in M_CAN Message RAM and updates software dispatch callbacks.
+ *        Applies the profile bus configuration (mode and bit rates), then configures hardware
+ *        filters in M_CAN Message RAM and updates software dispatch callbacks.
  * @param[in,out] can_inst Pointer to target CAN instance (e.g. &can1_inst).
  * @param[in] id Parser profile identifier (CAN_PARSER_ID_V_BOX, CAN_PARSER_ID_EXAMPLE).
  * @return true on success, false on invalid parameter or hardware configuration error.

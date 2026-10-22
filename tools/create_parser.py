@@ -155,8 +155,19 @@ static const can_filter_t s_filters[] = {
     }
 };
 
+/**
+ * @brief Bus configuration applied when this profile is selected.
+ *        Modes: CAN_MODE_CLASSIC, CAN_MODE_FD_NO_BRS, CAN_MODE_FD_BRS (needs baudrate_FD).
+ */
+static const can_config_t s_bus_config = {
+    .mode            = CAN_MODE_CLASSIC,
+    .baudrate_normal = CAN_BAUDRATE_500K,
+    .baudrate_FD     = CAN_BAUDRATE_CUSTOM
+};
+
 /** @brief Immutable profile descriptor (rule count calculated automatically). */
 static const can_parser_profile_t s_profile = {
+    .bus_config  = &s_bus_config,
     .filters     = s_filters,
     .num_filters = (uint8_t)(sizeof(s_filters) / sizeof(s_filters[0]))
 };

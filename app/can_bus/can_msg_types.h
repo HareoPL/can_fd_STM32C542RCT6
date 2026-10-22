@@ -16,10 +16,10 @@
   * @brief Structure representing a CAN or FDCAN message.
   */
  typedef struct {
-     uint8_t len;        /**< Length of the data payload in bytes. */
      uint32_t ident;     /**< CAN Identifier. Bit 31: 1 = Extended, 0 = Standard. */
-     uint32_t format;    /**< CAN format type (FDCAN_CLASSIC_CAN or FDCAN_FD_CAN). */
-     uint8_t data[54];   /**<  1+4+4+54 = 63 bytes, rounds to 16 ULONG (64 bytes) with padding */
+     uint8_t format;     /**< Frame format: CAN_MSG_FRAME_FORMAT_CAN or CAN_MSG_FRAME_FORMAT_FD_CAN. */
+     uint8_t len;        /**< Length of the data payload in bytes (0-8 Classic, 0-64 CAN FD). */
+     uint8_t data[64];   /**< Payload buffer sized for the largest CAN FD frame: 4+1+1+64 = 70 -> 72 bytes */
  } CAN_msg_t;
  
  #define CAN_MSG_FRAME_FORMAT_CAN    0U /*!< Standard frame format                        */

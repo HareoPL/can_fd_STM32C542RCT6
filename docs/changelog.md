@@ -4,6 +4,8 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-21]
 ### Dodane
+- **CAN FD – konfiguracja szyny w profilu parsera (`app/can_bus/can_parser/`, `app/port/can_port.h`):** `can_parser_profile_t` ma nowe pole `bus_config` (tryb `CAN_MODE_CLASSIC` / `CAN_MODE_FD_NO_BRS` / `CAN_MODE_FD_BRS` oraz prędkości), stosowane przez `can_parser_select()` przez nową funkcję `can_manager_setBusConfig()`. Przy błędzie przywracana jest poprzednia konfiguracja. Profil `BOOT_OTA` (`bus_config = NULL`) nie zmienia trybu szyny. Usunięto ręczne ustawianie `can_config` z `main.c`.
+- **Kalkulator bit timingu FDCAN (`stm32c5_can_adapter.c`):** zamiast tablic dla 144 MHz – wyliczanie z zegara FDCAN (`HAL_FDCAN_GetClockFreq` / `CKDIV`), dokładna prędkość, sample point 87.5% (nominal) / 75% (data) z tolerancją 3%, wspólny prescaler obu faz przy BRS. Obsługiwane 1/2/4/8 Mbps w fazie danych.
 - **Rekord wersji Bootloadera (`app/bootloader/boot_version_record.h/.c`, `linker/stm32c542xc_boot_flash.ld`):** 32-bajtowa struktura `boot_version_record_t` (magic `"VBVR"`, wersja z tagu `boot-vX.Y.Z`, hash commita) pod stałym adresem `0x08000200`. Aplikacja raportuje wersję zainstalowanego Bootloadera w bannerze UART i w nowej ramce Discovery `0x03` (pełne 8-bitowe wersje aplikacji i Bootloadera), a przed instalacją Bootloadera ze Staging Slot loguje wersję wgrywanego obrazu. Narzędzia PC (`can_updater.py`, GUI) wyświetlają `FW vX.Y.Z | BL vX.Y.Z`; węzły bez ramki `0x03` są nadal obsługiwane.
 - **ISO-TP – konfigurowalna kontrola przepływu (`app/can_bus/isotp/`):** nowe API `isotp_set_flow_control(link, block_size, st_min)`, obsługa `BlockSize` po stronie odbiorczej (kolejna ramka `FC CTS` po każdych BS ramkach `CF`) oraz rozdzielenie buforów na `ISOTP_RX_BUF_SIZE` (1040 B) i `ISOTP_TX_BUF_SIZE` (64 B).
 - **Protokół OTA (`app/ota_update/ota_protocol.h`):** stałe `OTA_MAX_BLOCK_SIZE` (1024 B) i `OTA_WRITE_PDU_OVERHEAD` (11 B) z asercją `_Static_assert` względem bufora ISO-TP.
@@ -28,6 +30,10 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
   - Włączono naprzemienne kolorowanie wierszy tabeli (`setAlternatingRowColors(True)`), zablokowano przypadkową edycję komórek (`NoEditTriggers`) oraz dodano dedykowane style w ciemnym motywie inżynierskim (`DARK_ENGINEERING_THEME`) dla `QTableWidget` i `QTableWidget::item`.
 
 ### Naprawione
+- **CAN FD z BRS nie działał przy 2–8 Mbps:** brak Transmitter Delay Compensation. TDC jest teraz włączane przy prescalerze danych ≤ 2 (`TDCO = presc × TSEG1`), po zapisie DBTP, który kasuje bit `TDC`.
+- **Przepełnienie bufora przy nadawaniu ramek FD:** `CAN_msg_t.data` miało 54 B, a DLC 64 powodował odczyt 10 B poza buforem; przy odbiorze ramki 64 B były obcinane. `data` ma teraz 64 B (`CAN_msg_t`: 72 B).
+- **Format ramki per wiadomość:** `transmit`/`receive` w `can_interface_t` przyjmują `CAN_msg_t*`. Nadawanie używa `msg->format` (odpowiedzi OTA pozostają Classic na szynie FD, ramka FD na szynie Classic jest odrzucana), a odbiór raportuje faktyczny format odebranej ramki (bit FDF) zamiast formatu szyny.
+- **Brak obsługi `CAN_BAUDRATE_8000K`** i niejawne wnioskowanie BRS z `baudrate_FD > baudrate_normal` – zastąpione jawnym `can_frame_mode_t`.
 - **Znacznik czasu builda (`FW_BUILD_TIMESTAMP`):** czas był generowany w strefie lokalnej, a opisywany jako `UTC`; teraz faktycznie jest w UTC.
 - **Bezpieczne zamykanie magistrali `CandleBus` oraz eliminacja ostrzeżeń i wyjątków podczas zamykania GUI (`tools/can_updater.py`, `tools/can_updater_gui.py`):**
   - Wyeliminowano błąd `CandleBus was not properly shut down` oraz wyjątek `Exception ignored in: <function BusABC.__del__>` (powodowany przez nieosłonięte wywołanie `[ch.reset() for ch in self._channels.values()]` w `candle_bus.py` podczas destrukcji obiektów przez Garbage Collector Pythona).

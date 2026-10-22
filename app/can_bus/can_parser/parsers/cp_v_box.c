@@ -73,8 +73,20 @@ static const can_filter_t s_filters[] = {
     }
 };
 
+/**
+ * @brief Bus configuration for V-Box profile.
+ *        CAN FD with BRS example: .mode = CAN_MODE_FD_BRS, .baudrate_FD = CAN_BAUDRATE_2000K
+ *        CAN FD without BRS:      .mode = CAN_MODE_FD_NO_BRS (baudrate_FD ignored)
+ */
+static const can_config_t s_bus_config = {
+    .mode            = CAN_MODE_CLASSIC,
+    .baudrate_normal = CAN_BAUDRATE_500K,
+    .baudrate_FD     = CAN_BAUDRATE_CUSTOM
+};
+
 /** @brief Immutable profile descriptor for V-Box profile. */
 static const can_parser_profile_t s_profile = {
+    .bus_config  = &s_bus_config,
     .filters     = s_filters,
     .num_filters = (uint8_t)(sizeof(s_filters) / sizeof(s_filters[0]))
 };
