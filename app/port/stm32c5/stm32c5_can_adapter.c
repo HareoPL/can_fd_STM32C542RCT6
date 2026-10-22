@@ -45,6 +45,21 @@ static can_config_t s_can2_config = {
 };
 
 /**
+ * @brief Error diagnostics accumulated per FDCAN instance. ECR.CEL is cleared on read and LEC/DLEC
+ *        are overwritten by the next frame, so they are collected on read and in the error interrupt.
+ */
+typedef struct
+{
+    uint32_t error_log_total;              /**< Accumulated ECR.CEL */
+    uint16_t arb_errors[CAN_ERROR_TYPES];  /**< Protocol errors per type in arbitration phase (PEA) */
+    uint16_t data_errors[CAN_ERROR_TYPES]; /**< Protocol errors per type in data phase (PED) */
+} stm32c5_can_diag_t;
+
+/** @brief Error diagnostics of CAN1 and CAN2 (updated from the FDCAN interrupt). */
+static volatile stm32c5_can_diag_t s_can1_diag;
+static volatile stm32c5_can_diag_t s_can2_diag;
+
+/**
  * @brief Converts payload length in bytes to STM32C5xx DLC enum.
  * @param[in] bytes Payload length in bytes (0-64).
  * @return FDCAN DLC enum value.
@@ -391,9 +406,11 @@ static bool stm32c5_can_init_generic(hal_fdcan_handle_t *hfdcan,
     HAL_CORTEX_NVIC_EnableIRQ(irq_n);
 
     /* Assign Rx FIFO 0 interrupt group to line 0 and enable */
-    HAL_FDCAN_SetInterruptGroupsToLine(hfdcan, HAL_FDCAN_IT_GROUP_RX_FIFO_0, HAL_FDCAN_IT_LINE_0);
+    HAL_FDCAN_SetInterruptGroupsToLine(hfdcan, HAL_FDCAN_IT_GROUP_RX_FIFO_0 | HAL_FDCAN_IT_GROUP_PROTOCOL_ERROR,
+                                       HAL_FDCAN_IT_LINE_0);
     HAL_FDCAN_EnableInterruptLines(hfdcan, HAL_FDCAN_IT_LINE_0);
-    HAL_FDCAN_EnableInterrupts(hfdcan, HAL_FDCAN_IT_RX_FIFO_0_NEW_MSG);
+    HAL_FDCAN_EnableInterrupts(hfdcan, HAL_FDCAN_IT_RX_FIFO_0_NEW_MSG |
+                                       HAL_FDCAN_IT_ARB_PROTOCOL_ERROR | HAL_FDCAN_IT_DATA_PROTOCOL_ERROR);
 
     /* Start the peripheral */
     if (HAL_FDCAN_Start(hfdcan) != HAL_OK)
@@ -647,6 +664,51 @@ static bool stm32c5_can_set_filter_generic(hal_fdcan_handle_t *hfdcan,
     return true;
 }
 
+/**
+ * @brief Generic bus health readout (error counters and protocol status register).
+ * @param[in] hfdcan FDCAN peripheral handle.
+ * @param[in,out] diag Error diagnostics of this instance.
+ * @param[out] status Bus health snapshot. LEC/DLEC are cleared by hardware on read.
+ * @return true on success, false on parameter or HAL error.
+ */
+static bool stm32c5_can_get_status_generic(hal_fdcan_handle_t *hfdcan,
+                                           volatile stm32c5_can_diag_t *diag,
+                                           can_bus_status_t *status)
+{
+    if (hfdcan == NULL || diag == NULL || status == NULL)
+    {
+        return false;
+    }
+
+    hal_fdcan_error_counters_t counters = {0};
+    hal_fdcan_protocol_status_t protocol = {0};
+
+    if (HAL_FDCAN_GetErrorCounters(hfdcan, &counters) != HAL_OK ||
+        HAL_FDCAN_GetProtocolStatus(hfdcan, &protocol) != HAL_OK)
+    {
+        return false;
+    }
+
+    status->tx_error_cnt = (uint8_t)counters.tx_error_cnt;
+    status->rx_error_cnt = (uint8_t)counters.rx_error_cnt;
+    status->error_passive = (protocol.error_status == HAL_FDCAN_ERROR_PASSIVE);
+    status->bus_off = (protocol.bus_off == HAL_FDCAN_BUS_OFF_FLAG_SET);
+    status->last_error = (can_error_code_t)protocol.last_error_code;
+    status->data_last_error = (can_error_code_t)protocol.data_last_error_code;
+    status->tdc_value = (uint8_t)protocol.tdc_value;
+
+    /* CEL counts every TEC/REC increment and is cleared on read, so it is accumulated here */
+    diag->error_log_total += counters.global_cnt;
+    status->error_log_cnt = diag->error_log_total;
+    for (uint32_t i = 0U; i < CAN_ERROR_TYPES; i++)
+    {
+        status->arb_errors[i] = diag->arb_errors[i];
+        status->data_errors[i] = diag->data_errors[i];
+    }
+
+    return true;
+}
+
 /* ===========================================================================
  * CAN1 Implementation
  * =========================================================================== */
@@ -677,12 +739,18 @@ static bool stm32c5_can1_set_filter(const can_filter_t *filters, uint32_t num_fi
     return stm32c5_can_set_filter_generic(mx_fdcan1_gethandle(), filters, num_filters);
 }
 
+static bool stm32c5_can1_get_status(can_bus_status_t *status)
+{
+    return stm32c5_can_get_status_generic(mx_fdcan1_gethandle(), &s_can1_diag, status);
+}
+
 static const can_interface_t s_stm32c5_can1_interface = {
     .init = stm32c5_can1_init,
     .transmit = stm32c5_can1_transmit,
     .receive = stm32c5_can1_receive,
     .attach_rx_callback = stm32c5_can1_attach_rx_callback,
-    .set_filter = stm32c5_can1_set_filter
+    .set_filter = stm32c5_can1_set_filter,
+    .get_status = stm32c5_can1_get_status
 };
 
 const can_interface_t *stm32c5_can1_interfaceGet(void)
@@ -720,12 +788,18 @@ static bool stm32c5_can2_set_filter(const can_filter_t *filters, uint32_t num_fi
     return stm32c5_can_set_filter_generic(mx_fdcan2_gethandle(), filters, num_filters);
 }
 
+static bool stm32c5_can2_get_status(can_bus_status_t *status)
+{
+    return stm32c5_can_get_status_generic(mx_fdcan2_gethandle(), &s_can2_diag, status);
+}
+
 static const can_interface_t s_stm32c5_can2_interface = {
     .init = stm32c5_can2_init,
     .transmit = stm32c5_can2_transmit,
     .receive = stm32c5_can2_receive,
     .attach_rx_callback = stm32c5_can2_attach_rx_callback,
-    .set_filter = stm32c5_can2_set_filter
+    .set_filter = stm32c5_can2_set_filter,
+    .get_status = stm32c5_can2_get_status
 };
 
 const can_interface_t *stm32c5_can2_interfaceGet(void)
@@ -763,4 +837,47 @@ void HAL_FDCAN_RxFifo0Callback(hal_fdcan_handle_t *hfdcan, uint32_t rx_fifo0_int
             s_can2_rx_cb(s_can2_rx_context);
         }
     }
+}
+
+/**
+ * @brief Counts one protocol error code (STUFF..CRC) in a per-type histogram (saturating).
+ */
+static void stm32c5_count_error(volatile uint16_t *hist, hal_fdcan_protocol_error_code_t code)
+{
+    if (code >= HAL_FDCAN_PROTOCOL_ERROR_STUFF && code <= HAL_FDCAN_PROTOCOL_ERROR_CRC)
+    {
+        uint32_t idx = (uint32_t)code - (uint32_t)HAL_FDCAN_PROTOCOL_ERROR_STUFF;
+        if (hist[idx] < 0xFFFFU)
+        {
+            hist[idx]++;
+        }
+    }
+}
+
+/**
+ * @brief Error callback invoked from interrupt (ISR) on protocol errors (PEA/PED) of FDCAN1 or FDCAN2.
+ *        LEC/DLEC are read immediately, before the next frame overwrites them.
+ * @param[in] hfdcan FDCAN peripheral handle.
+ */
+void HAL_FDCAN_ErrorCallback(hal_fdcan_handle_t *hfdcan)
+{
+    volatile stm32c5_can_diag_t *diag = NULL;
+
+    if (hfdcan == mx_fdcan1_gethandle())
+    {
+        diag = &s_can1_diag;
+    }
+    else if (hfdcan == mx_fdcan2_gethandle())
+    {
+        diag = &s_can2_diag;
+    }
+
+    hal_fdcan_protocol_status_t protocol = {0};
+    if (diag == NULL || HAL_FDCAN_GetProtocolStatus(hfdcan, &protocol) != HAL_OK)
+    {
+        return;
+    }
+
+    stm32c5_count_error(diag->arb_errors, protocol.last_error_code);
+    stm32c5_count_error(diag->data_errors, protocol.data_last_error_code);
 }

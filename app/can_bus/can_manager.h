@@ -31,6 +31,8 @@ typedef struct {
     can_config_t can_config;             /**< Bus configuration (defaults applied if uninitialized) */
     can_filter_t filters[CAN_MAX_FILTERS]; /**< Registered filters with dispatch callbacks */
     uint32_t num_filters;                /**< Number of active filters */
+    volatile uint32_t tx_error_cnt;      /**< Frames rejected by the hardware port (FIFO full, FD on Classic bus) */
+    uint32_t bus_off_cnt;                /**< Number of bus-off recoveries performed by the TX task */
 } can_instance_t;
 
 /**
@@ -69,6 +71,22 @@ bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, ui
  * @return true on success (or configuration unchanged), false on error.
  */
 bool can_manager_setBusConfig(can_instance_t* inst, const can_config_t *config);
+
+/**
+ * @brief Reads bus health (error counters, last protocol errors, TDC value) of a CAN instance.
+ * @param[in] inst Pointer to CAN instance.
+ * @param[out] status Bus health snapshot.
+ * @return true on success, false if not supported by the port or on error.
+ */
+bool can_manager_getStatus(const can_instance_t* inst, can_bus_status_t *status);
+
+/**
+ * @brief Waits until all queued frames have been handed to the hardware.
+ * @param[in] inst Pointer to CAN instance.
+ * @param[in] timeout_ms Maximum waiting time in milliseconds.
+ * @return true if the TX queue is empty, false on timeout or invalid instance.
+ */
+bool can_manager_waitTxIdle(const can_instance_t* inst, uint32_t timeout_ms);
 
 /**
  * @brief Returns the CAN instance currently executing an RX filter callback.

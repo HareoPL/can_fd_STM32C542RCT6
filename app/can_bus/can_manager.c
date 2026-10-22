@@ -9,6 +9,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/** @brief Per-frame TX logging (disable for high frame rates, e.g. CAN FD test build). */
+#ifndef CAN_MANAGER_TX_LOG
+#define CAN_MANAGER_TX_LOG 1
+#endif
+
 /** @brief Pointer to the CAN instance currently dispatching an RX callback. */
 static can_instance_t *s_active_rx_inst = NULL;
 
@@ -24,6 +29,32 @@ static void can_manager_rx_isr_callback(void* context)
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         xSemaphoreGiveFromISR(inst->rx_sem, &xHigherPriorityTaskWoken);
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
+/** @brief Period of the bus-off supervision while the TX queue is idle. */
+#define CAN_MANAGER_HEALTH_POLL_MS 100U
+
+/**
+ * @brief Restarts the controller after bus-off (M_CAN stays in INIT after bus-off until restarted).
+ *        After the restart the controller rejoins the bus after 128 x 11 recessive bits (ISO 11898-1).
+ * @param[in,out] inst Pointer to CAN instance.
+ */
+static void can_manager_recover_bus_off(can_instance_t *inst)
+{
+    can_bus_status_t status = {0};
+    if (!can_manager_getStatus(inst, &status) || !status.bus_off)
+    {
+        return;
+    }
+
+    inst->bus_off_cnt++;
+    safe_printf(inst->name, "BUS-OFF detected (TEC=%u), restarting controller (#%lu)\r\n",
+                (unsigned int)status.tx_error_cnt, (unsigned long)inst->bus_off_cnt);
+
+    if (inst->hw_interface->init == NULL || !inst->hw_interface->init(&inst->can_config))
+    {
+        safe_printf(inst->name, "ERROR: bus-off recovery failed\r\n");
     }
 }
 
@@ -44,27 +75,38 @@ static void can_tx_task(void *pvParameters)
 
     for (;;)
     {
-        /* Wait for frame to be queued */
-        if (xQueueReceive(inst->tx_queue, &can_msg, portMAX_DELAY) == pdTRUE)
+        /* Wait for frame to be queued; wake up periodically for bus-off supervision */
+        if (xQueueReceive(inst->tx_queue, &can_msg, pdMS_TO_TICKS(CAN_MANAGER_HEALTH_POLL_MS)) != pdTRUE)
+        {
+            can_manager_recover_bus_off(inst);
+            continue;
+        }
+
         {
             if (can_msg.len > sizeof(can_msg.data))
             {
                 can_msg.len = (uint8_t)sizeof(can_msg.data);
             }
 
+#if CAN_MANAGER_TX_LOG
             safe_printf(inst->name, "queue msg ID=0x%03lX len=%u %s\r\n",
                         (unsigned long)CAN_msg_get_can_id(can_msg.ident),
                         (unsigned int)can_msg.len,
                         (can_msg.format == CAN_MSG_FRAME_FORMAT_FD_CAN) ? "FD" : "CAN");
+#endif
 
             if (inst->hw_interface->transmit != NULL &&
                 inst->hw_interface->transmit(&can_msg))
             {
+#if CAN_MANAGER_TX_LOG
                 safe_printf(inst->name, "sent ID=0x%03lX OK\r\n", CAN_msg_get_can_id(can_msg.ident));
+#endif
             }
             else
             {
+                inst->tx_error_cnt++;
                 safe_printf(inst->name, "ERROR sending ID=0x%03lX\r\n", CAN_msg_get_can_id(can_msg.ident));
+                can_manager_recover_bus_off(inst);
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
@@ -366,6 +408,48 @@ bool can_manager_setFilter(can_instance_t* inst, const can_filter_t *filters, ui
     {
         memset(inst->filters, 0, sizeof(inst->filters));
         inst->num_filters = 0U;
+    }
+
+    return true;
+}
+
+/**
+ * @brief Reads bus health (error counters, last protocol errors, TDC value) of a CAN instance.
+ * @param[in] inst Pointer to CAN instance.
+ * @param[out] status Bus health snapshot.
+ * @return true on success, false if not supported by the port or on error.
+ */
+bool can_manager_getStatus(const can_instance_t* inst, can_bus_status_t *status)
+{
+    if (inst == NULL || inst->hw_interface == NULL || inst->hw_interface->get_status == NULL || status == NULL)
+    {
+        return false;
+    }
+
+    return inst->hw_interface->get_status(status);
+}
+
+/**
+ * @brief Waits until all queued frames have been handed to the hardware.
+ * @param[in] inst Pointer to CAN instance.
+ * @param[in] timeout_ms Maximum waiting time in milliseconds.
+ * @return true if the TX queue is empty, false on timeout or invalid instance.
+ */
+bool can_manager_waitTxIdle(const can_instance_t* inst, uint32_t timeout_ms)
+{
+    if (inst == NULL || inst->tx_queue == NULL)
+    {
+        return false;
+    }
+
+    TickType_t start = xTaskGetTickCount();
+    while (uxQueueMessagesWaiting(inst->tx_queue) > 0U)
+    {
+        if ((xTaskGetTickCount() - start) >= pdMS_TO_TICKS(timeout_ms))
+        {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     return true;

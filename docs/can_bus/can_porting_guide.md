@@ -188,6 +188,10 @@ typedef struct {
 
     /** Konfiguracja sprzętowych filtrów akceptacji */
     bool (*set_filter)(const can_filter_t *filters, uint32_t num_filters);
+
+    /** Stan magistrali (opcjonalny, może być NULL): TEC/REC, error passive / bus-off, LEC/DLEC,
+     *  TDCV, licznik błędów protokołu narastający od startu oraz błędy per typ (fazy arbitrażu / danych) */
+    bool (*get_status)(can_bus_status_t *status);
 } can_interface_t;
 
 #endif // CAN_PORT_H
@@ -269,7 +273,17 @@ TDC musi być włączane **po** `HAL_FDCAN_SetDataBitTiming()`, bo zapis rejestr
 * BRS jest ustawiany tylko dla ramek FD w trybie `CAN_MODE_FD_BRS`.
 * Długości FD > 8 B są kwantowane (np. 10 → 12 B); niewykorzystany ogon jest dopełniany zerami.
 
-4. **Obsługa odbioru (`receive`):**
+4. **Diagnostyka (`get_status`) i przerwanie błędów protokołu:**
+* `ECR.CEL` (licznik wzrostów TEC/REC) zeruje się przy odczycie, więc adapter akumuluje go w
+  `can_bus_status_t::error_log_cnt` – licznik nie maleje, więc widać także błędy ukryte przez
+  automatyczną retransmisję.
+* Przerwania `PEA`/`PED` (grupa `HAL_FDCAN_IT_GROUP_PROTOCOL_ERROR`, linia 0) wywołują
+  `HAL_FDCAN_ErrorCallback()`, który od razu odczytuje LEC/DLEC (zanim nadpisze je następna ramka) i
+  zlicza błędy per typ w `arb_errors[]` / `data_errors[]`.
+* `can_manager` co 100 ms (oraz po błędzie TX) sprawdza `bus_off` i restartuje kontroler – M_CAN po
+  bus-off pozostaje w trybie INIT, a stan HAL nadal wskazuje ACTIVE.
+
+5. **Obsługa odbioru (`receive`):**
 * Wypełnia `ident`, `len`, `data` (do 64 B) oraz `format` na podstawie bitu FDF odebranej ramki.
 
 4. **Callback przerwania z obsługą powiadomienia:**

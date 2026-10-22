@@ -41,6 +41,39 @@ typedef struct {
     can_baudrate_t baudrate_FD;     /**< Data bit rate for CAN FD fast data phase (used only in CAN_MODE_FD_BRS) */
 } can_config_t;
 
+/**
+ * @brief Last protocol error code reported by the controller (ISO 11898-1 error types).
+ */
+typedef enum {
+    CAN_ERROR_NONE      = 0, /**< No error */
+    CAN_ERROR_STUFF     = 1, /**< Stuff error */
+    CAN_ERROR_FORM      = 2, /**< Form error */
+    CAN_ERROR_ACK       = 3, /**< Acknowledge error */
+    CAN_ERROR_BIT1      = 4, /**< Bit 1 (recessive) error */
+    CAN_ERROR_BIT0      = 5, /**< Bit 0 (dominant) error */
+    CAN_ERROR_CRC       = 6, /**< CRC error */
+    CAN_ERROR_NO_CHANGE = 7  /**< No new error since last read */
+} can_error_code_t;
+
+/** @brief Number of counted protocol error types (CAN_ERROR_STUFF .. CAN_ERROR_CRC, index = code - 1). */
+#define CAN_ERROR_TYPES 6U
+
+/**
+ * @brief Bus health snapshot of a CAN/FDCAN controller.
+ */
+typedef struct {
+    uint8_t tx_error_cnt;             /**< Transmit error counter (TEC) */
+    uint8_t rx_error_cnt;             /**< Receive error counter (REC) */
+    bool error_passive;               /**< Controller is error passive */
+    bool bus_off;                     /**< Controller is bus-off */
+    can_error_code_t last_error;      /**< Last error in arbitration / Classic frames (cleared on read) */
+    can_error_code_t data_last_error; /**< Last error in CAN FD data phase with BRS (cleared on read) */
+    uint8_t tdc_value;                /**< Measured transmitter delay in clock periods (CAN FD with TDC) */
+    uint32_t error_log_cnt;           /**< Protocol errors (TEC/REC increments) accumulated since boot, never decreases */
+    uint16_t arb_errors[CAN_ERROR_TYPES];  /**< Errors per type in arbitration / Classic phase since boot (index = code - 1) */
+    uint16_t data_errors[CAN_ERROR_TYPES]; /**< Errors per type in CAN FD data phase (BRS) since boot (index = code - 1) */
+} can_bus_status_t;
+
 #include "can_msg_types.h"
 
 /* --- CAN Filter Masks --- */
@@ -79,6 +112,7 @@ typedef struct {
     bool (*receive)(CAN_msg_t *msg);                       /**< Reads one frame, msg->format reflects the received frame */
     void (*attach_rx_callback)(can_rx_notify_fn cb, void* context);
     bool (*set_filter)(const can_filter_t *filters, uint32_t num_filters); /**< Hardware filter setup */
+    bool (*get_status)(can_bus_status_t *status);          /**< Bus health snapshot (optional, may be NULL) */
 } can_interface_t;
 
 #endif // CAN_PORT_H
