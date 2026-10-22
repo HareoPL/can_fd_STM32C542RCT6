@@ -252,11 +252,18 @@ def _wrap_candle_bus_safe_shutdown(bus: can.BusABC) -> can.BusABC:
 def open_can_bus(interface: str,
                  channel: Optional[str] = None,
                  bitrate: int = 500000,
-                 listen_only: bool = False) -> can.BusABC:
+                 listen_only: bool = False,
+                 fd: bool = False,
+                 data_bitrate: Optional[int] = None,
+                 sample_point: float = 80.0,
+                 data_sample_point: float = 75.0) -> can.BusABC:
     """
     Unified factory for opening CAN bus adapters across candleLight (WinUSB / gs_usb), SLCAN, and SocketCAN.
+    CAN FD (fd=True, optional data_bitrate for BRS) is supported only by the 'candle' interface.
     """
     iface, resolved_ch = resolve_can_interface_and_channel(interface, channel)
+    if fd and iface != "candle":
+        raise ValueError(f"CAN FD is supported only with the 'candle' interface (got '{iface}')")
 
     if iface == "candle":
         ch_idx = parse_candle_channel_index(resolved_ch)
@@ -267,13 +274,17 @@ def open_can_bus(interface: str,
                     interface="candle",
                     channel=ch_idx,
                     bitrate=int(bitrate),
-                    sample_point=80.0,
-                    fd=False,
+                    sample_point=float(sample_point),
+                    data_bitrate=int(data_bitrate or bitrate),
+                    data_sample_point=float(data_sample_point),
+                    fd=bool(fd),
                     listen_only=bool(listen_only),
                 )
                 return _wrap_candle_bus_safe_shutdown(bus)
             except Exception as e:
                 last_err = e
+                if fd:
+                    raise
         # Fallback to gs_usb if python-can-candle is not installed or failed
         try:
             _init_gs_usb_backend()
