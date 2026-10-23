@@ -16,11 +16,16 @@
  *  - 0x00000410 PC -> node  Echo request, standard 11-bit ID
  *  - echo response ID = request ID + 1 (0x01F2F411 / 0x411), same format, length and payload
  *  - 0x01F2F412 node -> PC  Burst frames: data[0..1] = sequence (LE), data[i] = (uint8_t)(i ^ seq)
- *  - 0x01F2F420 CAN1 -> CAN2 Loop request (node internal, same payload rule as burst)
- *  - 0x01F2F421 CAN2 -> CAN1 Loop response (copy of the request)
+ *  - 0x01F2F420 bus under test -> partner  Loop request (node internal, same payload rule as burst)
+ *  - 0x01F2F421 partner -> bus under test  Loop response (copy of the request)
+ *
+ * Bus under test: CAN1 after reset, CAN2 selectable with SELECT_BUS when the partner exists (CAN_FD_TEST_LOOP).
+ * The bus under test serves all commands, echo, burst and TX probe; the other bus is the loop partner and
+ * always runs the same configuration (both share the physical bus). BOOT_OTA stays on CAN1 (ota_manager).
  *
  * Commands:
- *  - PING        []                                       -> [0x81, 0, mode, nominal_kbps LE16, data_kbps LE16]
+ *  - PING        []                                       -> [0x81, 0, mode, nominal_kbps LE16, data_kbps LE16, bus]
+ *                bus = bus under test (1 = CAN1, 2 = CAN2)
  *  - SET_CONFIG  [mode, nominal_kbps LE16, data_kbps LE16] -> [0x82, 0] in the old configuration, then the
  *                node switches after CAN_FD_TEST_SWITCH_DELAY_MS (the PC closes its adapter meanwhile);
  *                on failure the old configuration stays active (PING reports it) and [0x82, CONFIG_REJECTED] is sent.
@@ -36,9 +41,12 @@
  *  - BURST       [count LE16, len, format] -> burst frames, then [0x85, 0, sent LE16, failed LE16]
  *  - TX_PROBE    [format, len] -> [0x86, 0] if the frame was transmitted, [0x86, TX_FAILED] if rejected
  *  - LOOP        [count LE16, len, format] -> [0x87, 0] immediately; after CAN_FD_TEST_SWITCH_DELAY_MS
- *                (PC closes its adapter) CAN1 sends count frames to CAN2, which loops them back.
- *                Result in GET_STATS frame [0x83, 6, sent LE16, ok LE16, bad LE16]. Needs a second
- *                FDCAN (CAN2) on the same physical bus, it follows every configuration of CAN1.
+ *                (PC closes its adapter) the bus under test sends count frames to the partner, which loops
+ *                them back. Result in GET_STATS frame [0x83, 6, sent LE16, ok LE16, bad LE16]. Needs a second
+ *                FDCAN on the same physical bus, it follows every configuration of the bus under test.
+ *  - SELECT_BUS  [bus] (1 = CAN1, 2 = CAN2) -> [0x88, 0] sent by the new bus under test (counters reset).
+ *                Served by the selected bus itself (works also when the PC adapter is wired to that bus only);
+ *                [0x88, BAD_ARG] from the current bus under test if the bus does not exist (no CAN_FD_TEST_LOOP).
  */
 
 #ifndef CAN_FD_TEST_H
@@ -65,6 +73,7 @@
 #define CAN_FD_TEST_CMD_BURST        0x05U
 #define CAN_FD_TEST_CMD_TX_PROBE     0x06U
 #define CAN_FD_TEST_CMD_LOOP         0x07U
+#define CAN_FD_TEST_CMD_SELECT_BUS   0x08U
 #define CAN_FD_TEST_RESP_FLAG        0x80U
 
 /* --- Response status codes -------------------------------------------------*/
@@ -80,14 +89,14 @@
 #define CAN_FD_TEST_CONFIRM_TIMEOUT_MS 5000U
 
 /**
- * @brief Initializes the test module on a CAN instance: selects the CP_FD_TEST parser
- *        (Classic CAN 500 kbps), attaches BOOT_OTA filters and starts the test task.
- * @param[in,out] inst CAN instance under test (already initialized by can_manager_init).
- * @param[in,out] loop_inst Optional second CAN instance on the same bus used as loop partner
- *                (follows every configuration of inst), NULL if not available.
+ * @brief Initializes the test module: selects the CP_FD_TEST parser (Classic CAN 500 kbps) on CAN1
+ *        (and CAN2), attaches BOOT_OTA filters to CAN1 and starts the test task. CAN1 is the bus under test.
+ * @param[in,out] can1 CAN1 instance (already initialized by can_manager_init), also carries BOOT_OTA.
+ * @param[in,out] can2 Optional CAN2 instance on the same physical bus: loop partner and selectable bus
+ *                under test (SELECT_BUS), NULL if not available.
  * @return true on success, false on error.
  */
-bool can_fd_test_init(can_instance_t *inst, can_instance_t *loop_inst);
+bool can_fd_test_init(can_instance_t *can1, can_instance_t *can2);
 
 /**
  * @brief Command frame entry point called from the CP_FD_TEST parser (CAN RX task context, non-blocking).
@@ -102,13 +111,13 @@ void can_fd_test_on_command(const CAN_msg_t *msg);
 void can_fd_test_on_echo(const CAN_msg_t *msg);
 
 /**
- * @brief Loop request entry point (CAN2 side), called from the CP_FD_TEST parser (non-blocking).
+ * @brief Loop request entry point (partner side), called from the CP_FD_TEST parser (non-blocking).
  * @param[in] msg Received loop request frame.
  */
 void can_fd_test_on_loop_request(const CAN_msg_t *msg);
 
 /**
- * @brief Loop response entry point (CAN1 side), called from the CP_FD_TEST parser (non-blocking).
+ * @brief Loop response entry point (bus under test side), called from the CP_FD_TEST parser (non-blocking).
  * @param[in] msg Received loop response frame.
  */
 void can_fd_test_on_loop_response(const CAN_msg_t *msg);

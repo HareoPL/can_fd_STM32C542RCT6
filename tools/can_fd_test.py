@@ -12,6 +12,11 @@ in parallel. Results are written as a Markdown report.
 Usage:
     python tools/can_fd_test.py --uart COM22 --report docs/can_bus/can_fd_test_report.md
     python tools/can_fd_test.py --cases "fd_brs_500k_2m,fd_brs_500k_4m" --reps 20
+    python tools/can_fd_test.py --uart COM22 --bus 2     # CAN2 under test (firmware with CAN_FD_TEST_LOOP=ON)
+
+--bus selects the node bus under test (SELECT_BUS command): it serves echo, burst and TX probe, the other
+bus is the loop partner and follows every configuration. OTA discovery (answered by CAN1) runs for --bus 1 only.
+--skip-loop skips the loop when CAN1 and CAN2 are not on the same physical bus.
 
 Protocol constants mirror app/can_bus/can_fd_test/can_fd_test.h.
 """
@@ -48,9 +53,11 @@ CMD_RESET_STATS = 0x04
 CMD_BURST = 0x05
 CMD_TX_PROBE = 0x06
 CMD_LOOP = 0x07
+CMD_SELECT_BUS = 0x08
 RESP_FLAG = 0x80
 
 STATUS_OK = 0x00
+STATUS_BAD_ARG = 0x01
 STATUS_CONFIG_REJECTED = 0x02
 STATUS_TX_FAILED = 0x03
 
@@ -59,7 +66,7 @@ MODE_FD_NO_BRS = 1
 MODE_FD_BRS = 2
 MODE_NAMES = {MODE_CLASSIC: "Classic", MODE_FD_NO_BRS: "FD", MODE_FD_BRS: "FD+BRS"}
 
-LOOP_FRAMES = 200                # CAN1 -> CAN2 -> CAN1 frames per case
+LOOP_FRAMES = 200                # bus under test -> partner -> bus under test frames per case
 CONFIRM_TIMEOUT_S = 5.0          # CAN_FD_TEST_CONFIRM_TIMEOUT_MS
 SWITCH_WAIT_S = 0.3              # > CAN_FD_TEST_SWITCH_DELAY_MS (200 ms)
 NODE_SAMPLE_POINT = 87.5         # STM32C5_NOMINAL_SAMPLE_POINT
@@ -258,13 +265,15 @@ class UartLogger:
 # Test runner
 # ==============================================================================
 class FdTester:
-    def __init__(self, interface: str, channel: Optional[str], reps: int, verbose: bool):
+    def __init__(self, interface: str, channel: Optional[str], reps: int, verbose: bool, skip_loop: bool = False):
         self.interface = interface
         self.channel = channel
         self.reps = reps
         self.verbose = verbose
+        self.skip_loop = skip_loop
         self.bus: Optional[can.BusABC] = None
         self.current = DEFAULT_CONFIG
+        self.node_bus = 1     # bus under test reported by PING (1 = CAN1, 2 = CAN2)
         self.rng = random.Random(0xCAFD)
 
     # --- adapter -------------------------------------------------------------
@@ -336,8 +345,49 @@ class FdTester:
             resp = self.wait_resp(CMD_PING, 0.3)
             if resp and len(resp[0]) >= 7:
                 r = resp[0]
+                # Byte 7 (bus under test) is missing in firmware without SELECT_BUS: always CAN1
+                self.node_bus = r[7] if len(r) >= 8 else 1
                 return BusConfig(r[2], (r[3] | (r[4] << 8)) * 1000, (r[5] | (r[6] << 8)) * 1000)
         return None
+
+    def select_bus(self, bus: int, retries: int = 3) -> Tuple[bool, str]:
+        """
+        Makes CAN1 or CAN2 of the node the bus under test and verifies it with PING. The selected bus answers
+        itself, so this also works when the adapter is wired to that bus only.
+        """
+        resp = []
+        for _ in range(retries):
+            try:
+                self.flush()
+                self.send_cmd([CMD_SELECT_BUS, bus])
+            except can.CanError:
+                time.sleep(0.1)
+                continue
+            resp = self.wait_resp(CMD_SELECT_BUS, 0.5)
+            if resp:
+                break
+        if not resp:
+            return False, (f"no SELECT_BUS response: adapter not connected to CAN{bus}, CAN_FD_TEST firmware "
+                           f"not flashed{'' if bus == 1 else ' or built without CAN_FD_TEST_LOOP'}")
+        if resp[0][1] == STATUS_BAD_ARG:
+            return False, f"CAN{bus} not available (build the test firmware with -DCAN_FD_TEST_LOOP=ON)"
+        if resp[0][1] != STATUS_OK:
+            return False, f"SELECT_BUS status {resp[0][1]}"
+        if self.ping() is None or self.node_bus != bus:
+            return False, f"node reports CAN{self.node_bus} under test"
+        return True, ""
+
+    def connect(self, bus: int) -> Tuple[Optional[BusConfig], str]:
+        """Selects the bus under test and returns the active node configuration (None if unreachable)."""
+        ok, note = self.select_bus(bus)
+        if ok:
+            return self.ping(), ""
+        # Firmware without SELECT_BUS: only CAN1 is served
+        if bus == 1:
+            node = self.ping()
+            if node is not None and self.node_bus == 1:
+                return node, ""
+        return None, note
 
     def reset_stats(self) -> bool:
         self.flush()
@@ -525,15 +575,18 @@ class FdTester:
             result.notes.append(f"burst: {bad} corrupted frames")
 
     def run_loop(self, cfg: BusConfig, result: CaseResult, count: int = LOOP_FRAMES):
-        """CAN1 -> CAN2 -> CAN1 loop inside the node with the PC adapter closed (node-only reference)."""
+        """Bus under test -> partner -> bus under test loop inside the node, PC adapter closed (node-only reference)."""
         length = 64 if cfg.is_fd else 8
+        if self.skip_loop:
+            result.loop_available = False
+            return
         self.reset_stats()
         self.flush()
         self.send_cmd([CMD_LOOP, count & 0xFF, count >> 8, length, 1 if cfg.is_fd else 0])
         ack = self.wait_resp(CMD_LOOP, 0.15)
         self.close()
         if not ack or ack[0][1] != STATUS_OK:
-            # Firmware built without CAN_FD_TEST_LOOP: no CAN2 loop partner
+            # Firmware built without CAN_FD_TEST_LOOP: no loop partner
             result.loop_available = False
             self.open(cfg)
             return
@@ -570,7 +623,7 @@ class FdTester:
             return result
         result.switched = True
 
-        # 1) Node-only reference: CAN1 <-> CAN2 loop, PC adapter closed
+        # 1) Node-only reference: loop between the node's buses, PC adapter closed
         self.run_loop(case.config, result)
         ls = result.loop_stats
         if result.loop_available:
@@ -579,6 +632,8 @@ class FdTester:
         if result.node_passed is False:
             result.notes.append(f"loop: {result.loop_ok}/{result.loop_sent} ok, bus errors "
                                 f"{ls.get('bus_errors', '?')}, arb {ls.get('lec_hist')}, data {ls.get('dlec_hist')}")
+            if result.loop_ok == 0 and result.loop_bad == 0:
+                result.notes.append("loop: no partner response - node buses on separate segments? (use --skip-loop)")
 
         # 2) Interoperability with the PC adapter: echo, node burst, OTA discovery
         self.reset_stats()
@@ -586,7 +641,8 @@ class FdTester:
         self.run_echo(case.config, result)
         self.run_burst(case.config, result)
         result.stats_after = self.get_stats()
-        if case.config.is_fd:
+        # OTA discovery is answered by ota_manager on CAN1 only (mixed Classic/FD traffic is covered by echo)
+        if case.config.is_fd and self.node_bus == 1:
             result.discovery = self.run_discovery()
 
         after = result.stats_after
@@ -667,6 +723,8 @@ def _hist(h: Optional[Dict]) -> str:
 
 def write_report(path: str, results: List[CaseResult], negatives, uart: UartLogger, t_start: float,
                  args, adapter_info: str):
+    bus, partner = args.bus, (2 if args.bus == 1 else 1)
+    loop_label = f"CAN{bus}→CAN{partner}→CAN{bus}"
     passed = sum(r.passed for r in results) + sum(n[1] for n in negatives)
     functional = sum(1 for r in results if r.switched and r.echo_ok == r.echo_sent and
                      r.burst_ok == r.burst_expected and r.discovery in (None, True))
@@ -678,9 +736,12 @@ def write_report(path: str, results: List[CaseResult], negatives, uart: UartLogg
     lines.append(f"- **Data:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"- **Wynik (bez błędów protokołu):** {passed}/{total} PASS")
     lines.append(f"- **Wynik funkcjonalny (wszystkie ramki dostarczone poprawnie):** {functional}/{len(results)}")
-    lines.append("- **Węzeł:** NUCLEO-C542RC, FDCAN1, zegar FDCAN 144 MHz (PSI z HSE 24 MHz)")
+    lines.append(f"- **Węzeł:** NUCLEO-C542RC, zegar FDCAN 144 MHz (PSI z HSE 24 MHz)")
+    lines.append(f"- **Magistrala testowana:** CAN{bus} (FDCAN{bus})"
+                 + ("" if bus == 1 else "; OTA discovery pominięte (ota_manager działa na CAN1)"))
     lines.append(f"- **Adapter PC:** {adapter_info}")
-    lines.append(f"- **Pętla CAN1↔CAN2:** {'tak' if with_loop else 'nie (firmware bez CAN_FD_TEST_LOOP)'}")
+    no_loop = "pominięta (--skip-loop)" if args.skip_loop else "nie (firmware bez CAN_FD_TEST_LOOP)"
+    lines.append(f"- **Pętla {loop_label}:** {'tak' if with_loop else no_loop}")
     lines.append(f"- **Powtórzenia echo:** {args.reps} (każde: wszystkie długości DLC × 6 wzorców × ID std/ext)")
     lines.append(f"- **Czas testu:** {time.time() - t_start:.0f} s")
     lines.append("")
@@ -689,7 +750,7 @@ def write_report(path: str, results: List[CaseResult], negatives, uart: UartLogg
     head = "| Przypadek | Konfiguracja | Timing węzła (presc/TSEG1/TSEG2) |"
     sep = "|---|---|---|"
     if with_loop:
-        head += " Pętla CAN1↔CAN2 | Błędy pętli |"
+        head += f" Pętla {loop_label} | Błędy pętli |"
         sep += "---|---|"
     head += " Echo PC OK/wysł. | Burst | OTA | Błędy (CEL) | Typy błędów arb. / dane | TDCV | Wynik |"
     sep += "---|---|---|---|---|---|---|"
@@ -733,7 +794,7 @@ def write_report(path: str, results: List[CaseResult], negatives, uart: UartLogg
                  " (64 B FD / 8 B Classic) bez strat; dla FD działa OTA discovery (ramki Classic na magistrali FD).")
     lines.append("- **PASS (bez błędów):** dodatkowo 0 błędów protokołu w węźle (licznik CEL – każdy wzrost TEC/REC,"
                  " nie maleje, więc widać też błędy ukryte przez automatyczną retransmisję), brak bus-off,"
-                 " brak odrzuconych ramek TX; z pętlą – również 200/200 ramek CAN1↔CAN2 bez błędów.")
+                 f" brak odrzuconych ramek TX; z pętlą – również 200/200 ramek {loop_label} bez błędów.")
     lines.append("- **Typy błędów:** liczone w przerwaniu PEA/PED (STUFF, FORM, ACK, BIT1, BIT0, CRC)."
                  " TDCV: zmierzone położenie SSP (opóźnienie transceivera + TDCO) w okresach zegara FDCAN (6.94 ns).")
     lines.append("")
@@ -761,9 +822,17 @@ def main():
     parser.add_argument("--reps", type=int, default=10, help="Echo repetitions per length/pattern/ID set")
     parser.add_argument("--cases", default="all", help="Comma separated case names or 'all'")
     parser.add_argument("--skip-negative", action="store_true", help="Skip negative / robustness tests")
-    parser.add_argument("--report", default="docs/can_bus/can_fd_test_report.md", help="Markdown report path")
+    parser.add_argument("--skip-loop", action="store_true",
+                        help="Skip the loop between the node buses (CAN1 and CAN2 not on the same physical bus)")
+    parser.add_argument("--bus", type=int, choices=(1, 2), default=1,
+                        help="Node bus under test: 1 = CAN1, 2 = CAN2 (needs CAN_FD_TEST_LOOP=ON firmware)")
+    parser.add_argument("--report", default=None,
+                        help="Markdown report path (default docs/can_bus/can_fd_test_report[_can2].md)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+    if args.report is None:
+        suffix = "" if args.bus == 1 else f"_can{args.bus}"
+        args.report = f"docs/can_bus/can_fd_test_report{suffix}.md"
 
     matrix = build_matrix()
     if args.cases != "all":
@@ -775,20 +844,25 @@ def main():
 
     uart = UartLogger(args.uart)
     uart.start()
-    tester = FdTester(args.interface, args.channel, args.reps, args.verbose)
+    tester = FdTester(args.interface, args.channel, args.reps, args.verbose, args.skip_loop)
     t_start = time.time()
     results: List[CaseResult] = []
     negatives = []
     try:
         tester.open(DEFAULT_CONFIG)
-        node = tester.ping()
+        node, note = tester.connect(args.bus)
         if node is None:
-            print("[ERROR] Node does not answer PING on Classic 500 kbps (CAN_FD_TEST firmware flashed?)")
-            if tester.recover():
-                node = DEFAULT_CONFIG
-            else:
-                return 2
-        print(f"[INFO] Node answers, active configuration: {node.label()}")
+            # The node may still run an unconfirmed configuration: wait for its Classic 500 kbps fallback
+            print(f"[WARN] CAN{args.bus} does not answer on Classic 500 kbps, waiting for node fallback...")
+            tester.close()
+            time.sleep(CONFIRM_TIMEOUT_S + 1.5)
+            tester.open(DEFAULT_CONFIG)
+            node, note = tester.connect(args.bus)
+        if node is None:
+            print(f"[ERROR] CAN{args.bus}: {note}")
+            return 2
+        tester.current = node
+        print(f"[INFO] Bus under test: CAN{tester.node_bus}, active configuration: {node.label()}")
 
         for case in matrix:
             print(f"[CASE] {case.name:<18} {case.config.label():<22}", end="", flush=True)
@@ -807,6 +881,9 @@ def main():
 
         ok, note = tester.switch_to(DEFAULT_CONFIG)
         print(f"[INFO] Node returned to Classic 500k: {'OK' if ok else note}")
+        if ok and tester.node_bus != 1:
+            ok, note = tester.select_bus(1)
+            print(f"[INFO] Node bus under test back to CAN1: {'OK' if ok else note}")
     finally:
         tester.close()
         time.sleep(0.3)

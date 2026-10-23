@@ -9,7 +9,7 @@ Firmware testowy przełącza konfigurację **przez te same warstwy co produkcja*
 
 | Element | Plik | Rola |
 |---|---|---|
-| Moduł testowy | `app/can_bus/can_fd_test/can_fd_test.c/.h` | Protokół testowy, przełączanie konfiguracji, echo, burst, pętla CAN1↔CAN2, statystyki |
+| Moduł testowy | `app/can_bus/can_fd_test/can_fd_test.c/.h` | Protokół testowy, przełączanie konfiguracji, wybór magistrali testowanej (CAN1/CAN2), echo, burst, pętla między magistralami, statystyki |
 | Parser testowy | `app/can_bus/can_parser/parsers/cp_fd_test.c/.h` | Profil `CAN_PARSER_ID_FD_TEST` ze **zmienną** `bus_config` |
 | Narzędzie PC | `tools/can_fd_test.py` | Matryca testów, kontrola ramek, log UART, raport |
 | Diagnostyka portu | `can_interface_t::get_status` | TEC/REC, LEC/DLEC, TDCV, licznik błędów (CEL), błędy per typ (przerwanie PEA/PED) |
@@ -19,7 +19,7 @@ Protokół (ID, komendy, formaty odpowiedzi) jest opisany w nagłówku `can_fd_t
 ## 2. Wymagania
 
 - NUCLEO-C542RC podłączone przez USB (ST-Link: programowanie SWD + VCP z logami, np. `COM22`).
-- Adapter **candleLight z obsługą CAN FD** (python-can-candle / `candle_api`) na magistrali CAN1.
+- Adapter **candleLight z obsługą CAN FD** (python-can-candle / `candle_api`) na magistrali testowanej (CAN1 albo CAN2).
 - Terminacja: **dokładnie dwa** rezystory 120 Ω na końcach magistrali (pomiar między CAN_H a CAN_L
   przy wyłączonym zasilaniu ≈ 60 Ω). Każdy dodatkowy moduł z własnym terminatorem obniża rezystancję.
 - Python 3.8+: `pip install -r tools/requirements_ota.txt` (python-can, python-can-candle, pyserial).
@@ -44,7 +44,15 @@ Opcje:
 | Opcja CMake | Domyślnie | Znaczenie |
 |---|---|---|
 | `CAN_FD_TEST` | `OFF` | Moduł testowy, parser `CP_FD_TEST` zastępuje `V_BOX` na CAN1, wyłączone logi każdej ramki TX |
-| `CAN_FD_TEST_LOOP` | `OFF` | CAN2 jako partner pętli CAN1↔CAN2 (zawsze w tej samej konfiguracji co CAN1). **Tylko gdy transceiver CAN2 obsługuje CAN FD.** |
+| `CAN_FD_TEST_LOOP` | `OFF` | Uruchamia CAN2: partner pętli i **druga magistrala do wyboru** (`--bus 2`). Obie magistrale zawsze pracują w tej samej konfiguracji. **Tylko gdy transceiver CAN2 obsługuje CAN FD.** |
+
+Build z CAN2 (wymagany do testu CAN2) w osobnym katalogu:
+
+```bash
+cmake --preset debug_GCC_NUCLEO-C542RC -B build/can_fd_test_loop -DCAN_FD_TEST=ON -DCAN_FD_TEST_LOOP=ON
+cmake --build build/can_fd_test_loop
+STM32_Programmer_CLI -c port=SWD mode=UR -w build/can_fd_test_loop/v_box_full.hex -v -rst
+```
 
 Po starcie w logu UART pojawia się:
 
@@ -61,26 +69,42 @@ python tools/can_fd_test.py --uart COM22
 
 # wybrane przypadki, więcej powtórzeń, raport w innym miejscu
 python tools/can_fd_test.py --uart COM22 --cases "fd_brs_500k_2m,fd_brs_1000k_8m" --reps 20 --report my.md
+
+# ten sam test na CAN2 (firmware z CAN_FD_TEST_LOOP=ON), raport do docs/can_bus/can_fd_test_report_can2.md
+python tools/can_fd_test.py --uart COM22 --bus 2
 ```
 
 | Parametr | Znaczenie |
 |---|---|
 | `--uart` | Port VCP węzła – log UART dołączany do raportu (opcjonalny) |
+| `--bus` | Magistrala testowana: `1` = CAN1 (domyślnie), `2` = CAN2 (wymaga `CAN_FD_TEST_LOOP=ON`) |
+| `--skip-loop` | Pomija pętlę między magistralami węzła – gdy CAN1 i CAN2 są na osobnych odcinkach magistrali |
 | `--reps` | Powtórzenia zestawu echo (domyślnie 10; jeden zestaw = 108 ramek Classic + 192 FD) |
 | `--cases` | Lista przypadków (`classic_125k`, `classic_250k`, `classic_500k`, `classic_1000k`, `fd_500k`, `fd_1000k`, `fd_brs_500k_1m/2m/4m/8m`, `fd_brs_1000k_2m/4m/8m`) |
 | `--skip-negative` | Pomija testy negatywne (N1–N3) |
 | `--channel` | Kanał adaptera (`candle:0:0`), gdy podłączonych jest kilka |
 
-Kod wyjścia: `0` – wszystko PASS, `1` – jest FAIL, `2` – węzeł nie odpowiada.
+Kod wyjścia: `0` – wszystko PASS, `1` – jest FAIL, `2` – węzeł nie odpowiada albo wybrana magistrala jest niedostępna.
+
+**Wybór magistrali:** po połączeniu (Classic 500k) skrypt wysyła `SELECT_BUS`, a potem sprawdza w `PING`,
+która magistrala jest testowana. `SELECT_BUS` obsługuje sama wybierana magistrala, więc adapter może być
+podłączony tylko do niej. Magistrala testowana obsługuje polecenia, echo, burst i `TX_PROBE`, druga jest
+partnerem pętli i zawsze ma tę samą konfigurację. OTA discovery odpowiada CAN1 (tam działa `ota_manager`),
+dlatego przy `--bus 2` jest pomijane – ruch mieszany Classic/FD sprawdza echo. Na końcu skrypt przywraca
+CAN1 (jeśli adapter go nie widzi, wystarczy reset węzła).
+
+**Okablowanie:** pętla wymaga, żeby CAN1 i CAN2 były na tej samej magistrali. Gdy są na osobnych odcinkach
+(adapter tylko przy testowanej magistrali), użyj `--skip-loop`. Bez tej opcji węzeł przerwie pętlę po
+pierwszych ramkach bez odpowiedzi, a raport podpowie przyczynę.
 
 ## 5. Przebieg jednego przypadku
 
 1. **Przełączenie:** `SET_CONFIG` w bieżącej konfiguracji → ACK → PC **natychmiast zamyka adapter**,
-   węzeł po 200 ms przełącza CAN1 przez `can_parser_select()` → PC otwiera adapter w nowej konfiguracji →
+   węzeł po 200 ms przełącza obie magistrale przez `can_parser_select()` → PC otwiera adapter w nowej konfiguracji →
    `PING` musi zwrócić nową konfigurację. Jeśli węzeł konfigurację odrzucił, `PING` zwraca starą.
 2. **Zabezpieczenie:** bez żadnej ramki testowej przez 5 s po przełączeniu węzeł sam wraca do Classic 500k.
-3. **Pętla CAN1↔CAN2** (tylko `CAN_FD_TEST_LOOP=ON`): PC zamyka adapter, węzeł wysyła 200 ramek
-   CAN1→CAN2→CAN1 – referencja bez udziału PC.
+3. **Pętla** (tylko `CAN_FD_TEST_LOOP=ON`): PC zamyka adapter, węzeł wysyła 200 ramek z magistrali
+   testowanej do partnera i z powrotem (CAN1→CAN2→CAN1 albo CAN2→CAN1→CAN2) – referencja bez udziału PC.
 4. **Echo:** wszystkie długości DLC (0–8, 12, 16, 20, 24, 32, 48, 64) × 6 wzorców × ID std/ext;
    na magistrali FD także ramki Classic (ruch mieszany). Kontrola ID, formatu, BRS, długości i danych.
 5. **Burst:** węzeł nadaje 100 ramek (64 B FD / 8 B Classic) z numeracją – kontrola ciągłości i treści.

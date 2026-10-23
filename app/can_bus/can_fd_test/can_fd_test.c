@@ -37,11 +37,17 @@
 /** @brief Maximum number of loop requests in flight (keeps the partner's TX queue from overflowing). */
 #define CAN_FD_TEST_LOOP_IN_FLIGHT    4U
 
-/** @brief CAN instance under test. */
-static can_instance_t *s_inst = NULL;
+/** @brief CAN1 and CAN2 instances (index = bus number - 1), CAN2 may be NULL. */
+static can_instance_t *s_bus_inst[2] = { NULL, NULL };
 
-/** @brief Optional loop partner on the same bus (CAN2), follows every configuration of s_inst. */
-static can_instance_t *s_loop_inst = NULL;
+/** @brief CAN instance under test (CAN1 after reset, changed by SELECT_BUS, read by the RX task). */
+static can_instance_t *volatile s_inst = NULL;
+
+/** @brief Optional loop partner on the same bus, follows every configuration of s_inst. */
+static can_instance_t *volatile s_loop_inst = NULL;
+
+/** @brief Bus number of s_inst (1 = CAN1, 2 = CAN2). */
+static uint8_t s_bus = 1U;
 
 /** @brief Loop test results (responses counted in CAN RX task context). */
 static volatile uint16_t s_loop_sent = 0U;
@@ -141,7 +147,8 @@ static bool can_fd_test_apply_config(const can_config_t *config)
         safe_printf(TAG, "WARNING: loop partner %s not reconfigured\r\n", s_loop_inst->name);
     }
 
-    if (!can_parser_attach_boot_ota(s_inst))
+    /* OTA manager runs on CAN1, whichever bus is under test */
+    if (!can_parser_attach_boot_ota(s_bus_inst[0]))
     {
         safe_printf(TAG, "WARNING: BOOT_OTA filters not attached\r\n");
     }
@@ -267,15 +274,52 @@ static void can_fd_test_handle_get_stats(void)
 /**
  * @brief Handles RESET_STATS: takes a new baseline of the cumulative error counters.
  */
-static void can_fd_test_handle_reset_stats(void)
+static void can_fd_test_reset_counters(void)
 {
+    memset(&s_status_base, 0, sizeof(s_status_base));
     (void)can_manager_getStatus(s_inst, &s_status_base);
 
     s_echo_rx = 0U;
     s_echo_drop = 0U;
     s_tx_error_base = s_inst->tx_error_cnt;
+}
 
+/**
+ * @brief Handles RESET_STATS: takes a new baseline of the cumulative error counters.
+ */
+static void can_fd_test_handle_reset_stats(void)
+{
+    can_fd_test_reset_counters();
     can_fd_test_send_status(CAN_FD_TEST_CMD_RESET_STATS, CAN_FD_TEST_STATUS_OK);
+}
+
+/**
+ * @brief Handles SELECT_BUS: swaps the bus under test and the loop partner, answers from the new bus.
+ */
+static void can_fd_test_handle_select_bus(const CAN_msg_t *msg)
+{
+    uint8_t bus = (msg->len >= 2U) ? msg->data[1] : 0U;
+    if (bus < 1U || bus > 2U || s_bus_inst[bus - 1U] == NULL)
+    {
+        can_fd_test_send_status(CAN_FD_TEST_CMD_SELECT_BUS, CAN_FD_TEST_STATUS_BAD_ARG);
+        return;
+    }
+
+    if (bus != s_bus)
+    {
+        /* Both buses run the same configuration (profile selected on both), only the roles change */
+        s_loop_inst = s_bus_inst[(bus == 1U) ? 1U : 0U];
+        s_inst = s_bus_inst[bus - 1U];
+        s_bus = bus;
+        s_loop_sent = 0U;
+        s_loop_ok = 0U;
+        s_loop_bad = 0U;
+        can_fd_test_reset_counters();
+        safe_printf(TAG, "bus under test: %s (loop partner: %s)\r\n",
+                    s_inst->name, (s_loop_inst != NULL) ? s_loop_inst->name : "none");
+    }
+
+    can_fd_test_send_status(CAN_FD_TEST_CMD_SELECT_BUS, CAN_FD_TEST_STATUS_OK);
 }
 
 /**
@@ -391,7 +435,7 @@ static void can_fd_test_fill_seq_frame(CAN_msg_t *frame, uint32_t id, uint16_t s
 }
 
 /**
- * @brief Handles LOOP: CAN1 sends numbered frames to CAN2, which returns them (no PC involved).
+ * @brief Handles LOOP: the bus under test sends numbered frames to the partner, which returns them (no PC involved).
  */
 static void can_fd_test_handle_loop(const CAN_msg_t *msg)
 {
@@ -411,7 +455,7 @@ static void can_fd_test_handle_loop(const CAN_msg_t *msg)
     s_loop_ok = 0U;
     s_loop_bad = 0U;
 
-    /* Acknowledge, then give the PC time to close its adapter so only CAN1 and CAN2 are on the bus */
+    /* Acknowledge, then give the PC time to close its adapter so only the node's buses are on the line */
     can_fd_test_send_status(CAN_FD_TEST_CMD_LOOP, CAN_FD_TEST_STATUS_OK);
     (void)can_manager_waitTxIdle(s_inst, CAN_FD_TEST_TX_IDLE_TIMEOUT_MS);
     vTaskDelay(pdMS_TO_TICKS(CAN_FD_TEST_SWITCH_DELAY_MS));
@@ -438,6 +482,13 @@ static void can_fd_test_handle_loop(const CAN_msg_t *msg)
         {
             vTaskDelay(pdMS_TO_TICKS(1));
         }
+
+        /* Partner not on the same physical bus: do not block the command task for count x timeout */
+        if (s_loop_sent >= (2U * CAN_FD_TEST_LOOP_IN_FLIGHT) && (s_loop_ok + s_loop_bad) == 0U)
+        {
+            safe_printf(TAG, "LOOP aborted: no response from %s (not on the same bus?)\r\n", s_loop_inst->name);
+            break;
+        }
     }
 
     (void)can_manager_waitTxIdle(s_inst, CAN_FD_TEST_TX_IDLE_TIMEOUT_MS);
@@ -458,12 +509,13 @@ static void can_fd_test_handle_ping(void)
     uint32_t nominal_kbps = (uint32_t)cfg->baudrate_normal / 1000U;
     uint32_t data_kbps = (uint32_t)cfg->baudrate_FD / 1000U;
 
-    uint8_t resp[7] = {
+    uint8_t resp[8] = {
         (uint8_t)(CAN_FD_TEST_CMD_PING | CAN_FD_TEST_RESP_FLAG),
         CAN_FD_TEST_STATUS_OK,
         (uint8_t)cfg->mode,
         (uint8_t)nominal_kbps, (uint8_t)(nominal_kbps >> 8),
-        (uint8_t)data_kbps, (uint8_t)(data_kbps >> 8)
+        (uint8_t)data_kbps, (uint8_t)(data_kbps >> 8),
+        s_bus
     };
     (void)can_fd_test_send_resp(resp, sizeof(resp));
 }
@@ -515,6 +567,7 @@ static void can_fd_test_task(void *pvParameters)
                 case CAN_FD_TEST_CMD_BURST:       can_fd_test_handle_burst(&cmd);   break;
                 case CAN_FD_TEST_CMD_TX_PROBE:    can_fd_test_handle_tx_probe(&cmd); break;
                 case CAN_FD_TEST_CMD_LOOP:        can_fd_test_handle_loop(&cmd);    break;
+                case CAN_FD_TEST_CMD_SELECT_BUS:  can_fd_test_handle_select_bus(&cmd); break;
                 default:
                     can_fd_test_send_status(cmd.data[0], CAN_FD_TEST_STATUS_BAD_ARG);
                     break;
@@ -527,15 +580,18 @@ static void can_fd_test_task(void *pvParameters)
 
 /* --- Public API ------------------------------------------------------------*/
 
-bool can_fd_test_init(can_instance_t *inst, can_instance_t *loop_inst)
+bool can_fd_test_init(can_instance_t *can1, can_instance_t *can2)
 {
-    if (inst == NULL)
+    if (can1 == NULL)
     {
         return false;
     }
 
-    s_inst = inst;
-    s_loop_inst = loop_inst;
+    s_bus_inst[0] = can1;
+    s_bus_inst[1] = can2;
+    s_inst = can1;
+    s_loop_inst = can2;
+    s_bus = 1U;
 
     s_cmd_queue = xQueueCreate(CAN_FD_TEST_CMD_QUEUE_LEN, sizeof(CAN_msg_t));
     if (s_cmd_queue == NULL)
@@ -556,15 +612,27 @@ bool can_fd_test_init(can_instance_t *inst, can_instance_t *loop_inst)
     }
 
     safe_printf(TAG, "CAN FD test module active on %s (loop partner: %s)\r\n",
-                inst->name, (loop_inst != NULL) ? loop_inst->name : "none");
+                can1->name, (can2 != NULL) ? can2->name : "none");
     return true;
 }
 
 void can_fd_test_on_command(const CAN_msg_t *msg)
 {
-    /* Commands are served by the instance under test only (the loop partner hears them too) */
-    if (msg == NULL || msg->len == 0U || s_cmd_queue == NULL ||
-        (s_loop_inst != NULL && can_manager_get_active_rx_instance() == s_loop_inst))
+    if (msg == NULL || msg->len == 0U || s_cmd_queue == NULL)
+    {
+        return;
+    }
+
+    /* Commands are served by the instance under test only (the loop partner hears them too). SELECT_BUS of an
+     * existing bus is served by the selected bus, so it also works when the PC adapter is wired to that bus only. */
+    can_instance_t *active = can_manager_get_active_rx_instance();
+    bool accept = (active == NULL || active == s_inst);
+    if (msg->data[0] == CAN_FD_TEST_CMD_SELECT_BUS && msg->len >= 2U &&
+        msg->data[1] >= 1U && msg->data[1] <= 2U && s_bus_inst[msg->data[1] - 1U] != NULL)
+    {
+        accept = (active == NULL || active == s_bus_inst[msg->data[1] - 1U]);
+    }
+    if (!accept)
     {
         return;
     }

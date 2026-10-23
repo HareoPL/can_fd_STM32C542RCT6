@@ -95,7 +95,8 @@ int main(void)
 #if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
   /* CAN FD test build: CP_FD_TEST parser (with BOOT_OTA) replaces V_BOX on CAN1. On the test bench CAN2
    * shares the physical bus, so a fixed Classic 500 kbps CAN2 would disturb every other bit rate:
-   * - CAN_FD_TEST_LOOP=1: CAN2 is the loop partner and follows every CAN1 configuration,
+   * - CAN_FD_TEST_LOOP=1: CAN2 is the loop partner and follows every configuration; the PC tool can also
+   *   select it as the bus under test (SELECT_BUS, tools/can_fd_test.py --bus 2),
    * - otherwise CAN2 is not started (stays in INIT, silent on the bus). */
 #if defined(CAN_FD_TEST_LOOP) && (CAN_FD_TEST_LOOP == 1)
   if (!can_manager_init(&can2_inst, stm32c5_can2_interfaceGet(), "CAN2") ||
