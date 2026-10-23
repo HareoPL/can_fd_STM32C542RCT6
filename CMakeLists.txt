@@ -95,6 +95,22 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC
   # Add additional defined symbols here
 )
 
+# UART -> CAN bridge: Serial Commander text frames from USART2 (ST-LINK VCP) sent on CAN1 / CAN2
+option(CAN_UART_BRIDGE "Build UART to CAN bridge (cansend / CAN FD / TLV text frames over USART2)" ON)
+if(CAN_UART_BRIDGE)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    app/port/stm32c5/stm32c5_uart_adapter.c
+    app/can_bus/can_uart_bridge/can_frame_text.c
+    app/can_bus/can_uart_bridge/can_uart_bridge.c
+  )
+  target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
+    app/can_bus/can_uart_bridge
+  )
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC
+    CAN_UART_BRIDGE=1
+  )
+endif()
+
 # CAN FD bus test build (tools/can_fd_test.py). Never enable for production images.
 option(CAN_FD_TEST "Build CAN FD test module (CP_FD_TEST parser replaces V_BOX on CAN1)" OFF)
 if(CAN_FD_TEST)

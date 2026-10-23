@@ -40,4 +40,8 @@
 #define TASK_PRIO_CAN_FD_TEST   (tskIDLE_PRIORITY + 3U)
 #define TASK_STACK_CAN_FD_TEST  512U   // * 4 = 2048 bytes
 
+// UART -> CAN BRIDGE TASK (only with CAN_UART_BRIDGE build option)
+#define TASK_PRIO_CAN_UART      (tskIDLE_PRIORITY + 2U)
+#define TASK_STACK_CAN_UART     512U   // * 4 = 2048 bytes
+
 #endif /* TASKS_CONFIG_H */

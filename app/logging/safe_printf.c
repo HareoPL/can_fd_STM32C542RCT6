@@ -19,6 +19,32 @@
 
 #define PRINT_BUFFER_SIZE 256
 
+/**
+ * @brief Transmits a buffer on the log UART, serialized by the printf mutex once the scheduler runs.
+ */
+static void safe_transmit(hal_uart_handle_t *huart, const char *buf, uint32_t len)
+{
+#if HAVE_FREERTOS
+    /* If RTOS mutex is ready and scheduler is running, take mutex */
+    if (printf_mutex != NULL && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+    {
+        if (xSemaphoreTake(printf_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            HAL_UART_Transmit(huart, buf, len, HAL_MAX_DELAY);
+            xSemaphoreGive(printf_mutex);
+        }
+    }
+    else
+    {
+        /* Pre-scheduler / early boot: transmit directly via polling */
+        HAL_UART_Transmit(huart, buf, len, 1000);
+    }
+#else
+    /* Bare-metal / Bootloader: transmit directly via polling */
+    HAL_UART_Transmit(huart, buf, len, 1000);
+#endif
+}
+
 void safe_printf(const char *tag, const char *fmt, ...)
 {
     hal_uart_handle_t *huart = mx_usart2_uart_gethandle();
@@ -49,24 +75,16 @@ void safe_printf(const char *tag, const char *fmt, ...)
         len = PRINT_BUFFER_SIZE - 1;
     }
 
-#if HAVE_FREERTOS
-    /* If RTOS mutex is ready and scheduler is running, take mutex */
-    if (printf_mutex != NULL && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
-    {
-        if (xSemaphoreTake(printf_mutex, portMAX_DELAY) == pdTRUE)
-        {
-            HAL_UART_Transmit(huart, (uint8_t*)buffer, len, HAL_MAX_DELAY);
-            xSemaphoreGive(printf_mutex);
-        }
+    safe_transmit(huart, buffer, (uint32_t)len);
+}
+
+void safe_write(const char *buf, size_t len)
+{
+    hal_uart_handle_t *huart = mx_usart2_uart_gethandle();
+    if (huart == NULL || buf == NULL || len == 0U) {
+        return;
     }
-    else
-    {
-        /* Pre-scheduler / early boot: transmit directly via polling */
-        HAL_UART_Transmit(huart, (uint8_t*)buffer, len, 1000);
-    }
-#else
-    /* Bare-metal / Bootloader: transmit directly via polling */
-    HAL_UART_Transmit(huart, (uint8_t*)buffer, len, 1000);
-#endif
+
+    safe_transmit(huart, buf, (uint32_t)len);
 }
 

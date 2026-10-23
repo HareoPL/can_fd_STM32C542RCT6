@@ -1,6 +1,8 @@
 #ifndef SAFE_PRINTF_H
 #define SAFE_PRINTF_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12,6 +14,13 @@ extern "C" {
  * @param ... Arguments
  */
 void safe_printf(const char *tag, const char *fmt, ...);
+
+/**
+ * @brief Thread-safe raw write of a pre-formatted buffer (no length limit, written in one piece)
+ * @param buf Text to send
+ * @param len Number of bytes
+ */
+void safe_write(const char *buf, size_t len);
 
 #ifdef __cplusplus
 }

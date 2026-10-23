@@ -33,6 +33,10 @@
 #if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
 #include "can_fd_test.h"
 #endif
+#if defined(CAN_UART_BRIDGE) && (CAN_UART_BRIDGE == 1)
+#include "can_uart_bridge.h"
+#include "stm32c5_uart_adapter.h"
+#endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -139,6 +143,20 @@ int main(void)
     safe_printf(NULL, "[MAIN] ERROR: OTA manager init failed!\r\n");
     return (-1);
   }
+
+#if defined(CAN_UART_BRIDGE) && (CAN_UART_BRIDGE == 1)
+  /* 5. Most UART -> CAN (ramki tekstowe Serial Commandera z USART2). CAN2 tylko gdy jest uruchomiony. */
+#if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1) && !(defined(CAN_FD_TEST_LOOP) && (CAN_FD_TEST_LOOP == 1))
+  can_instance_t *bridge_can2 = NULL;
+#else
+  can_instance_t *bridge_can2 = &can2_inst;
+#endif
+  if (!can_uart_bridge_init(stm32c5_uart2_interfaceGet(), &can1_inst, bridge_can2))
+  {
+    safe_printf(NULL, "[MAIN] ERROR: CAN UART bridge init failed!\r\n");
+    return (-1);
+  }
+#endif
 
   if(!io_manager_init())
   {
