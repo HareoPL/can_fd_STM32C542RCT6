@@ -11,13 +11,50 @@ Automotive controller firmware developed for the **STM32C542RCT6** microcontroll
   - **Automotive-Safe & Collision-Free Protocol:** Uses 29-bit Extended CAN IDs in the dedicated V-Box namespace (`0x01F2F3DF`, `0x01F2F3E0`, `0x01F2F3E8`, `0x01F2F3E9`) with a 4-byte `"VBOX"` magic authorization token, preventing any collision with standard 11-bit OBD-II (`0x7DF`/`0x7E0`/`0x7E8`) or vehicle ECU traffic when connected to a vehicle CAN bus on `CAN1`.
   - **Silent Anti-Brick & Crash-Loop Recovery (`SHARED_RAM` @ `0x2000FFC0`):** Hardware fault handlers (`HardFault`, `BusFault`, `MemManage`, `UsageFault`, `configASSERT`) log crash `PC`/`CFSR` to CRC32-protected non-volatile RAM. After 3 failed boots (or blank Flash), the MCU enters **Silent Recovery Mode** (`BOOT_MODE_RECOVERY` — zero unsolicited bus traffic) and responds on-demand with a `0xEE` diagnostic rescue beacon on `0x01F2F3E9` when queried by the updater.
   - **Zero-Touch OTA & Bootloader Self-Update (`v_box` @ `0x08008000`, 192 KB):** Background 96-bit factory UID discovery (`0x01F2F3DF` $\rightarrow$ `0x01F2F3E9` with anti-collision slotting) attached to both `CAN1` (`can_parser_attach_boot_ota`) and `CAN2`, automatic transition from Application to Bootloader preserving the active CAN bus index, and safe remote Bootloader upgrades via an isolated 32 KB **Flash Staging Slot (`0x08038000`)**.
-- **Event-Driven CAN Bus (FDCAN1 & FDCAN2):** Classic CAN 2.0B running at 500 kbps nominal (87.5% sample point) with hardware M_CAN Message RAM filtering, zero-polling RX via binary semaphore, thread-safe TX queue, and modular parser profiles (`app/can_bus/can_parser/parsers/`).
+- **Event-Driven CAN / CAN FD Bus (FDCAN1 & FDCAN2):** Classic CAN 2.0B and CAN FD (up to 64-byte payload, BRS data phase up to 8 Mbps) configured per parser profile (default Classic 500 kbps, 87.5% sample point), hardware M_CAN Message RAM filtering, zero-polling RX via binary semaphore, thread-safe TX queue, bus-off recovery, and modular parser profiles (`app/can_bus/can_parser/parsers/`). See [CAN / CAN FD Support](#can--can-fd-support).
+- **UART → CAN Bridge:** Send any Classic / CAN FD / RTR / TLV frame on CAN1 or CAN2 with one line of text over the ST-LINK VCP (USART2), using the same syntax as Serial Commander buttons (e.g. `321##1#01 02 03`), and reconfigure the bus mode and bit rates at runtime (`CFG#1#FD_BRS#500k#2M`). See [UART → CAN Bridge](#uart--can-bridge).
 - **Fault-Tolerant Bistable Relay Engine:** Edge-controlled latching relay with pre-charge pulse generation, closed-loop feedback verification (PB12), retry mechanism, power-cut recovery, and boot synchronization without audible clicking.
 - **Non-Blocking Asynchronous Workers:** Decoupled relay (`relay_worker_task`) and OTA (`ota_worker_task`) execution via dedicated FreeRTOS queues to guarantee sub-microsecond CAN RX callbacks and prevent hardware FIFO overflow.
 - **Parallel 16-bit Input Debouncer:** 10 ms periodic sampling, 40 ms debouncing window for 9 discrete inputs (SW0..SW8) on GPIOB and GPIOC.
 - **12-bit Analog Voltage Sensing:** ADC1 sampling on PA0 linearly mapped to 0..100% vehicle voltage representation.
 - **Thread-Safe Logging:** Exclusive UART2 console logging at 115200 baud via `safe_printf` (shared across FreeRTOS Application and bare-metal Bootloader).
 - **Automated Dual-Target Memory Dashboard & Binary Merger:** Post-build scripts (`tools/print_memory.py` and `tools/merge_binaries.py`) generating unified production images (`v_box_full.hex` / `v_box_full.bin`) and reporting Flash/RAM usage for both targets.
+
+---
+
+## CAN / CAN FD Support
+
+Both controllers (FDCAN1 and FDCAN2) support the same modes. The bit timing is calculated at runtime from the 144 MHz FDCAN clock (nominal sample point 87.5%, data 75%); only exactly reachable bit rates are accepted, an unreachable configuration is rejected and the previous one stays active.
+
+| Mode | Nominal bit rate | Data bit rate | Payload |
+| :--- | :--- | :--- | :--- |
+| **Classic CAN 2.0B** | 125k, 250k, 500k, 1M | – | 0–8 B, data and remote (RTR) frames |
+| **CAN FD (no BRS)** | 500k, 1M | = nominal | 0–64 B |
+| **CAN FD + BRS** | 500k | 1M, 2M, 4M, 8M | 0–64 B |
+| **CAN FD + BRS** | 1M | 2M, 4M, 8M | 0–64 B |
+
+* **Mixed traffic:** Classic frames are always allowed on an FD bus (OTA / ISO-TP keep working); FD frames are refused on a Classic bus.
+* **Per-frame BRS:** an FD frame can disable bit rate switching on an FD + BRS bus (`CAN_MSG_FLAG_BRS_SET` in `CAN_msg_t.flags`).
+* **Transmitter Delay Compensation** is enabled automatically for BRS with a data prescaler ≤ 2 (high data rates).
+* **Not reachable at 144 MHz:** e.g. 5 Mbps data phase, 83.3 kbps nominal.
+* **Configuration:** per parser profile (`bus_config`, applied by `can_parser_select()`), or at runtime over UART (`CFG#…`, see below).
+* **Hardware verification:** all 13 configurations above plus 3 negative tests pass with 0 protocol errors (echo of every DLC length, node TX burst, mixed Classic/FD traffic): [can_fd_test_report_can2.md](docs/can_bus/can_fd_test_report_can2.md). Test procedure: [can_fd_test_guide.md](docs/can_bus/can_fd_test_guide.md).
+
+### UART → CAN Bridge
+
+Open the ST-LINK VCP (e.g. `COM22`, 115200 8N1, line ending CRLF) in a terminal or in Serial Commander (transport *Serial (UART)*) and send one command per line:
+
+```text
+CFG#1#FD_BRS#500k#2M                       # CAN1: CAN FD + BRS, 500 kbps / 2 Mbps
+321##1#11 22 33 44 55 66 77 88 99 AA BB    # CAN FD frame with BRS on CAN1
+CAN2:187#01 00 00 00 40 7D 00 00           # Classic frame on CAN2
+TLV#321#0xA5#Hello                         # ot_app_msg_tlv packed into a 64-byte FD frame
+CFG?                                       # bus configuration, TEC/REC and error counters
+```
+
+The node answers with the decoded frame (`[CAN_UART] Ramka: 321 [11] [FD+BRS] 11 22 …`) or an error message identical to Serial Commander. The bridge is enabled by the CMake option `CAN_UART_BRIDGE` (default `ON`).
+
+👉 **Full description** (syntax, commands, responses, limitations, architecture): [docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)
 
 ---
 
@@ -91,7 +128,57 @@ The Docker container provides an identical, bit-for-bit reproducible build envir
      *(To clean and rebuild from scratch: `.devcontainer\docker_build.bat rebuild`)*
 
 
-### 3. Flashing via ST-LINK V3 (SWD) & CAN Bus OTA (FDCAN2)
+### 3. Build Configurations (Default & Optional)
+
+Firmware features are selected with CMake options. The default configuration is the production image; optional configurations are built in **separate build directories**, because CMake caches the options per directory (`CMakeCache.txt`) and a test option must never end up in the production build tree.
+
+| CMake option | Default | Effect |
+| :--- | :---: | :--- |
+| `CAN_UART_BRIDGE` | `ON` | UART → CAN bridge: USART2 RX interrupt, `can_uart` task (2 KB stack), text frame parser ([details](docs/can_bus/can_uart_bridge.md)) |
+| `CAN_FD_TEST` | `OFF` | CAN FD test firmware: `CP_FD_TEST` parser replaces `V_BOX` on CAN1, runtime switching of all CAN / CAN FD modes driven by `tools/can_fd_test.py`. **Never for production images.** |
+| `CAN_FD_TEST_LOOP` | `OFF` | Only with `CAN_FD_TEST=ON`: starts CAN2 as the loop partner of the bus under test and allows testing CAN2 (`tools/can_fd_test.py --bus 2`). Requires a CAN FD capable transceiver on FDCAN2. |
+
+| Configuration | Build directory | Options |
+| :--- | :--- | :--- |
+| **Production (default)** | `build/debug_GCC_NUCLEO-C542RC` | defaults (`CAN_UART_BRIDGE=ON`) |
+| Production without the UART bridge | `build/no_uart_bridge` | `CAN_UART_BRIDGE=OFF` |
+| CAN FD test, CAN1 | `build/can_fd_test` | `CAN_FD_TEST=ON` |
+| CAN FD test, CAN1 + CAN2 | `build/can_fd_test_loop` | `CAN_FD_TEST=ON`, `CAN_FD_TEST_LOOP=ON` |
+
+**Production (default):**
+```powershell
+cmake --preset debug_GCC_NUCLEO-C542RC
+cmake --build build/debug_GCC_NUCLEO-C542RC
+```
+
+**Production without the UART bridge:**
+```powershell
+cmake --preset debug_GCC_NUCLEO-C542RC -B build/no_uart_bridge -DCAN_UART_BRIDGE=OFF
+cmake --build build/no_uart_bridge
+```
+
+**CAN FD test firmware (CAN1 under test, CAN2 silent):**
+```powershell
+cmake --preset debug_GCC_NUCLEO-C542RC -B build/can_fd_test -DCAN_FD_TEST=ON
+cmake --build build/can_fd_test
+```
+
+**CAN FD test firmware with CAN2 (loop partner, `--bus 2`):**
+```powershell
+cmake --preset debug_GCC_NUCLEO-C542RC -B build/can_fd_test_loop -DCAN_FD_TEST=ON -DCAN_FD_TEST_LOOP=ON
+cmake --build build/can_fd_test_loop
+```
+
+**Flash any configuration** (replace the directory):
+```powershell
+STM32_Programmer_CLI -c port=SWD mode=UR -w build/can_fd_test_loop/v_box_full.hex -v -rst
+```
+
+* The VS Code tasks and `.devcontainer\docker_build.bat` build the **production** configuration (`build/debug_GCC_NUCLEO-C542RC`).
+* To go back from a test image, flash `build/debug_GCC_NUCLEO-C542RC/v_box_full.hex` again.
+* CAN FD test procedure and the test tool options: [docs/can_bus/can_fd_test_guide.md](docs/can_bus/can_fd_test_guide.md).
+
+### 4. Flashing via ST-LINK V3 (SWD) & CAN Bus OTA (FDCAN2)
 
 #### A. Initial Flashing via ST-LINK V3 (SWD):
 * **Full System (Bootloader + Application):** Run VS Code task **`[Flash] Full Merged Image (Bootloader + App)`** (or **`[Windows] Build & Flash`** / **`[Docker] Build & Flash`**). Programs `v_box_full.hex` starting at `0x08000000`.
@@ -125,7 +212,7 @@ python tools/can_updater.py --update-bootloader build/debug_GCC_NUCLEO-C542RC/v_
 python tools/test_ota_suite.py
 ```
 
-### 4. VS Code Tasks Overview
+### 5. VS Code Tasks Overview
 | Task Label | Environment | Purpose |
 | :--- | :---: | :--- |
 | **`[GUI] Launch CAN OTA Updater`** | Host Win / Docker | Launches graphical Qt studio for CAN OTA flashing and diagnostics. |
@@ -223,6 +310,12 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
 
 * 📖 **[docs/can_bus/can_porting_guide.md](docs/can_bus/can_porting_guide.md)**  
   **Hardware Abstraction Layer (HAL) Porting Guide:** Instructions for porting the CAN subsystem and hardware adapters to other microcontroller families (e.g. STM32H5, STM32G4).
+
+* 📖 **[docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)**  
+  **UART → CAN Bridge:** Sending Classic / CAN FD / RTR / TLV frames on CAN1 or CAN2 over the ST-LINK VCP in Serial Commander syntax, runtime bus configuration (`CFG`), responses and errors, limitations, and the `uart_port.h` contract.
+
+* 📖 **[docs/can_bus/can_fd_test_guide.md](docs/can_bus/can_fd_test_guide.md)**  
+  **CAN FD Bus Test Guide:** Test firmware (`CAN_FD_TEST`), the automated test matrix of all CAN / CAN FD modes on CAN1 or CAN2 (`tools/can_fd_test.py --bus`), and interpretation of the reports.
 
 * 📖 **[docs/changelog.md](docs/changelog.md)**  
   **Project Changelog:** Complete, date-indexed record of all architectural updates, added modules, modified APIs, and bug fixes following the *Keep a Changelog* standard.
