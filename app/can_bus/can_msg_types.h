@@ -19,11 +19,23 @@
      uint32_t ident;     /**< CAN Identifier. Bit 31: 1 = Extended, 0 = Standard. */
      uint8_t format;     /**< Frame format: CAN_MSG_FRAME_FORMAT_CAN or CAN_MSG_FRAME_FORMAT_FD_CAN. */
      uint8_t len;        /**< Length of the data payload in bytes (0-8 Classic, 0-64 CAN FD). */
-     uint8_t data[64];   /**< Payload buffer sized for the largest CAN FD frame: 4+1+1+64 = 70 -> 72 bytes */
+     uint8_t flags;      /**< Per-frame options CAN_MSG_FLAG_* (0 = behaviour defined by the bus mode). */
+     uint8_t data[64];   /**< Payload buffer sized for the largest CAN FD frame: 4+1+1+1+64 = 71 -> 72 bytes */
  } CAN_msg_t;
- 
+
+ _Static_assert(sizeof(CAN_msg_t) == 72U, "CAN_msg_t size changed (queues and OTA rely on 72 bytes)");
+
  #define CAN_MSG_FRAME_FORMAT_CAN    0U /*!< Standard frame format                        */
  #define CAN_MSG_FRAME_FORMAT_FD_CAN 1U /*!< CAN FD frame format (new DLC-coding and CRC) */
+
+ /* --- Per-frame flags (CAN_msg_t.flags) --- */
+
+ /** @brief CAN FD: bit rate switch in the data phase (TX: honoured only with CAN_MSG_FLAG_BRS_SET). */
+ #define CAN_MSG_FLAG_BRS     0x01U
+ /** @brief Classic CAN: remote frame (RTR), len = requested DLC, payload ignored. */
+ #define CAN_MSG_FLAG_RTR     0x02U
+ /** @brief TX: BRS chosen explicitly for this frame (value in CAN_MSG_FLAG_BRS). Without it the bus mode decides. */
+ #define CAN_MSG_FLAG_BRS_SET 0x04U
 
  
  /* --- CAN ID Flags and Masks --- */

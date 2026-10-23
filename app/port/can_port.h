@@ -108,8 +108,13 @@ typedef void (*can_rx_notify_fn)(void* context);
  */
 typedef struct {
     bool (*init)(const can_config_t *config);              /**< (Re)configures and starts the controller */
-    bool (*transmit)(const CAN_msg_t *msg);                /**< Sends frame using msg->format (FD rejected on Classic bus) */
-    bool (*receive)(CAN_msg_t *msg);                       /**< Reads one frame, msg->format reflects the received frame */
+    /** Sends frame using msg->format (FD rejected on Classic bus) and msg->flags:
+     *  BRS on an FD+BRS bus unless CAN_MSG_FLAG_BRS_SET is set without CAN_MSG_FLAG_BRS,
+     *  CAN_MSG_FLAG_RTR sends a Classic remote frame with DLC = msg->len (rejected for FD). */
+    bool (*transmit)(const CAN_msg_t *msg);
+    /** Reads one frame: msg->format and msg->flags (BRS, RTR) reflect the received frame.
+     *  Remote frames may be rejected by the global filter of the port (STM32C5: rejected). */
+    bool (*receive)(CAN_msg_t *msg);
     void (*attach_rx_callback)(can_rx_notify_fn cb, void* context);
     bool (*set_filter)(const can_filter_t *filters, uint32_t num_filters); /**< Hardware filter setup */
     bool (*get_status)(can_bus_status_t *status);          /**< Bus health snapshot (optional, may be NULL) */

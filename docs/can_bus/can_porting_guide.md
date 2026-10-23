@@ -177,10 +177,11 @@ typedef struct {
     /** (Re)konfiguracja i start kontrolera o parametrach z can_config_t */
     bool (*init)(const can_config_t *config);
 
-    /** Nadanie ramki; msg->format wybiera Classic / FD (ramka FD na szynie Classic jest odrzucana) */
+    /** Nadanie ramki; msg->format wybiera Classic / FD (ramka FD na szynie Classic jest odrzucana),
+     *  msg->flags: BRS / BRS_SET (BRS per ramka), RTR (ramka zdalna Classic) */
     bool (*transmit)(const CAN_msg_t *msg);
 
-    /** Odbiór ramki ze sprzętowego FIFO; msg->format odpowiada faktycznie odebranej ramce */
+    /** Odbiór ramki ze sprzętowego FIFO; msg->format i msg->flags (BRS, RTR) odpowiadają faktycznie odebranej ramce */
     bool (*receive)(CAN_msg_t *msg);
 
     /** Podpięcie callbacku powiadomienia z przerwania ISR */
@@ -270,7 +271,12 @@ TDC musi być włączane **po** `HAL_FDCAN_SetDataBitTiming()`, bo zapis rejestr
 * Format ramki pochodzi z `msg->format`, a nie z konfiguracji szyny. Dzięki temu na szynie FD
   ramki Classic (np. odpowiedzi OTA / ISO-TP) nadal wychodzą jako Classic.
 * Ramka FD na szynie `CAN_MODE_CLASSIC` jest odrzucana (`false`).
-* BRS jest ustawiany tylko dla ramek FD w trybie `CAN_MODE_FD_BRS`.
+* BRS jest ustawiany tylko dla ramek FD w trybie `CAN_MODE_FD_BRS`. Ramka może go wyłączyć:
+  `CAN_MSG_FLAG_BRS_SET` bez `CAN_MSG_FLAG_BRS` daje ramkę FD bez BRS. `flags == 0` (ramka wyzerowana
+  przez `memset` / `= {0}`) zachowuje dotychczasowe zachowanie: BRS według trybu szyny.
+  Na szynie `CAN_MODE_FD_NO_BRS` flaga `BRS` jest ignorowana (szyna nie ma skonfigurowanej prędkości danych).
+* `CAN_MSG_FLAG_RTR` nadaje ramkę zdalną (`HAL_FDCAN_FRAME_REMOTE`) z DLC = `msg->len`, bez danych.
+  RTR z `format == FD` jest odrzucane (`false`), bo CAN FD nie ma ramek zdalnych.
 * Długości FD > 8 B są kwantowane (np. 10 → 12 B); niewykorzystany ogon jest dopełniany zerami.
 
 4. **Diagnostyka (`get_status`) i przerwanie błędów protokołu:**
@@ -285,6 +291,10 @@ TDC musi być włączane **po** `HAL_FDCAN_SetDataBitTiming()`, bo zapis rejestr
 
 5. **Obsługa odbioru (`receive`):**
 * Wypełnia `ident`, `len`, `data` (do 64 B) oraz `format` na podstawie bitu FDF odebranej ramki.
+* `flags`: `CAN_MSG_FLAG_BRS` z bitu BRS i `CAN_MSG_FLAG_RTR` z typu ramki. `BRS_SET` pozostaje wyzerowane,
+  więc ramka odesłana bez zmian (echo) dostaje BRS według trybu szyny.
+* Filtr globalny odrzuca ramki zdalne (`acceptance_remote_* = HAL_FDCAN_REMOTE_REJECT`), więc w praktyce
+  `CAN_MSG_FLAG_RTR` przy odbiorze nie występuje. Odbiór RTR wymaga zmiany filtra globalnego.
 
 4. **Callback przerwania z obsługą powiadomienia:**
 ```c

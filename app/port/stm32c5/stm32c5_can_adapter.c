@@ -425,8 +425,9 @@ static bool stm32c5_can_init_generic(hal_fdcan_handle_t *hfdcan,
  * @brief Generic message transmission routine for any FDCAN instance.
  * @param[in] hfdcan FDCAN peripheral handle.
  * @param[in] cached_config Pointer to active configuration.
- * @param[in] msg Frame to send; msg->format selects Classic or FD frame.
- * @return true on success, false if TX FIFO is full, FD frame on Classic bus or parameter error.
+ * @param[in] msg Frame to send; msg->format selects Classic or FD frame, msg->flags BRS / RTR.
+ * @return true on success, false if TX FIFO is full, FD frame on Classic bus, FD remote frame
+ *         or parameter error.
  */
 static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
                                          const can_config_t *cached_config,
@@ -438,9 +439,16 @@ static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
     }
 
     const bool is_fd = (msg->format == CAN_MSG_FRAME_FORMAT_FD_CAN);
+    const bool is_rtr = ((msg->flags & CAN_MSG_FLAG_RTR) != 0U);
 
     /* FD frame would be destroyed by error frames on a Classic CAN bus */
     if (is_fd && cached_config->mode == CAN_MODE_CLASSIC)
+    {
+        return false;
+    }
+
+    /* CAN FD has no remote frames (the core would silently send a Classic RTR) */
+    if (is_fd && is_rtr)
     {
         return false;
     }
@@ -470,14 +478,16 @@ static bool stm32c5_can_transmit_generic(hal_fdcan_handle_t *hfdcan,
     tx_header.b.data_length = bytes_to_fdcan_dlc(payload_len);
     tx_header.b.identifier_type = CAN_msg_is_extended_id(msg->ident) ? HAL_FDCAN_ID_EXTENDED : HAL_FDCAN_ID_STANDARD;
     tx_header.b.identifier = CAN_msg_get_can_id(msg->ident);
-    tx_header.b.frame_type = HAL_FDCAN_FRAME_DATA;
+    /* Remote frame: DLC = requested length, the payload is not transmitted */
+    tx_header.b.frame_type = is_rtr ? HAL_FDCAN_FRAME_REMOTE : HAL_FDCAN_FRAME_DATA;
 
     if (is_fd)
     {
+        /* Without BRS_SET the bus mode decides; with it the frame may only switch BRS off */
+        const bool brs = (cached_config->mode == CAN_MODE_FD_BRS)
+                         && (((msg->flags & CAN_MSG_FLAG_BRS_SET) == 0U) || ((msg->flags & CAN_MSG_FLAG_BRS) != 0U));
         tx_header.b.frame_format = HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN;
-        tx_header.b.bit_rate_switch = (cached_config->mode == CAN_MODE_FD_BRS)
-                                      ? HAL_FDCAN_BIT_RATE_SWITCH_ON
-                                      : HAL_FDCAN_BIT_RATE_SWITCH_OFF;
+        tx_header.b.bit_rate_switch = brs ? HAL_FDCAN_BIT_RATE_SWITCH_ON : HAL_FDCAN_BIT_RATE_SWITCH_OFF;
     }
     else
     {
@@ -523,6 +533,16 @@ static bool stm32c5_can_receive_generic(hal_fdcan_handle_t *hfdcan, CAN_msg_t *m
     msg->format = (rx_header.b.frame_format == HAL_FDCAN_HEADER_FRAME_FORMAT_FD_CAN)
                   ? CAN_MSG_FRAME_FORMAT_FD_CAN
                   : CAN_MSG_FRAME_FORMAT_CAN;
+    /* BRS_SET stays clear: a frame echoed back (e.g. CAN FD test) follows the bus mode of the sender */
+    msg->flags = 0U;
+    if (rx_header.b.bit_rate_switch == HAL_FDCAN_BIT_RATE_SWITCH_ON)
+    {
+        msg->flags |= CAN_MSG_FLAG_BRS;
+    }
+    if (rx_header.b.frame_type == HAL_FDCAN_FRAME_REMOTE)
+    {
+        msg->flags |= CAN_MSG_FLAG_RTR;
+    }
     if (rx_header.b.identifier_type == HAL_FDCAN_ID_EXTENDED)
     {
         msg->ident = CAN_msg_set_extended_id(rx_header.b.identifier);
