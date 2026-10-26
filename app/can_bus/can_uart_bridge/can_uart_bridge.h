@@ -5,6 +5,7 @@
  * One line per command, terminated by CR, LF or CRLF (docs/can_bus/can_uart_bridge.md):
  *   [CAN1:|CAN2:]<frame>                frame syntax of can_support.parse_can_frame()
  *   CFG#<bus>#<CLASSIC|FD|FD_BRS>#<nominal>[#<data>], CFG?, BUS#<n>, MODE#<mode>, HELP
+ *   input simulation commands of io_cmd.c (IO_HELP, ZRODLO#..., OBROTY#..., ...), tag [IO]
  * Responses and errors are printed with the [CAN_UART] tag on the log UART.
  */
 

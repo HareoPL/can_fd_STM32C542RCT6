@@ -10,6 +10,7 @@
 
 #include "can_uart_bridge.h"
 #include "can_frame_text.h"
+#include "io_cmd.h"
 #include "safe_printf.h"
 #include "tasks_config.h"
 #include "ota_protocol.h"
@@ -117,6 +118,12 @@ static void out_flush(void)
         safe_write(s_out, s_out_len);
     }
     s_out_len = 0U;
+}
+
+/** @brief Output for io_cmd_process(): one tagged line from the input simulation module. */
+static void out_io_line(const char *text)
+{
+    out_append("%s\r\n", text);
 }
 
 /* --- Text helpers --- */
@@ -315,6 +322,7 @@ static void cmd_help(void)
     out_line("  CFG?                konfiguracja i liczniki magistral");
     out_line("  BUS#<1|2>           magistrala domyślna");
     out_line("  MODE#<auto|classic|fd_brs|fd_no_brs|tlv>  wymuszony standard ramki");
+    out_line("  IO_HELP             symulacja wejść (stacyjka, drzwi, obroty, paliwo...)");
 }
 
 static void cmd_cfg_query(void)
@@ -600,6 +608,10 @@ static void process_line(char *line)
     else if (str_ieq(line, "MODE?"))
     {
         out_line("MODE: %s", can_frame_text_mode_name(s_frame_mode));
+    }
+    else if (io_cmd_process(line, out_io_line))
+    {
+        /* Input simulation command (io_cmd.c), response already collected */
     }
     else
     {
