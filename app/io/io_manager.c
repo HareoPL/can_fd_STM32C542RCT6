@@ -9,7 +9,9 @@
  *         Maska           - SW5 -> bit 5 -> PB13 (CN10 pin 30)
  *         Awaryjne        - SW6 -> bit 6 -> PB14 (CN10 pin 28)
  *         Hamulec RĘCZNY  - SW7 -> bit 7 -> PB15 (CN10 pin 26)
- *         Dodatkowy wej.  - SW8 -> bit 8 -> PB2  (CN10 pin 22)
+ *         Obroty silnika  - SW8 -> bit 8 -> PB2  (CN10 pin 22)
+ *
+ *        Input source (physical IO or UART simulation): io_sim.c, UART commands: io_cmd.c.
  *
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
@@ -18,6 +20,7 @@
  */
 
 #include "io_manager.h"
+#include "io_sim.h"
 #include "bsp_io.h"
 #include "bsp_adc.h"
 #include "can_manager.h"
@@ -86,6 +89,10 @@ static TaskHandle_t io_manager_task_handle = NULL;
 static CAN_msg_t can_msg = {0};
 
 static uint16_t btn = 0;
+
+/** @brief Physical fuel level 0..100 % (potentiometer), refreshed by the io_manager task. */
+static volatile uint8_t s_fuel_phys = 0U;
+
 /**
  * @brief Debouncer state structure for 9 parallel button inputs.
  */
@@ -100,6 +107,12 @@ typedef struct
 uint16_t io_manager_getAllBtnState(void)
 {
     return btn;
+}
+
+void io_manager_getPhysInputs(uint16_t *btn_state, uint8_t *fuel)
+{
+    *btn_state = btn;
+    *fuel = s_fuel_phys;
 }
 
 uint8_t io_manager_getRelayState(void)
@@ -338,7 +351,14 @@ static uint8_t io_manager_adc_read_mapped(void)
 }
 
 
-static CAN_msg_t *io_manager_canCreateFrame(uint16_t btnState, uint8_t adcState)
+/**
+ * @brief Builds the telemetry frame IO_CAN_ID.
+ * @param[in] btnLow SW0..SW7.
+ * @param[in] fuel Fuel level 0..100 %.
+ * @param[in] rpm Engine RPM 0..750, sent as RPM / IO_RPM_PER_BIT.
+ * @return Pointer to the static frame.
+ */
+static CAN_msg_t *io_manager_canCreateFrame(uint8_t btnLow, uint8_t fuel, uint16_t rpm)
 {
     static uint32_t canCnt = 0;
 
@@ -348,9 +368,9 @@ static CAN_msg_t *io_manager_canCreateFrame(uint16_t btnState, uint8_t adcState)
     can_msg.ident = CAN_msg_set_extended_id(IO_CAN_ID); // extended ID
     can_msg.len = 8;
 
-    can_msg.data[0] = (uint8_t)(btnState & 0xFFU);
-    can_msg.data[1] = adcState;
-    can_msg.data[2] = (uint8_t)((btnState >> 8U) & 0xFFU) ? (0xFAU) : 0;
+    can_msg.data[0] = btnLow;
+    can_msg.data[1] = fuel;
+    can_msg.data[2] = io_sim_rpmToByte(rpm);
     can_msg.data[3] = 0U;    
     can_msg.data[4] = (uint8_t)(canCnt >> 24);
     can_msg.data[5] = (uint8_t)(canCnt >> 16);
@@ -374,6 +394,8 @@ static void io_manager_task(void *pvParameters)
     io_debounce_init(&btn_db, initial_btn);
 
     uint16_t prev_btn_state = initial_btn;
+    uint16_t prev_eff_btn = initial_btn;
+    io_sim_values_t eff;
     uint32_t elapsed_ms = 0U;
     uint32_t elapsed_can_ms = 0U;
 
@@ -382,6 +404,7 @@ static void io_manager_task(void *pvParameters)
         /* Sample and debounce 9 button inputs */
         uint16_t raw_btn = bsp_io_buttons_read();
         btn = io_debounce_update(&btn_db, raw_btn);
+        io_sim_resolve(btn, s_fuel_phys, &eff);
 
         elapsed_ms += IO_SAMPLE_PERIOD_MS;
         elapsed_can_ms += IO_SAMPLE_PERIOD_MS;
@@ -391,35 +414,45 @@ static void io_manager_task(void *pvParameters)
         {
             elapsed_can_ms = 0U;
 
-            if (!can_manager_send(&can1_inst, io_manager_canCreateFrame(btn, io_manager_adc_read_mapped()) ) )
+            s_fuel_phys = io_manager_adc_read_mapped();
+            io_sim_resolve(btn, s_fuel_phys, &eff);
+
+            if (!can_manager_send(&can1_inst, io_manager_canCreateFrame((uint8_t)(eff.btn & 0xFFU), eff.fuel, eff.rpm)))
             {
                 safe_printf(TAG, "Failed to enqueue CAN message! Queue full?\r\n");
             }
         }
 
-        /* Print status immediately on debounced button change or periodically */
-        if ((btn != prev_btn_state) || (elapsed_ms >= IO_PRINT_PERIOD_MS))
+        /* Print status immediately on physical or effective button change, or periodically.
+         * BTN / FUEL / RPM = effective values (sent on CAN), PHYS / ADC = physical inputs. */
+        if ((btn != prev_btn_state) || (eff.btn != prev_eff_btn) || (elapsed_ms >= IO_PRINT_PERIOD_MS))
         {
-            bool btn_changed = (btn != prev_btn_state);
+            bool btn_changed = (btn != prev_btn_state) || (eff.btn != prev_eff_btn);
             prev_btn_state = btn;
+            prev_eff_btn = eff.btn;
             elapsed_ms = 0U;
 
             bool out_state = bsp_io_output_get_state();
             uint32_t adc_raw = bsp_adc_read_raw();
             uint8_t adc_mapped = io_manager_adc_read_mapped();
+            uint16_t e = eff.btn;
 
             safe_printf(TAG,
-                        "BTN: 0x%03X [SW8..0: %d %d%d%d%d %d%d%d%d]%s | PA8: %-4s | ADC: %4lu (%3lu%%)\r\n",
-                        (unsigned int)btn,
-                        (int)((btn >> 8) & 1U),
-                        (int)((btn >> 7) & 1U), (int)((btn >> 6) & 1U),
-                        (int)((btn >> 5) & 1U), (int)((btn >> 4) & 1U),
-                        (int)((btn >> 3) & 1U), (int)((btn >> 2) & 1U),
-                        (int)((btn >> 1) & 1U), (int)(btn & 1U),
+                        "SRC: %-4s | BTN: 0x%03X [SW8..0: %d %d%d%d%d %d%d%d%d]%s | PHYS: 0x%03X | PA8: %-4s | ADC: %4lu (%3lu%%) | FUEL: %3u%% | RPM: %3u\r\n",
+                        (eff.src == IO_SRC_UART) ? "UART" : "IO",
+                        (unsigned int)e,
+                        (int)((e >> 8) & 1U),
+                        (int)((e >> 7) & 1U), (int)((e >> 6) & 1U),
+                        (int)((e >> 5) & 1U), (int)((e >> 4) & 1U),
+                        (int)((e >> 3) & 1U), (int)((e >> 2) & 1U),
+                        (int)((e >> 1) & 1U), (int)(e & 1U),
                         btn_changed ? " *" : "  ",
+                        (unsigned int)btn,
                         out_state ? "HIGH" : "LOW",
                         (unsigned long)adc_raw,
-                        (unsigned long)adc_mapped);
+                        (unsigned long)adc_mapped,
+                        (unsigned int)eff.fuel,
+                        (unsigned int)eff.rpm);
         }
 
         vTaskDelay(pdMS_TO_TICKS(IO_SAMPLE_PERIOD_MS));
@@ -444,6 +477,7 @@ bool io_manager_init(void)
 
     /* Initialize button cache with initial hardware state */
     btn = bsp_io_buttons_read();
+    s_fuel_phys = io_manager_adc_read_mapped();
 
     uint8_t boot_fb = io_manager_getRelayState();
 

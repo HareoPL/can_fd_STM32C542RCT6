@@ -67,6 +67,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/bootloader/boot_shared.c
   app/bootloader/boot_version_record.c
   app/io/io_manager.c
+  app/io/io_sim.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
   app/port/stm32c5/stm32c5_can_adapter.c
