@@ -636,6 +636,8 @@
       <files>
         <file category="source" name="mx_usart2.c" />
         <file category="header" name="mx_usart2.h" />
+        <file category="source" name="mx_usart1.c" />
+        <file category="header" name="mx_usart1.h" />
       </files>
     </component>
   </components>

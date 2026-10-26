@@ -1073,6 +1073,7 @@ if("Cvendor:STMicroelectronics#Cclass:Device#Cgroup:STM32CubeMX2 Config#Csub:UAR
   message(DEBUG "Using component generated_Device_STM32CubeMX2_Config_UART_2_1_0")
   target_compile_definitions(generated_STMicroelectronics_stm32c5xx_hal_drivers_0_0_1 INTERFACE "$<${generated_STMicroelectronics.stm32c5xx_hal_drivers.0.0.1_HAL_CORE_GPIO_DMA_Init_and_UART}:-DCMSIS_USE_generated_Device_STM32CubeMX2_Config_UART_2_1_0=1>")
   target_include_directories(generated_STMicroelectronics_stm32c5xx_hal_drivers_0_0_1 INTERFACE "$<${generated_STMicroelectronics.stm32c5xx_hal_drivers.0.0.1_HAL_CORE_GPIO_DMA_Init_and_UART}:${CMAKE_CURRENT_LIST_DIR}/.>")
+  target_sources(generated_STMicroelectronics_stm32c5xx_hal_drivers_0_0_1 INTERFACE "$<${generated_STMicroelectronics.stm32c5xx_hal_drivers.0.0.1_HAL_CORE_GPIO_DMA_Init_and_UART}:${CMAKE_CURRENT_LIST_DIR}/mx_usart1.c>")
   target_sources(generated_STMicroelectronics_stm32c5xx_hal_drivers_0_0_1 INTERFACE "$<${generated_STMicroelectronics.stm32c5xx_hal_drivers.0.0.1_HAL_CORE_GPIO_DMA_Init_and_UART}:${CMAKE_CURRENT_LIST_DIR}/mx_usart2.c>")
 endif()
 

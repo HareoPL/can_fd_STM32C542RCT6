@@ -133,6 +133,12 @@ system_status_t mx_system_init(void)
     * then it is initialized in stm32_hal_timebase_tim.c.
     */
 
+  /** USART1 */
+  if (mx_usart1_uart_init() == NULL)
+  {
+    return SYSTEM_PERIPHERAL_ERROR;
+  }
+
   if (post_system_init_hook() != SYSTEM_OK)
   {
     return SYSTEM_POSTSYSTEM_ERROR;

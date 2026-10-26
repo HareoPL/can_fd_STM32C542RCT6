@@ -37,6 +37,7 @@ extern "C" {
 #include "mx_rcc.h"
 #include "mx_tim6.h"
 #include "mx_usart2.h"
+#include "mx_usart1.h"
 
 /* Exported types ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
@@ -99,6 +100,12 @@ extern "C" {
       As a result, no aliases are generated for mx_usart2_uart_init
     ************************************************************* */
 
+  /* *************************************************************
+    USART1: No software label has been defined for this peripheral instance
+      in the STM32CubeMX2 configuration panel.
+      As a result, no aliases are generated for mx_usart1_uart_init
+    ************************************************************* */
+
 /* ########################################################### */
 
 /* ########### Aliases to De-Initialization functions ########### */
@@ -151,6 +158,12 @@ extern "C" {
       As a result, no aliases are generated for mx_usart2_uart_deinit
     ************************************************************* */
 
+  /* *************************************************************
+    USART1: No software label has been defined for this peripheral instance
+      in the STM32CubeMX2 configuration panel.
+      As a result, no aliases are generated for mx_usart1_uart_deinit
+    ************************************************************* */
+
 /* ########################################################### */
 
 /* ########### Aliases to get HAL handle functions ########### */
@@ -177,6 +190,12 @@ extern "C" {
     USART2: No software label has been defined for this peripheral instance
       in the STM32CubeMX2 configuration panel.
       As a result, no aliases are generated for mx_usart2_uart_gethandle
+    ************************************************************* */
+
+  /* *************************************************************
+    USART1: No software label has been defined for this peripheral instance
+      in the STM32CubeMX2 configuration panel.
+      As a result, no aliases are generated for mx_usart1_uart_gethandle
     ************************************************************* */
 
 /* ########################################################### */
