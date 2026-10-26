@@ -56,6 +56,8 @@ The node answers with the decoded frame (`[CAN_UART] Ramka: 321 [11] [FD+BRS] 11
 
 👉 **Full description** (syntax, commands, responses, limitations, architecture): [docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)
 
+**Input simulation:** the same UART can take over all inputs of the telemetry frame `0x01F2F3F4` (`ZRODLO#UART`, `DRZWI_KIER#1`, `OBROTY#750`, `PALIWO#42`, …; after reset the physical IO is always active): [docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)
+
 ---
 
 ## Quick Start & Build Guide
@@ -313,6 +315,9 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
 
 * 📖 **[docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)**  
   **UART → CAN Bridge:** Sending Classic / CAN FD / RTR / TLV frames on CAN1 or CAN2 over the ST-LINK VCP in Serial Commander syntax, runtime bus configuration (`CFG`), responses and errors, limitations, and the `uart_port.h` contract.
+
+* 📖 **[docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)**  
+  **UART Input Simulation:** Input source switch (physical IO / UART), commands for every input of the telemetry frame, engine RPM scaling (RPM / 3), responses, and the SW4 relay feedback restriction.
 
 * 📖 **[docs/can_bus/can_fd_test_guide.md](docs/can_bus/can_fd_test_guide.md)**  
   **CAN FD Bus Test Guide:** Test firmware (`CAN_FD_TEST`), the automated test matrix of all CAN / CAN FD modes on CAN1 or CAN2 (`tools/can_fd_test.py --bus`), and interpretation of the reports.

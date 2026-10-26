@@ -2,6 +2,14 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-26]
+### Dodane
+- **Symulacja wejść przez UART (`app/io/io_sim.c`, `app/io/io_cmd.c`):** wszystkie wejścia ramki telemetrii `0x01F2F3F4` ustawiane komendami przez UART mostu (`STACYJKA`, `DRZWI_KIER`, `DRZWI_INNE`, `SWIATLA`, `MASKA`, `AWARYJNE`, `HAMULEC` `#<0|1>`, `OBROTY#<0..750>`, `PALIWO#<0..100>`), odpowiedź `[IO] OK` albo `[IO] ERR: <powód>`. Globalny przełącznik źródła `ZRODLO#<UART|IO>` (po resecie zawsze IO, przy przejściu na UART snapshot stanu fizycznego), `ZRODLO?`, `IO_HELP`. SW4 (zamki, sprzężenie przekaźnika) zawsze z wejścia fizycznego. Instrukcja: `docs/io/io_uart_simulation.md`, test hostowy: `tools/test_io_cmd_host.py`.
+
+### Zmienione
+- **Ramka telemetrii `0x01F2F3F4`, `data[2]`:** obroty silnika kodowane jako RPM / 3 (odbiornik mnoży ×3). W trybie UART 0..750 RPM tylko w wielokrotnościach 3, w trybie IO bez zmian (SW8: `0xFA` albo `0`).
+- **Log `IO_MGR`:** źródło wejść (`SRC`), wartości wysyłane na CAN (`BTN`, `FUEL`, `RPM`) i stan fizyczny (`PHYS`, `ADC`).
+
 ## [2026-10-22]
 ### Dodane
 - **Moduł testu CAN FD (`app/can_bus/can_fd_test/`, `cp_fd_test`, `tools/can_fd_test.py`):** opcja CMake `CAN_FD_TEST` (osobny katalog builda) – parser `CP_FD_TEST` ze zmienną konfiguracją magistrali przełączaną przez `can_parser_select()`, protokół testowy (PING, SET_CONFIG z powrotem awaryjnym po 5 s, GET_STATS, BURST, TX_PROBE, LOOP), echo wszystkich długości DLC, opcjonalna pętla CAN1↔CAN2 (`CAN_FD_TEST_LOOP`). Narzędzie PC: matryca 13 konfiguracji + testy negatywne, log UART, raport Markdown. Instrukcja: `docs/can_bus/can_fd_test_guide.md`, wyniki: `docs/can_bus/can_fd_test_report_can2.md`.

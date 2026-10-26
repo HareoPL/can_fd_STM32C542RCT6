@@ -258,8 +258,9 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
     * Bit 5: Maska (PB13)
     * Bit 6: Awaryjne (PB14)
     * Bit 7: Hamulec Ręczny (PB15)
-  * `Byte [1]`: ADC Mapped Percentage (0..100%).
-  * `Byte [2]`: Obroty silnika 0 lub 0xFA
+  * `Byte [1]`: ADC Mapped Percentage (0..100%) – fuel level.
+  * `Byte [2]`: Engine RPM / 3 (`0..250` = `0..750` RPM, the receiver multiplies by 3). Physical SW8: `0xFA` (750 RPM) or `0`.
+  * All inputs can be simulated over UART instead of the physical IO: [io_uart_simulation.md](io/io_uart_simulation.md).
   * `Byte [3]`: Reserved (`0x00`).
   * `Byte [4..7]`: Big-Endian 32-bit Transmission Rolling Counter.
 
