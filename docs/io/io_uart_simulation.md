@@ -1,7 +1,8 @@
 # Symulacja wejść przez UART (`io_cmd`, `io_sim`)
 
 Wszystkie wejścia ramki telemetrii `0x01F2F3F4` (przełączniki, obroty silnika, poziom paliwa) można
-ustawiać komendami tekstowymi przez UART, zamiast fizycznymi przyciskami i potencjometrem. Komendy
+ustawiać komendami tekstowymi przez UART, zamiast fizycznymi przyciskami i potencjometrem. Można też
+zasymulować uszkodzony zamek, czyli przekaźnik, który nie reaguje na ramki CAN. Komendy
 przyjmuje ten sam UART i task co [most UART → CAN](../can_bus/can_uart_bridge.md) (USART2, ST-LINK VCP,
 115200 8N1, linia zakończona CR, LF albo CRLF).
 
@@ -35,7 +36,8 @@ przyjmuje ten sam UART i task co [most UART → CAN](../can_bus/can_uart_bridge.
 |---|---|
 | Reset MCU / zasilanie | **IO**, zawsze (przełącznik jest tylko w RAM) |
 | `ZRODLO#UART` | UART: ramka CAN budowana z wartości ustawionych komendami |
-| `ZRODLO#IO` | IO: natychmiastowy powrót do fizycznych przycisków i potencjometru |
+| `ZRODLO#IO` | IO: natychmiastowy powrót do fizycznych przycisków i potencjometru, kasuje `AWARIA_ZAMKA` |
+| `IO_RESET` | UART bez zmian: wszystkie wejścia 0, `OBROTY=0`, `PALIWO=0`, `AWARIA_ZAMKA=0` |
 
 - **Przy przejściu IO → UART** wartości symulowane startują od bieżącego stanu fizycznego, więc ramka
   CAN nie zmienia się w chwili przełączenia. Komendy zmieniają potem tylko wskazane wejścia.
@@ -52,7 +54,8 @@ Format: `NAZWA#wartość`. Wielkość liter nie ma znaczenia, a spacje wokół `
 |---|---|---|---|
 | `ZRODLO#UART` / `ZRODLO#IO` | źródło wejść | – | – |
 | `ZRODLO?` | stan wszystkich wejść (wartości wysyłane na CAN) | – | – |
-| `IO_HELP` | pomoc | – | – |
+| `IO_HELP` | pomoc: tabela komend (tylko znaki ASCII) | – | – |
+| `IO_RESET` | reset ustawień symulacji: wejścia 0, obroty 0, paliwo 0, zamek sprawny (źródło zostaje UART) | – | wszystkie bajty wejść = 0 (poza SW4) |
 | `STACYJKA#<0\|1>` | ACC stacyjka (SW0, PB4) | 1 = ACC wł. | `data[0]` bit 0 |
 | `DRZWI_INNE#<0\|1>` | Drzwi inne (SW1, PC8) | 1 = otwarte | `data[0]` bit 1 |
 | `DRZWI_KIER#<0\|1>` | Drzwi kierowcy (SW2, PC7) | 1 = otwarte | `data[0]` bit 2 |
@@ -62,8 +65,9 @@ Format: `NAZWA#wartość`. Wielkość liter nie ma znaczenia, a spacje wokół `
 | `HAMULEC#<0\|1>` | Hamulec ręczny (SW7, PB15) | 1 = zaciągnięty | `data[0]` bit 7 |
 | `OBROTY#<0..750>` | Obroty silnika (SW8, PB2) | RPM, **wielokrotność 3** | `data[2]` = RPM / 3 |
 | `PALIWO#<0..100>` | Poziom paliwa (potencjometr, PA0) | % | `data[1]` |
+| `AWARIA_ZAMKA#<0\|1>` | Uszkodzony zamek | 1 = przekaźnik nie reaguje na ramki CAN | – (bit 4 dalej z feedbacku) |
 
-Komendy ustawiające działają tylko przy `ZRODLO=UART`. `ZRODLO?`, `ZRODLO#...` i `IO_HELP` działają
+Komendy ustawiające (także `AWARIA_ZAMKA` i `IO_RESET`) działają tylko przy `ZRODLO=UART`. `ZRODLO?`, `ZRODLO#...` i `IO_HELP` działają
 w obu trybach. Zmiana trafia do najbliższej ramki telemetrii (okres 100 ms).
 
 Przy wyborze nazw unikano znaków hex: `ACC#01` nadal jest ramką CAN o ID `0xACC`, dlatego stacyjka ma
@@ -95,7 +99,9 @@ Każda komenda dostaje **jedną** odpowiedź z tagiem `[IO]`, wysyłaną od razu
 | Odpowiedź | Przyczyna |
 |---|---|
 | `OK DRZWI_KIER=1`, `OK PALIWO=42%`, `OK OBROTY=99 RPM (data[2]=0x21)`, `OK ZRODLO=UART` | Komenda przyjęta |
-| `ZRODLO=UART STACYJKA=1 ... ZAMKI=1(fiz) ... OBROTY=750 PALIWO=42` | Odpowiedź na `ZRODLO?` |
+| `OK AWARIA_ZAMKA=1 (przekaźnik nie reaguje na ramki CAN)`, `OK AWARIA_ZAMKA=0` | Uszkodzenie zamka włączone / wyłączone |
+| `OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0` | Ustawienia symulacji wyzerowane |
+| `ZRODLO=UART STACYJKA=1 ... ZAMKI=1(fiz) ... OBROTY=750 PALIWO=42 AWARIA_ZAMKA=0` | Odpowiedź na `ZRODLO?` |
 | `ERR: źródło IO, najpierw ZRODLO#UART` | Komenda ustawiająca przy `ZRODLO=IO` |
 | `ERR: OBROTY musi być wielokrotnością 3 (np. 99 lub 102)` | RPM niepodzielne przez 3 |
 | `ERR: OBROTY poza zakresem 0..750`, `ERR: PALIWO poza zakresem 0..100` | Wartość poza zakresem |
@@ -114,6 +120,19 @@ SW4 (PB12, „Zamki ZAMKNIĘTE”) to sprzężenie zwrotne przekaźnika bistabil
 - sterowanie przekaźnikiem (`io_manager_setRelayState()`, worker, weryfikacja feedbacku) nie zależy od
   źródła wejść.
 
+### Symulacja uszkodzonego zamka (`AWARIA_ZAMKA`)
+
+`AWARIA_ZAMKA#1` symuluje zamek, który nie reaguje na polecenia:
+- ramka `0x01F2F3F0` jest odbierana i logowana (`RELAY CMD ... QUEUED`), ale
+  `io_manager_setRelayState()` nie generuje zboczy na PA8 i zwraca `false`; w logu `IO_MGR` pojawia się
+  `Relay command <n> ignored: simulated lock fault (AWARIA_ZAMKA)`,
+- przekaźnik zostaje w dotychczasowym położeniu, więc bit 4 (ZAMKI) w ramce telemetrii pokazuje stan
+  sprzed polecenia, czyli odbiornik widzi brak reakcji zamka,
+- log statusu `IO_MGR` ma dopisek `| AWARIA ZAMKA`, a `ZRODLO?` pokazuje `AWARIA_ZAMKA=1`.
+
+Uszkodzenie wyłącza `AWARIA_ZAMKA#0`, `IO_RESET`, `ZRODLO#IO` albo reset MCU. W trybie IO zamek zawsze
+działa normalnie.
+
 ## 6. Architektura
 
 ```text
@@ -126,9 +145,9 @@ io_manager task (10 ms) -> debounce + ADC -> io_sim_resolve() -> io_manager_canC
 
 | Plik | Rola |
 |---|---|
-| `app/io/io_sim.c/.h` | Przełącznik źródła, wartości symulowane, walidacja (zakresy, krok RPM, SW4), wartości wypadkowe. Bez zależności od HAL, a od FreeRTOS tylko przez sekcję krytyczną (`IO_SIM_HOST` dla testu hostowego) |
+| `app/io/io_sim.c/.h` | Przełącznik źródła, wartości symulowane, flaga uszkodzonego zamka, reset ustawień, walidacja (zakresy, krok RPM, SW4), wartości wypadkowe. Bez zależności od HAL, a od FreeRTOS tylko przez sekcję krytyczną (`IO_SIM_HOST` dla testu hostowego) |
 | `app/io/io_cmd.c/.h` | Parser komend i teksty odpowiedzi. Zwraca `false` dla linii, które nie są komendami IO, i zostawia je bez zmian |
-| `app/io/io_manager.c` | Odczyt fizyczny (debounce, ADC co 100 ms), `io_manager_getPhysInputs()`, budowa ramki z wartości wypadkowych, log statusu |
+| `app/io/io_manager.c` | Odczyt fizyczny (debounce, ADC co 100 ms), `io_manager_getPhysInputs()`, budowa ramki z wartości wypadkowych, log statusu, blokada przekaźnika przy `AWARIA_ZAMKA` |
 | `app/can_bus/can_uart_bridge/can_uart_bridge.c` | Wywołanie `io_cmd_process()` przed parserem ramek, linia `IO_HELP` w `HELP` |
 
 Log `IO_MGR` co 500 ms (i przy zmianie):
@@ -141,9 +160,12 @@ Komendy wymagają mostu UART (`CAN_UART_BRIDGE=ON`, domyślnie), bo `io_cmd.c` j
 `io_sim.c` jest zawsze w buildzie. Bez mostu źródło pozostaje IO.
 
 **Test hostowy** (bez sprzętu) kompiluje `io_cmd.c` + `io_sim.c` lokalnym `gcc` albo w obrazie
-Dockera `vbox-builder`. Przechodzi scenariusz 58 kroków i sprawdza każdą odpowiedź oraz bajty
+Dockera `vbox-builder`. Przechodzi scenariusz 79 kroków i sprawdza każdą odpowiedź oraz bajty
 `data[0..2]` ramki: snapshot przy przełączeniu, SW4 z wejścia fizycznego, wszystkie przełączniki,
-zakresy, krok RPM, błędy składni i linie przekazywane do parsera ramek (`ACC#01`, `CAN1:...`).
+zakresy, krok RPM, `AWARIA_ZAMKA` (włączenie, kasowanie przez `ZRODLO#IO`), `IO_RESET`, błędy składni
+tabelę `IO_HELP` (tylko ASCII, równa szerokość wierszy, wszystkie komendy) i linie przekazywane do
+parsera ramek (`ACC#01`, `CAN1:...`). Blokady przekaźnika (`io_manager.c`)
+test hostowy nie obejmuje, sprawdza ją test na płytce (punkt 5).
 
 ```bash
 python tools/test_io_cmd_host.py [-v]
@@ -155,4 +177,7 @@ python tools/test_io_cmd_host.py [-v]
 3. Każda komenda zmienia właściwy bit lub bajt: `OBROTY#750` daje `data[2]=0xFA`, `OBROTY#99` daje
    `0x21`, a `OBROTY#100` zwraca `ERR`.
 4. Przekaźnik działa z ramki `0x01F2F3F0`, a bit 4 ramki telemetrii pokazuje jego stan.
-5. `ZRODLO#IO` przywraca wejścia fizyczne, a reset przywraca `ZRODLO=IO`.
+5. `AWARIA_ZAMKA#1`: ramka `0x01F2F3F0` nie przełącza przekaźnika (PA8 bez zboczy, log `ignored`),
+   bit 4 ramki telemetrii się nie zmienia. Po `AWARIA_ZAMKA#0` przekaźnik znowu reaguje.
+6. `IO_RESET` zeruje `data[0]` (poza bitem 4), `data[1]` i `data[2]` oraz wyłącza awarię zamka.
+7. `ZRODLO#IO` przywraca wejścia fizyczne i sprawny zamek, a reset przywraca `ZRODLO=IO`.
