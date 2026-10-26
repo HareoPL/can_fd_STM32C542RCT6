@@ -7,6 +7,7 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 - **Nazewnictwo wejść:** SW1 (PC8) = Drzwi INNE, SW2 (PC7) = Drzwi KIER, SW5 (PB13) = Awaryjne, SW6 (PB14) = Maska, SW8 (PB2) = Obroty silnika – w kodzie, komendach UART (`DRZWI_INNE`/`DRZWI_KIER`, `AWARYJNE`/`MASKA` sterują teraz właściwymi bitami ramki `0x01F2F3F4`) i dokumentacji. Piny i bity bez zmian.
 
 ### Dodane
+- **Symulacja uszkodzonego zamka i reset ustawień (`io_sim.c`, `io_cmd.c`, `io_manager.c`):** `AWARIA_ZAMKA#<0|1>` – przekaźnik nie reaguje na ramki `0x01F2F3F0` (`io_manager_setRelayState()` nie generuje zboczy, log `ignored`), bit zamków w telemetrii zostaje bez zmian. `IO_RESET` – wszystkie wejścia 0, obroty 0, paliwo 0, zamek sprawny, źródło zostaje UART. Obie komendy tylko przy `ZRODLO=UART`. `ZRODLO#IO` i reset MCU kasują awarię zamka. `IO_HELP` wyświetla tabelę komend bez polskich znaków.
 - **Symulacja wejść przez UART (`app/io/io_sim.c`, `app/io/io_cmd.c`):** wszystkie wejścia ramki telemetrii `0x01F2F3F4` ustawiane komendami przez UART mostu (`STACYJKA`, `DRZWI_KIER`, `DRZWI_INNE`, `SWIATLA`, `MASKA`, `AWARYJNE`, `HAMULEC` `#<0|1>`, `OBROTY#<0..750>`, `PALIWO#<0..100>`), odpowiedź `[IO] OK` albo `[IO] ERR: <powód>`. Globalny przełącznik źródła `ZRODLO#<UART|IO>` (po resecie zawsze IO, przy przejściu na UART snapshot stanu fizycznego), `ZRODLO?`, `IO_HELP`. SW4 (zamki, sprzężenie przekaźnika) zawsze z wejścia fizycznego. Instrukcja: `docs/io/io_uart_simulation.md`, test hostowy: `tools/test_io_cmd_host.py`.
 
 ### Zmienione
