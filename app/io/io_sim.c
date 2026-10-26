@@ -31,6 +31,7 @@ static io_src_t s_src = IO_SRC_IO;
 static uint16_t s_btn = 0U;   /**< Simulated SW0..SW3, SW5..SW7 */
 static uint16_t s_rpm = 0U;
 static uint8_t s_fuel = 0U;
+static bool s_lock_fault = false;   /**< Relay ignores CAN commands (UART mode only) */
 
 void io_sim_setSource(io_src_t src, uint16_t phys_btn, uint8_t phys_fuel)
 {
@@ -43,6 +44,10 @@ void io_sim_setSource(io_src_t src, uint16_t phys_btn, uint8_t phys_fuel)
         s_fuel = (phys_fuel > IO_FUEL_MAX) ? (uint8_t)IO_FUEL_MAX : phys_fuel;
     }
     s_src = (src == IO_SRC_UART) ? IO_SRC_UART : IO_SRC_IO;
+    if (s_src == IO_SRC_IO)
+    {
+        s_lock_fault = false;
+    }
     IO_SIM_EXIT();
 }
 
@@ -126,10 +131,51 @@ io_sim_result_t io_sim_setFuel(uint32_t fuel)
     return res;
 }
 
+io_sim_result_t io_sim_setLockFault(bool fault)
+{
+    io_sim_result_t res = IO_SIM_OK;
+    IO_SIM_ENTER();
+    if (s_src != IO_SRC_UART)
+    {
+        res = IO_SIM_ERR_SRC;
+    }
+    else
+    {
+        s_lock_fault = fault;
+    }
+    IO_SIM_EXIT();
+    return res;
+}
+
+bool io_sim_isLockFault(void)
+{
+    return s_lock_fault;
+}
+
+io_sim_result_t io_sim_reset(void)
+{
+    io_sim_result_t res = IO_SIM_OK;
+    IO_SIM_ENTER();
+    if (s_src != IO_SRC_UART)
+    {
+        res = IO_SIM_ERR_SRC;
+    }
+    else
+    {
+        s_btn = 0U;
+        s_rpm = 0U;
+        s_fuel = 0U;
+        s_lock_fault = false;
+    }
+    IO_SIM_EXIT();
+    return res;
+}
+
 void io_sim_resolve(uint16_t phys_btn, uint8_t phys_fuel, io_sim_values_t *out)
 {
     IO_SIM_ENTER();
     out->src = s_src;
+    out->lock_fault = s_lock_fault;
     if (s_src == IO_SRC_UART)
     {
         out->rpm = s_rpm;

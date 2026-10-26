@@ -2,9 +2,9 @@
  * @file io_cmd.h
  * @brief UART commands for input simulation (docs/io/io_uart_simulation.md).
  *
- *   ZRODLO#<UART|IO>, ZRODLO?, IO_HELP
+ *   ZRODLO#<UART|IO>, ZRODLO?, IO_HELP, IO_RESET
  *   STACYJKA, DRZWI_INNE, DRZWI_KIER, SWIATLA, AWARYJNE, MASKA, HAMULEC  #<0|1>
- *   OBROTY#<0..750> (multiple of 3), PALIWO#<0..100>
+ *   OBROTY#<0..750> (multiple of 3), PALIWO#<0..100>, AWARIA_ZAMKA#<0|1>
  * Every command gets one response: "[IO] OK ..." or "[IO] ERR: <reason>".
  *
  * @author Jan Lukaszewicz <brak@email.com>

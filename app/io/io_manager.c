@@ -149,6 +149,14 @@ bool io_manager_setRelayState(uint8_t target_state)
 {
     target_state = (target_state != 0U) ? 1U : 0U;
 
+    /* Simulated lock fault (AWARIA_ZAMKA#1, io_cmd.c): the command is received but the relay does not move */
+    if (io_sim_isLockFault())
+    {
+        safe_printf(TAG, "Relay command %u ignored: simulated lock fault (AWARIA_ZAMKA)\r\n",
+                    (unsigned int)target_state);
+        return false;
+    }
+
     if (s_relay_mutex != NULL)
     {
         (void)xSemaphoreTake(s_relay_mutex, portMAX_DELAY);
@@ -438,7 +446,7 @@ static void io_manager_task(void *pvParameters)
             uint16_t e = eff.btn;
 
             safe_printf(TAG,
-                        "SRC: %-4s | BTN: 0x%03X [SW8..0: %d %d%d%d%d %d%d%d%d]%s | PHYS: 0x%03X | PA8: %-4s | ADC: %4lu (%3lu%%) | FUEL: %3u%% | RPM: %3u\r\n",
+                        "SRC: %-4s | BTN: 0x%03X [SW8..0: %d %d%d%d%d %d%d%d%d]%s | PHYS: 0x%03X | PA8: %-4s | ADC: %4lu (%3lu%%) | FUEL: %3u%% | RPM: %3u%s\r\n",
                         (eff.src == IO_SRC_UART) ? "UART" : "IO",
                         (unsigned int)e,
                         (int)((e >> 8) & 1U),
@@ -452,7 +460,8 @@ static void io_manager_task(void *pvParameters)
                         (unsigned long)adc_raw,
                         (unsigned long)adc_mapped,
                         (unsigned int)eff.fuel,
-                        (unsigned int)eff.rpm);
+                        (unsigned int)eff.rpm,
+                        eff.lock_fault ? " | AWARIA ZAMKA" : "");
         }
 
         vTaskDelay(pdMS_TO_TICKS(IO_SAMPLE_PERIOD_MS));

@@ -20,7 +20,7 @@
 #define IO_CMD_TAG      "[IO] "
 #define IO_CMD_OUT_MAX  256U
 #define IO_CMD_NUM_MAX  99999U
-#define IO_CMD_NAME_MAX 15U    /**< Longest command name ("DRZWI_KIER") with margin */
+#define IO_CMD_NAME_MAX 15U    /**< Longest command name ("AWARIA_ZAMKA") with margin */
 
 /** @brief Command kinds. */
 typedef enum
@@ -29,7 +29,8 @@ typedef enum
     IO_CMD_SWITCH,
     IO_CMD_LOCKS,
     IO_CMD_RPM,
-    IO_CMD_FUEL
+    IO_CMD_FUEL,
+    IO_CMD_LOCK_FAULT
 } io_cmd_kind_t;
 
 /** @brief Command table entry. */
@@ -41,17 +42,18 @@ typedef struct
 } io_cmd_entry_t;
 
 static const io_cmd_entry_t s_cmds[] = {
-    { "ZRODLO",     IO_CMD_SOURCE, IO_IN_ACC },
-    { "STACYJKA",   IO_CMD_SWITCH, IO_IN_ACC },
-    { "DRZWI_INNE", IO_CMD_SWITCH, IO_IN_DOOR_OTHER },
-    { "DRZWI_KIER", IO_CMD_SWITCH, IO_IN_DOOR_DRV },
-    { "SWIATLA",    IO_CMD_SWITCH, IO_IN_LIGHTS },
-    { "ZAMKI",      IO_CMD_LOCKS,  IO_IN_LOCKS },
-    { "AWARYJNE",   IO_CMD_SWITCH, IO_IN_HAZARD },
-    { "MASKA",      IO_CMD_SWITCH, IO_IN_HOOD },
-    { "HAMULEC",    IO_CMD_SWITCH, IO_IN_HANDBRAKE },
-    { "OBROTY",     IO_CMD_RPM,    IO_IN_ENGINE },
-    { "PALIWO",     IO_CMD_FUEL,   IO_IN_ENGINE },
+    { "ZRODLO",       IO_CMD_SOURCE,     IO_IN_ACC },
+    { "STACYJKA",     IO_CMD_SWITCH,     IO_IN_ACC },
+    { "DRZWI_INNE",   IO_CMD_SWITCH,     IO_IN_DOOR_OTHER },
+    { "DRZWI_KIER",   IO_CMD_SWITCH,     IO_IN_DOOR_DRV },
+    { "SWIATLA",      IO_CMD_SWITCH,     IO_IN_LIGHTS },
+    { "ZAMKI",        IO_CMD_LOCKS,      IO_IN_LOCKS },
+    { "AWARYJNE",     IO_CMD_SWITCH,     IO_IN_HAZARD },
+    { "MASKA",        IO_CMD_SWITCH,     IO_IN_HOOD },
+    { "HAMULEC",      IO_CMD_SWITCH,     IO_IN_HANDBRAKE },
+    { "OBROTY",       IO_CMD_RPM,        IO_IN_ENGINE },
+    { "PALIWO",       IO_CMD_FUEL,       IO_IN_ENGINE },
+    { "AWARIA_ZAMKA", IO_CMD_LOCK_FAULT, IO_IN_LOCKS },
 };
 
 static io_cmd_out_fn s_out = NULL;
@@ -150,6 +152,8 @@ static void cmd_help(void)
     reply("  OBROTY#<0..%u>    RPM, tylko wielokrotność %u (w ramce RPM/%u, odbiornik mnoży x%u)",
           (unsigned)IO_RPM_MAX, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
     reply("  PALIWO#<0..%u>    poziom paliwa w %%", (unsigned)IO_FUEL_MAX);
+    reply("  AWARIA_ZAMKA#<0|1>  1 = uszkodzony zamek: przekaźnik nie reaguje na ramki CAN");
+    reply("  IO_RESET           wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0 (źródło zostaje UART)");
     reply("  Zamki (SW4) = sprzężenie przekaźnika, tylko odczyt.");
     reply("  Komendy ustawiające działają tylko przy ZRODLO=UART.");
 }
@@ -165,12 +169,12 @@ static void cmd_status(void)
 
 #define IO_CMD_BIT(input) ((unsigned)((v.btn >> (unsigned)(input)) & 1U))
     reply("ZRODLO=%s STACYJKA=%u DRZWI_INNE=%u DRZWI_KIER=%u SWIATLA=%u ZAMKI=%u(fiz) AWARYJNE=%u MASKA=%u "
-          "HAMULEC=%u OBROTY=%u PALIWO=%u",
+          "HAMULEC=%u OBROTY=%u PALIWO=%u AWARIA_ZAMKA=%u",
           (v.src == IO_SRC_UART) ? "UART" : "IO",
           IO_CMD_BIT(IO_IN_ACC), IO_CMD_BIT(IO_IN_DOOR_OTHER), IO_CMD_BIT(IO_IN_DOOR_DRV),
           IO_CMD_BIT(IO_IN_LIGHTS), IO_CMD_BIT(IO_IN_LOCKS), IO_CMD_BIT(IO_IN_HAZARD),
           IO_CMD_BIT(IO_IN_HOOD), IO_CMD_BIT(IO_IN_HANDBRAKE),
-          (unsigned)v.rpm, (unsigned)v.fuel);
+          (unsigned)v.rpm, (unsigned)v.fuel, v.lock_fault ? 1U : 0U);
 #undef IO_CMD_BIT
 }
 
@@ -245,6 +249,26 @@ static void cmd_set(const io_cmd_entry_t *cmd, const char *arg)
 
     switch (cmd->kind)
     {
+        case IO_CMD_LOCK_FAULT:
+            if (!number)
+            {
+                reply("ERR: składnia: %s#<0|1>", cmd->name);
+                return;
+            }
+            if (value > 1U)
+            {
+                reply("ERR: %s: wartość musi być 0 lub 1", cmd->name);
+                return;
+            }
+            res = io_sim_setLockFault(value != 0U);
+            if (res == IO_SIM_OK)
+            {
+                reply("OK %s=%lu%s", cmd->name, (unsigned long)value,
+                      (value != 0U) ? " (przekaźnik nie reaguje na ramki CAN)" : "");
+                return;
+            }
+            break;
+
         case IO_CMD_SWITCH:
         case IO_CMD_LOCKS:
             if (!number)
@@ -315,6 +339,18 @@ bool io_cmd_process(char *line, io_cmd_out_fn out)
     if (str_ieq(line, "ZRODLO?"))
     {
         cmd_status();
+        return true;
+    }
+    if (str_ieq(line, "IO_RESET"))
+    {
+        if (io_sim_reset() == IO_SIM_OK)
+        {
+            reply("OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0");
+        }
+        else
+        {
+            reply("ERR: źródło IO, najpierw ZRODLO#UART");
+        }
         return true;
     }
 

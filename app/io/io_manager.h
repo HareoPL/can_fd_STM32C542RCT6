@@ -40,7 +40,8 @@ uint8_t io_manager_getRelayState(void);
  * and polls the debounced feedback pin until the relay settles. Retries if necessary.
  * 
  * @param[in] target_state Desired state: 1 for ON, 0 for OFF.
- * @return true if relay is in the target state, false on failure/timeout.
+ * @return true if relay is in the target state, false on failure/timeout or while the simulated
+ *         lock fault is active (io_sim_isLockFault(), the relay is not driven).
  */
 bool io_manager_setRelayState(uint8_t target_state);
 

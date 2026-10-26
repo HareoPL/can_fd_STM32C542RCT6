@@ -30,11 +30,13 @@ SCENARIO = [
     # --- Źródło IO (stan po resecie): ramka = wejścia fizyczne ---
     ("PHYS 1A9 42", "PHYS", "A9 2A FA"),
     ("ZRODLO?", "[IO] ZRODLO=IO STACYJKA=1 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=1 ZAMKI=0(fiz) AWARYJNE=1 "
-                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=42", "A9 2A FA"),
+                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=42 AWARIA_ZAMKA=0", "A9 2A FA"),
     ("DRZWI_KIER#1", SRC_IO, "A9 2A FA"),
     ("OBROTY#300", SRC_IO, "A9 2A FA"),
     ("PALIWO#10", SRC_IO, "A9 2A FA"),
     ("OBROTY#751", "[IO] ERR: OBROTY poza zakresem 0..750", "A9 2A FA"),
+    ("AWARIA_ZAMKA#1", SRC_IO, "A9 2A FA"),
+    ("IO_RESET", SRC_IO, "A9 2A FA"),
     ("PHYS 000 7", "PHYS", "00 07 00"),
     ("PHYS 1A9 42", "PHYS", "A9 2A FA"),
 
@@ -71,7 +73,16 @@ SCENARIO = [
     ("PALIWO#100", "[IO] OK PALIWO=100%", "B9 64 FA"),
     ("PALIWO#0", "[IO] OK PALIWO=0%", "B9 00 FA"),
     ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=1 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=1 ZAMKI=1(fiz) AWARYJNE=1 "
-                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=0", "B9 00 FA"),
+                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=0 AWARIA_ZAMKA=0", "B9 00 FA"),
+
+    # --- Uszkodzony zamek: tylko flaga, ramka telemetrii bez zmian ---
+    ("AWARIA_ZAMKA#2", "[IO] ERR: AWARIA_ZAMKA: wartość musi być 0 lub 1", "B9 00 FA"),
+    ("AWARIA_ZAMKA", "[IO] ERR: składnia: AWARIA_ZAMKA#<0|1>", "B9 00 FA"),
+    ("awaria_zamka#1", "[IO] OK AWARIA_ZAMKA=1 (przekaźnik nie reaguje na ramki CAN)", "B9 00 FA"),
+    ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=1 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=1 ZAMKI=1(fiz) AWARYJNE=1 "
+                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=0 AWARIA_ZAMKA=1", "B9 00 FA"),
+    ("AWARIA_ZAMKA#0", "[IO] OK AWARIA_ZAMKA=0", "B9 00 FA"),
+    ("AWARIA_ZAMKA#1", "[IO] OK AWARIA_ZAMKA=1 (przekaźnik nie reaguje na ramki CAN)", "B9 00 FA"),
 
     # --- Ponowne ZRODLO#UART nie robi nowego snapshotu, powrót do IO = wejścia fizyczne ---
     ("ZRODLO#UART", "[IO] OK ZRODLO=UART", "B9 00 FA"),
@@ -79,6 +90,8 @@ SCENARIO = [
     ("ZRODLO", "[IO] ERR: składnia: ZRODLO#<UART|IO>", "B9 00 FA"),
     ("ZRODLO#IO", "[IO] OK ZRODLO=IO", "10 00 00"),
     ("ZRODLO#UART", "[IO] OK ZRODLO=UART", "10 00 00"),
+    ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=0 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=0 ZAMKI=1(fiz) AWARYJNE=0 "
+                "MASKA=0 HAMULEC=0 OBROTY=0 PALIWO=0 AWARIA_ZAMKA=0", "10 00 00"),   # ZRODLO#IO kasuje awarię
 
     # --- Wszystkie przełączniki -> właściwe bity data[0] ---
     ("STACYJKA#1", "[IO] OK STACYJKA=1", "11 00 00"),
@@ -102,6 +115,19 @@ SCENARIO = [
     # --- Pomoc ---
     ("io_help", "~OBROTY#<0..750>    RPM, tylko wielokrotność 3 (w ramce RPM/3, odbiornik mnoży x3)", "EE 00 00"),
     ("IO_HELP", "~Zamki (SW4) = sprzężenie przekaźnika, tylko odczyt.", "EE 00 00"),
+    ("IO_HELP", "~AWARIA_ZAMKA#<0|1>  1 = uszkodzony zamek: przekaźnik nie reaguje na ramki CAN", "EE 00 00"),
+
+    # --- IO_RESET: wszystko na 0, źródło zostaje UART ---
+    ("OBROTY#300", "[IO] OK OBROTY=300 RPM (data[2]=0x64)", "EE 00 64"),
+    ("PALIWO#55", "[IO] OK PALIWO=55%", "EE 37 64"),
+    ("AWARIA_ZAMKA#1", "[IO] OK AWARIA_ZAMKA=1 (przekaźnik nie reaguje na ramki CAN)", "EE 37 64"),
+    ("IO_RESET", "[IO] OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0", "00 00 00"),
+    ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=0 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=0 ZAMKI=0(fiz) AWARYJNE=0 "
+                "MASKA=0 HAMULEC=0 OBROTY=0 PALIWO=0 AWARIA_ZAMKA=0", "00 00 00"),
+    ("PHYS 010 9", "PHYS", "10 00 00"),                        # SW4 nadal fizyczne
+    ("io_reset", "[IO] OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0", "10 00 00"),
+    ("ZRODLO#IO", "[IO] OK ZRODLO=IO", "10 09 00"),
+    ("IO_RESET", SRC_IO, "10 09 00"),
 ]
 
 

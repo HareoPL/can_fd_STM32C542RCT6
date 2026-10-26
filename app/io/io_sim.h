@@ -4,7 +4,8 @@
  *
  * After MCU reset the source is always IO (physical inputs). Only io_sim_setSource(IO_SRC_UART)
  * hands the inputs over to UART commands. SW4 (locks) is the relay feedback and is always taken
- * from the physical input, also in UART mode.
+ * from the physical input, also in UART mode. The simulated lock fault (relay ignores CAN commands)
+ * can be set in UART mode only and is cleared by switching back to IO, io_sim_reset() and MCU reset.
  *
  * No FreeRTOS / HAL dependencies apart from the critical section (IO_SIM_HOST builds it for the host test).
  *
@@ -66,11 +67,13 @@ typedef struct
     uint16_t btn;   /**< SW0..SW8 (bit 8 = engine running) */
     uint8_t fuel;   /**< Fuel level 0..100 % */
     uint16_t rpm;   /**< Engine RPM 0..750, multiple of IO_RPM_PER_BIT */
+    bool lock_fault; /**< Simulated lock fault: relay commands are ignored */
 } io_sim_values_t;
 
 /**
  * @brief Selects the input source. Switching IO -> UART copies the physical state to the
  *        simulated values, so the CAN frame does not change at the moment of switching.
+ *        Switching to IO clears the simulated lock fault.
  * @param[in] src New source.
  * @param[in] phys_btn Current debounced physical button state (snapshot for UART mode).
  * @param[in] phys_fuel Current physical fuel level 0..100 (snapshot for UART mode).
@@ -99,6 +102,22 @@ io_sim_result_t io_sim_setRpm(uint32_t rpm);
  * @return IO_SIM_OK, IO_SIM_ERR_RANGE or IO_SIM_ERR_SRC.
  */
 io_sim_result_t io_sim_setFuel(uint32_t fuel);
+
+/**
+ * @brief Sets or clears the simulated lock fault (relay does not react to CAN commands).
+ * @return IO_SIM_OK or IO_SIM_ERR_SRC.
+ */
+io_sim_result_t io_sim_setLockFault(bool fault);
+
+/** @brief Returns true if the simulated lock fault is active (relay commands must be ignored). */
+bool io_sim_isLockFault(void);
+
+/**
+ * @brief Resets the simulation settings: all discrete inputs 0, RPM 0, fuel 0, lock fault off.
+ *        The source stays UART.
+ * @return IO_SIM_OK or IO_SIM_ERR_SRC.
+ */
+io_sim_result_t io_sim_reset(void);
 
 /**
  * @brief Computes effective input values for the active source.
