@@ -143,19 +143,48 @@ static bool parse_uint(const char *s, uint32_t *value)
 
 /* --- Commands --- */
 
+#define IO_HELP_SEP "+--------------------+-----------+------------------------------------------------+"
+
+/** @brief One row of the IO_HELP table (ASCII only, terminals without UTF-8 included). */
+static void help_row(const char *cmd, const char *values, const char *desc)
+{
+    reply("| %-18s | %-9s | %-46s |", cmd, values, desc);
+}
+
 static void cmd_help(void)
 {
-    reply("Symulacja wejść (po resecie źródło = IO, fizyczne wejścia):");
-    reply("  ZRODLO#<UART|IO>   przełączenie źródła wejść, ZRODLO? = stan wszystkich wejść");
-    reply("  STACYJKA#<0|1>  DRZWI_INNE#<0|1>  DRZWI_KIER#<0|1>  SWIATLA#<0|1>");
-    reply("  AWARYJNE#<0|1>  MASKA#<0|1>  HAMULEC#<0|1>        1 = aktywne");
-    reply("  OBROTY#<0..%u>    RPM, tylko wielokrotność %u (w ramce RPM/%u, odbiornik mnoży x%u)",
-          (unsigned)IO_RPM_MAX, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
-    reply("  PALIWO#<0..%u>    poziom paliwa w %%", (unsigned)IO_FUEL_MAX);
-    reply("  AWARIA_ZAMKA#<0|1>  1 = uszkodzony zamek: przekaźnik nie reaguje na ramki CAN");
-    reply("  IO_RESET           wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0 (źródło zostaje UART)");
-    reply("  Zamki (SW4) = sprzężenie przekaźnika, tylko odczyt.");
-    reply("  Komendy ustawiające działają tylko przy ZRODLO=UART.");
+    char rpm_range[16];
+    char fuel_range[16];
+    char rpm_note[48];
+
+    (void)snprintf(rpm_range, sizeof(rpm_range), "0..%u", (unsigned)IO_RPM_MAX);
+    (void)snprintf(fuel_range, sizeof(fuel_range), "0..%u", (unsigned)IO_FUEL_MAX);
+    (void)snprintf(rpm_note, sizeof(rpm_note), "obroty silnika [RPM], wielokrotnosc %u",
+                   (unsigned)IO_RPM_PER_BIT);
+
+    reply("Symulacja wejsc ramki 0x01F2F3F4 (po resecie MCU zrodlo = IO, fizyczne wejscia)");
+    reply(IO_HELP_SEP);
+    help_row("Komenda", "Wartosci", "Opis");
+    reply(IO_HELP_SEP);
+    help_row("ZRODLO#<UART|IO>", "UART, IO", "zrodlo wejsc: UART = komendy, IO = fizyczne");
+    help_row("ZRODLO?", "-", "stan wszystkich wejsc");
+    help_row("IO_RESET", "-", "wejscia 0, OBROTY 0, PALIWO 0, zamek sprawny");
+    reply(IO_HELP_SEP);
+    help_row("STACYJKA#<v>", "0 / 1", "ACC stacyjka (SW0), 1 = wlaczona");
+    help_row("DRZWI_INNE#<v>", "0 / 1", "drzwi inne (SW1), 1 = otwarte");
+    help_row("DRZWI_KIER#<v>", "0 / 1", "drzwi kierowcy (SW2), 1 = otwarte");
+    help_row("SWIATLA#<v>", "0 / 1", "swiatla (SW3), 1 = wlaczone");
+    help_row("AWARYJNE#<v>", "0 / 1", "swiatla awaryjne (SW5), 1 = wlaczone");
+    help_row("MASKA#<v>", "0 / 1", "maska (SW6), 1 = otwarta");
+    help_row("HAMULEC#<v>", "0 / 1", "hamulec reczny (SW7), 1 = zaciagniety");
+    help_row("OBROTY#<v>", rpm_range, rpm_note);
+    help_row("PALIWO#<v>", fuel_range, "poziom paliwa [%]");
+    help_row("AWARIA_ZAMKA#<v>", "0 / 1", "1 = uszkodzony zamek, przekaznik nie reaguje");
+    reply(IO_HELP_SEP);
+    reply("Komendy ustawiajace (bez ZRODLO) dzialaja tylko przy ZRODLO=UART.");
+    reply("OBROTY: w ramce data[2] = RPM/%u, odbiornik mnozy x%u.",
+          (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
+    reply("ZAMKI (SW4) = sprzezenie przekaznika, tylko odczyt.");
 }
 
 static void cmd_status(void)

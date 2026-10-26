@@ -26,6 +26,7 @@ SRC_IO = "[IO] ERR: źródło IO, najpierw ZRODLO#UART"
 
 # (komenda, oczekiwana odpowiedź, oczekiwane data[0] data[1] data[2])
 # Odpowiedź zaczynająca się od "~" = wystarczy, że wyjście zawiera ten tekst.
+# "=HELP_TABLE" = tylko znaki ASCII, wiersze tabeli (| / +) równej długości, wszystkie komendy w tabeli.
 SCENARIO = [
     # --- Źródło IO (stan po resecie): ramka = wejścia fizyczne ---
     ("PHYS 1A9 42", "PHYS", "A9 2A FA"),
@@ -113,9 +114,11 @@ SCENARIO = [
     ("TLV#321#0xA5#Hello", "NOT_IO TLV#321#0xA5#Hello", "EE 00 00"),
 
     # --- Pomoc ---
-    ("io_help", "~OBROTY#<0..750>    RPM, tylko wielokrotność 3 (w ramce RPM/3, odbiornik mnoży x3)", "EE 00 00"),
-    ("IO_HELP", "~Zamki (SW4) = sprzężenie przekaźnika, tylko odczyt.", "EE 00 00"),
-    ("IO_HELP", "~AWARIA_ZAMKA#<0|1>  1 = uszkodzony zamek: przekaźnik nie reaguje na ramki CAN", "EE 00 00"),
+    ("io_help", "=HELP_TABLE", "EE 00 00"),
+    ("IO_HELP", "~| OBROTY#<v>         | 0..750    | obroty silnika [RPM], wielokrotnosc 3          |", "EE 00 00"),
+    ("IO_HELP", "~| AWARIA_ZAMKA#<v>   | 0 / 1     | 1 = uszkodzony zamek, przekaznik nie reaguje   |", "EE 00 00"),
+    ("IO_HELP", "~OBROTY: w ramce data[2] = RPM/3, odbiornik mnozy x3.", "EE 00 00"),
+    ("IO_HELP", "~ZAMKI (SW4) = sprzezenie przekaznika, tylko odczyt.", "EE 00 00"),
 
     # --- IO_RESET: wszystko na 0, źródło zostaje UART ---
     ("OBROTY#300", "[IO] OK OBROTY=300 RPM (data[2]=0x64)", "EE 00 64"),
@@ -155,6 +158,22 @@ def run_harness(stdin_text, docker_image):
     return out.stdout.decode("utf-8").splitlines()
 
 
+HELP_COMMANDS = ["ZRODLO#<UART|IO>", "ZRODLO?", "IO_RESET", "STACYJKA#", "DRZWI_INNE#", "DRZWI_KIER#",
+                 "SWIATLA#", "AWARYJNE#", "MASKA#", "HAMULEC#", "OBROTY#", "PALIWO#", "AWARIA_ZAMKA#"]
+
+
+def check_help_table(resp):
+    """Sprawdza wyjście IO_HELP: ASCII, równa szerokość tabeli, obecność wszystkich komend."""
+    lines = resp.split(" | [IO] ")
+    if not resp.isascii():
+        return False
+    table = [ln.replace("[IO] ", "", 1) for ln in lines if ln.lstrip("[IO] ").startswith(("|", "+"))]
+    if len(table) < 10 or len({len(ln) for ln in table}) != 1:
+        return False
+    rows = " ".join(table)
+    return all(f"| {cmd}" in rows for cmd in HELP_COMMANDS)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--docker-image", default=None, help="wymusza kompilację w Dockerze (domyślnie gdy brak gcc)")
@@ -171,7 +190,9 @@ def main():
     failed = 0
     for i, ((cmd, exp_resp, exp_frame), line) in enumerate(zip(SCENARIO, lines), 1):
         resp, _, frame = line.partition("\t")
-        if exp_resp.startswith("~"):
+        if exp_resp == "=HELP_TABLE":
+            resp_ok = check_help_table(resp)
+        elif exp_resp.startswith("~"):
             resp_ok = exp_resp[1:] in resp
         else:
             resp_ok = resp == exp_resp

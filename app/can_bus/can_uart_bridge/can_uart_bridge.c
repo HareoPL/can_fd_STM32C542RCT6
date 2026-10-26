@@ -120,9 +120,16 @@ static void out_flush(void)
     s_out_len = 0U;
 }
 
-/** @brief Output for io_cmd_process(): one tagged line from the input simulation module. */
+/**
+ * @brief Output for io_cmd_process(): one tagged line from the input simulation module.
+ *        Long responses (IO_HELP table) exceed s_out, so the collected part is sent first.
+ */
 static void out_io_line(const char *text)
 {
+    if (s_out_len + strlen(text) + 2U >= sizeof(s_out))
+    {
+        out_flush();
+    }
     out_append("%s\r\n", text);
 }
 
