@@ -89,6 +89,14 @@ Wejścia skonfigurowane w trybie `INPUT` z wewnętrznymi rezystorami pull-down (
 | :--- | :---: | :---: | :---: | :--- |
 | **ADC_IN** | **PA0** | A0 | **CN7 pin 28** | Poziom paliwa: pomiar napięcia potencjometru przez 12-bitowy przetwornik ADC1 (`bsp_adc`). |
 
+### 4.4. Port szeregowy USART1
+USART1 w trybie asynchronicznym, 57600 baud, 8N1, bez kontroli przepływu (funkcja alternatywna AF7). Odbiór przerwaniowy przez adapter `stm32c5_uart1_adapter` (interfejs `uart_port.h`). Port obsługuje binarny protokół RS485; transceiver przełącza DE/RE automatycznie, więc nie jest potrzebny dodatkowy pin kierunku. Piny idą bezpośrednio na złącza, bez mostków lutowniczych:
+
+| Sygnał | Pin MCU | Złącze Arduino | Złącze ST-Morpho | Funkcja / Opis |
+| :--- | :---: | :---: | :---: | :--- |
+| **USART1_TX** | **PA6** | D12 | **CN10 pin 13** | Nadawanie UART (wyjście TX do RX urządzenia zewnętrznego). |
+| **USART1_RX** | **PA7** | D11 | **CN10 pin 15** | Odbiór UART (wejście RX z TX urządzenia zewnętrznego). |
+
 ---
 
 ## 5. Piny wolne do wykorzystania (Niewykorzystane w aplikacji)
@@ -98,8 +106,6 @@ Poniższe wyprowadzenia mikrokontrolera nie są zajęte przez logikę aplikacji 
 ### Port A
 * **PA1** (CN7 pin 30 / Arduino A1) – wolne wejście ADC/GPIO.
 * **PA4** (CN7 pin 32 / Arduino A2) – wolne wejście ADC / wyjście DAC.
-* **PA6** (CN10 pin 13 / Arduino D12) – wolne GPIO (lub SPI1_MISO).
-* **PA7** (CN10 pin 15 / Arduino D11) – wolne GPIO (lub SPI1_MOSI).
 * **PA9** (CN10 pin 21 / Arduino D8) – wolne GPIO.
 * **PA10** (CN10 pin 33 / Arduino D2) – wolne GPIO.
 * **PA15** (CN7 pin 17) – wolne GPIO (lub JTDI).
@@ -139,8 +145,8 @@ Rząd 3: CN10 pin 5  -> PB7  [Światła-SW3]|    CN10 pin 6  -> PB5  [CAN2_RX]
 Rząd 4: CN10 pin 7  -> VREFP (AREF)      |    CN10 pin 8  -> 5V_STLK
 Rząd 5: CN10 pin 9  -> GND               |    ...
 Rząd 6: CN10 pin 11 -> PA5  [LD1]        |    CN10 pin 12 -> PA12 [USB_DP]
-Rząd 7: CN10 pin 13 -> PA6  [Wolny]      |    CN10 pin 14 -> PA11 [USB_DM]
-Rząd 8: CN10 pin 15 -> PA7  [Wolny]      |    CN10 pin 16 -> PB12 [Zamki ZAMKNIĘTE - SW4]
+Rząd 7: CN10 pin 13 -> PA6  [USART1_TX]  |    CN10 pin 14 -> PA11 [USB_DM]
+Rząd 8: CN10 pin 15 -> PA7  [USART1_RX]  |    CN10 pin 16 -> PB12 [Zamki ZAMKNIĘTE - SW4]
 Rząd 9: CN10 pin 17 -> PC9  [Wolny]      |    CN10 pin 18 -> PB1  [Wolny]
 Rząd 10:CN10 pin 19 -> PC6  [Wolny]      |    ...
 Rząd 11:CN10 pin 21 -> PA9  [Wolny]      |    CN10 pin 22 -> PB2  [Obroty silnika - SW8]

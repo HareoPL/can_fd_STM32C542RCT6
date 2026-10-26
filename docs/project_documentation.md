@@ -102,93 +102,100 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | Pin Name | Direction | Mode / Pull | Connector & Pin | Arduino Alias | Function in V-BOX | Description / Circuit Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- | :--- |
 | **PA0** | Input | Analog | **CN7 pin 28** | `A0` | **Analog fuel level Measurement** | 12-bit ADC1 Channel 0. Reads analog sensor / potentiometer voltage. |
+| **PA2** | Alt (AF7) | Push-Pull AF, Low-Speed | **CN7 pin 9** | - | **USART2_TX (VCP Log)** | UART output to ST-LINK Virtual COM Port at 115200 baud. Not routed to the Arduino headers. |
+| **PA3** | Alt (AF7) | AF, No Pull | **CN7 pin 11** | - | **USART2_RX (VCP Log)** | UART input from ST-LINK Virtual COM Port. Not routed to the Arduino headers. |
+| **PA5** | Output | Push-Pull, Low-Speed | **CN10 pin 11** | `D13` | **Heartbeat LED (LD1)** | Onboard green LED toggling at 1 Hz from `heartbeat_task`. |
+| **PA6** | Alt (AF7) | Push-Pull AF, Low-Speed | **CN10 pin 13** | `D12` | **USART1_TX (RS485)** | Binary RS485 protocol, 57600 baud 8N1. Drives the RS485 transceiver **DI** input. The transceiver switches DE/RE automatically, so no direction GPIO is used. |
+| **PA7** | Alt (AF7) | AF, No Pull | **CN10 pin 15** | `D11` | **USART1_RX (RS485)** | Binary RS485 protocol, 57600 baud 8N1. Reads the RS485 transceiver **RO** output (interrupt driven, `stm32c5_uart1_adapter`). |
 | **PA8** | Output | Push-Pull, Low-Speed | **CN10 pin 23** | `D7` | **Bistable Relay Actuator** | Generates edges ($0 \rightarrow 1$ to CLOSE, $1 \rightarrow 0$ to OPEN) for bistable latching relay. |
 | **PB2** | Input | Input, Pull-Down | **CN10 pin 22** | - | **SW8 (RPM engine)** | Discrete input (Bit 8). Active HIGH (+3.3V), idle LOW via pull-down. |
 | **PB4** | Input | Input, Pull-Down | **CN10 pin 27** | `D5` | **SW0 (Ignition / ACC)** | Discrete input (Bit 0). Reads vehicle ignition key status. |
-| **PB5** | Alt (AF9) | High-Speed AF | **CN10 pin 6** | `D4` | **FDCAN2_RX** | CAN2 bus receive line (Bootloader / OTA update). |
-| **PB6** | Alt (AF9) | High-Speed AF | **CN10 pin 3** | `D10` | **FDCAN2_TX** | CAN2 bus transmit line (Bootloader / OTA update). |
-| **PB7** | Input | Input, Pull-Down | **CN10 pin 5** | - | **SW3 (Lights / Headlamps)** | Discrete input (Bit 3). Reads headlights activation state. |
-| **PB8** | Alt (AF9) | High-Speed AF | **CN10 pin 35** | `D15` | **FDCAN1_RX** | CAN bus receive line. Connected to MCP2562FD transceiver RXD. |
-| **PB9** | Alt (AF9) | High-Speed AF | **CN10 pin 33** | `D14` | **FDCAN1_TX** | CAN bus transmit line. Connected to MCP2562FD transceiver TXD. |
+| **PB5** | Alt (AF9) | Very-High-Speed AF | **CN10 pin 6** | - | **FDCAN2_RX** | CAN2 bus receive line (Bootloader / OTA update). |
+| **PB6** | Alt (AF9) | Very-High-Speed AF | **CN10 pin 3** | `D15` | **FDCAN2_TX** | CAN2 bus transmit line (Bootloader / OTA update). |
+| **PB7** | Input | Input, Pull-Down | **CN10 pin 5** | `D14` | **SW3 (Lights / Headlamps)** | Discrete input (Bit 3). Reads headlights activation state. |
+| **PB8** | Alt (AF9) | Very-High-Speed AF | - *(on-board, SB36)* | - | **FDCAN1_RX** | CAN bus receive line. Connected only to the on-board MCP2562FD transceiver (U7) RXD. |
+| **PB9** | Alt (AF9) | Very-High-Speed AF | - *(on-board, SB34)* | - | **FDCAN1_TX** | CAN bus transmit line. Connected only to the on-board MCP2562FD transceiver (U7) TXD. |
 | **PB12** | Input | Input, Pull-Down | **CN10 pin 16** | - | **SW4 (Locks / Relay Feedback)** | Discrete input (Bit 4). Auxiliary contact feedback indicating actual physical relay state. |
 | **PB13** | Input | Input, Pull-Down | **CN10 pin 30** | - | **SW5 (Hazard Lights)** | Discrete input (Bit 5). Hazard switch status. |
-| **PB14** | Input | Input, Pull-Down | **CN10 pin 28** | `D1` | **SW6 (Engine Hood)** | Discrete input (Bit 6). Hood limit switch / sensor. |
-| **PB15** | Input | Input, Pull-Down | **CN10 pin 26** | `D0` | **SW7 (Handbrake)** | Discrete input (Bit 7). Parking brake engagement switch. |
-| **PC7** | Input | Input, Pull-Down | **CN10 pin 19** | `D8` | **SW2 (Driver Door)** | Discrete input (Bit 2). Driver door latch switch. *(Reallocated to free CAN2)* |
-| **PC8** | Input | Input, Pull-Down | **CN10 pin 31** | `D2` | **SW1 (Other Doors)** | Discrete input (Bit 1). Passenger / rear doors switch. *(Reallocated to free CAN2)* |
-| **PE2** | Output | Push-Pull | **CN7 pin 21** | - | **FDCAN1_STBY** | Onboard CAN transceiver standby control. Driven LOW to enable transceiver. |
-| **PA5** | Output | Push-Pull | **CN10 pin 11** | `D13` | **Heartbeat LED (LD1)** | Onboard green LED toggling at 1 Hz from `heartbeat_task`. |
-| **PA2** | Alt (AF7) | High-Speed AF | **CN7 pin 9** | `D1 (TX)` | **USART2_TX (VCP Log)** | UART output to ST-LINK Virtual COM Port at 115200 baud. |
-| **PA3** | Alt (AF7) | High-Speed AF | **CN7 pin 11** | `D0 (RX)` | **USART2_RX (VCP Log)** | UART input from ST-LINK Virtual COM Port. |
+| **PB14** | Input | Input, Pull-Down | **CN10 pin 28** | `D1` ⁽¹⁾ | **SW6 (Engine Hood)** | Discrete input (Bit 6). Hood limit switch / sensor. |
+| **PB15** | Input | Input, Pull-Down | **CN10 pin 26** | `D0` ⁽¹⁾ | **SW7 (Handbrake)** | Discrete input (Bit 7). Parking brake engagement switch. |
+| **PC7** | Input | Input, Pull-Down | **CN10 pin 4** | - | **SW2 (Driver Door)** | Discrete input (Bit 2). Driver door latch switch. *(Reallocated to free CAN2)* |
+| **PC8** | Input | Input, Pull-Down | **CN10 pin 2** | - | **SW1 (Other Doors)** | Discrete input (Bit 1). Passenger / rear doors switch. *(Reallocated to free CAN2)* |
+| **PE2** | Input | Input, No Pull | **CN7 pin 21** | - | **FDCAN1_STBY** | On-board CAN transceiver (U7) standby input, connected through SB32. Configured as a floating input in `mx_gpio_default.c`, so the firmware does not drive it. |
+
+⁽¹⁾ Arduino `D1` / `D0` (and CN10 pins 35 / 37) only with solder bridges SB48 / SB49 ON. Do not connect signals to both locations at the same time.
 
 ### 3.2. Secondary CAN Bus (FDCAN2) Active Configuration
 The secondary CAN interface (`FDCAN2`) is fully implemented and configured for Classic CAN 2.0 @ 500 kbps:
-* **`PB5` (CN10 pin 6 / Arduino D4):** Connected to external CAN transceiver **RXD** (`FDCAN2_RX`, AF9).
-* **`PB6` (CN10 pin 3 / Arduino D10):** Connected to external CAN transceiver **TXD** (`FDCAN2_TX`, AF9).
+* **`PB5` (CN10 pin 6):** Connected to external CAN transceiver **RXD** (`FDCAN2_RX`, AF9).
+* **`PB6` (CN10 pin 3 / Arduino D15):** Connected to external CAN transceiver **TXD** (`FDCAN2_TX`, AF9).
 
 ---
 
 ## 4. Visual Nucleo-64 Board Pinout Diagram
 
-The NUCLEO-C542RC board exposes two 38-pin double-row ST-Morpho headers: **CN7** (left side) and **CN10** (right side).
+The NUCLEO-C542RC board exposes two 38-pin double-row ST-Morpho headers: **CN7** (left side) and **CN10** (right side). Pin numbering follows UM3615 Table 16 (CN7) and Table 17 (CN10); the detailed per-pin description (Arduino aliases, solder bridges) is in [GPIO_Report.md](GPIO_Report.md).
 
 ```text
-
 ========================================================================================
                     NUCLEO-C542RC: ST-MORPHO RIGHT CONNECTOR (CN10)
 ========================================================================================
 
-           [Odd: Inner]                                            [Even: Outer]
-           ------------                                            -------------
-                   [ 1] : SDIO_DAT1 / LINA_RX            [ 2] : PC8      : DRZWI INNE
-             PB6   [ 3] : FDCAN2_TX                      [ 4] : PC7      : DRZWI KIER
-             PB7   [ 5] : swiatla                        [ 6] : PB5      : FDCAN2_RX
-            AREF   [ 7] :                                [ 8] : 5V_STLK
-             GND   [ 9] :                                [10] : NC
-             PA5   [11] : led HEARTBEAT                  [12] : PA12
-             PA6   [13] :                                [14] : PA11
-             PA7   [15] :                                [16] : PB12    : zamki_zamkniete (relay feetback)
-             PC9   [17] :                                [18] : CN10_18_ADC
-             PC6   [19] :                                [20] : GND
-             PA9   [21] : [wolny]                        [22] : PB2     : engine RPM
-             PA8   [23] : Przekaznik                     [24] : NC
-            PB10   [25] :                                [26] : PB15    : Hamulec reczny
-             PB4   [27] : stacyjka                       [28] : PB14    : Maska
-             PC1   [29] :                                [30] : PB13    : Awaryjne
-             PB3   [31] :                                [32] : AGND
-            PA10   [33] : [wolny]                        [34] : PC4
-             PB9   [35] : FDCAN1_TX                      [36] : CN10_36_GPIO
-             PB8   [37] : FDCAN1_RX                      [38] : NC
+            [Odd: Inner]                          [Even: Outer]
+            ------------                          -------------
+            NC [ 1] :                             [ 2] : PC8   : SW1 Other doors (in, PD)
+           PB6 [ 3] : FDCAN2_TX (AF9)             [ 4] : PC7   : SW2 Driver door (in, PD)
+           PB7 [ 5] : SW3 Lights (in, PD)         [ 6] : PB5   : FDCAN2_RX (AF9)
+         VREFP [ 7] : AREF                        [ 8] : 5V_STLK
+           GND [ 9] :                             [10] : NC
+           PA5 [11] : LD1 heartbeat LED           [12] : PA12  : USB_DP (USB-C, unused)
+           PA6 [13] : USART1_TX -> RS485 DI       [14] : PA11  : USB_DM (USB-C, unused)
+           PA7 [15] : USART1_RX <- RS485 RO       [16] : PB12  : SW4 Locks closed feedback (in, PD)
+           PC9 [17] : [free]                      [18] : PB1   : [free]
+           PC6 [19] : [free]                      [20] : GND
+           PA9 [21] : [free]                      [22] : PB2   : SW8 Engine RPM (in, PD)
+           PA8 [23] : RELAY_CTRL (out, PP)        [24] : NC
+          PB10 [25] : [free]                      [26] : PB15  : SW7 Handbrake (in, PD)
+           PB4 [27] : SW0 Ignition ACC (in, PD)   [28] : PB14  : SW6 Engine hood (in, PD)
+           PC1 [29] : [free]                      [30] : PB13  : SW5 Hazard lights (in, PD)
+           PB3 [31] : SWO (ST-LINK trace)         [32] : AGND
+          PA10 [33] : [free]                      [34] : PC4   : VBUS_DETECT (USB-C)
+          PB14 [35] : via SB48 - do not use (1)   [36] : NC
+          PB15 [37] : via SB49 - do not use (1)   [38] : NC
 ========================================================================================
 
 ========================================================================================
-                    NUCLEO-C542RC: ST-MORPHO LEFT CONNECTOR (CN7)
+                     NUCLEO-C542RC: ST-MORPHO LEFT CONNECTOR (CN7)
 ========================================================================================
 
-           [Odd: Outer]                                            [Even: Inner]
-           ------------                                            -------------
-             PC10  [ 1] :                                [ 2] : PC11
-             PC12  [ 3] :                                [ 4] : PD2
-             3V3   [ 5] :                                [ 6] : 5V_EXT      
-       PH2_BOOT0   [ 7] :                                [ 8] : GND         
-              PA2  [ 9] :                                [10] : NC
-              PA3  [11] :                                [12] : IOREF      
-             PA13  [13] :                                [14] : NRST
-             PA14  [15] :                                [16] : 3V3         
-             PA15  [17] :                                [18] : 5V          
-              GND  [19] :                                [20] : GND         
-              PE2  [21] :                                [22] : GND         
-             PC13  [23] :                                [24] : VIN         
-             PC14  [25] :                                [26] : NC
-             PC15  [27] :                                [28] : PA0
-              PH0  [29] :                                [30] : PA1
-              PH1  [31] :                                [32] : PA4
-             VBAT  [33] :                                [34] : PB0   : ADC fuel level
-              PC2  [35] :                                [36] : PC5
-              PC3  [37] :                                [38] : PC0
+            [Odd: Outer]                          [Even: Inner]
+            ------------                          -------------
+          PC10 [ 1] : [free]                      [ 2] : PC11  : [free]
+          PC12 [ 3] : [free]                      [ 4] : PD2   : [free]
+           3V3 [ 5] :                             [ 6] : 5V_EXT
+     PH2_BOOT0 [ 7] : BOOT0 (B3)                  [ 8] : GND
+           PA2 [ 9] : USART2_TX (VCP log)         [10] : NC
+           PA3 [11] : USART2_RX (VCP log)         [12] : IOREF
+          PA13 [13] : SWDIO (ST-LINK)             [14] : NRST  : Reset (B2)
+          PA14 [15] : SWCLK (ST-LINK)             [16] : 3V3
+          PA15 [17] : [free]                      [18] : 5V
+           GND [19] :                             [20] : GND
+           PE2 [21] : FDCAN1_STBY (U7)            [22] : GND
+          PC13 [23] : B1 user button              [24] : VIN
+          PC14 [25] : OSC32_IN (LSE X2)           [26] : NC
+          PC15 [27] : OSC32_OUT (LSE X2)          [28] : PA0   : ADC1_IN0 fuel level (analog)
+           PH0 [29] : OSC_IN (HSE X3)             [30] : PA1   : [free]
+           PH1 [31] : OSC_OUT (HSE X3)            [32] : PA4   : [free]
+          VBAT [33] :                             [34] : PB0   : [free]
+           PC2 [35] : [free]                      [36] : PC5   : [free]
+           PC3 [37] : [free]                      [38] : PC0   : [free]
 ========================================================================================
 ```
 
+* **Legend:** `in, PD` = digital input with internal pull-down (active HIGH, +3.3 V); `out, PP` = push-pull output; `[free]` = not used by the application or by Nucleo on-board peripherals.
+* **USART1 (PA6 / PA7):** 57600 baud, 8N1, AF7 — reserved for the binary RS485 protocol and its parser. PA6 drives the RS485 transceiver DI input, PA7 reads its RO output. The transceiver switches DE/RE automatically, so no direction pin is needed.
+* **FDCAN1 (PB8 / PB9):** not routed to the ST-Morpho headers; both lines go directly to the on-board MCP2562FD transceiver (U7, SB36 / SB34). Its standby input is PE2 (CN7 pin 21).
+* **(1)** PB14 / PB15 also appear on CN10 pins 35 / 37 when SB48 / SB49 are ON. They are already used as SW6 / SW7 on CN10 pins 28 / 26, so pins 35 / 37 must not be connected.
 
 ---
 
