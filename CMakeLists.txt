@@ -71,6 +71,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
   app/port/stm32c5/stm32c5_can_adapter.c
+  app/port/stm32c5/stm32c5_uart1_adapter.c
   stm32c5xx_drivers/hal/stm32c5xx_hal_adc.c
   stm32c5xx_drivers/hal/stm32c5xx_hal_flash.c
 )
