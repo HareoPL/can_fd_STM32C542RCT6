@@ -43,12 +43,12 @@ typedef struct
 static const io_cmd_entry_t s_cmds[] = {
     { "ZRODLO",     IO_CMD_SOURCE, IO_IN_ACC },
     { "STACYJKA",   IO_CMD_SWITCH, IO_IN_ACC },
-    { "DRZWI_KIER", IO_CMD_SWITCH, IO_IN_DOOR_DRV },
     { "DRZWI_INNE", IO_CMD_SWITCH, IO_IN_DOOR_OTHER },
+    { "DRZWI_KIER", IO_CMD_SWITCH, IO_IN_DOOR_DRV },
     { "SWIATLA",    IO_CMD_SWITCH, IO_IN_LIGHTS },
     { "ZAMKI",      IO_CMD_LOCKS,  IO_IN_LOCKS },
-    { "MASKA",      IO_CMD_SWITCH, IO_IN_HOOD },
     { "AWARYJNE",   IO_CMD_SWITCH, IO_IN_HAZARD },
+    { "MASKA",      IO_CMD_SWITCH, IO_IN_HOOD },
     { "HAMULEC",    IO_CMD_SWITCH, IO_IN_HANDBRAKE },
     { "OBROTY",     IO_CMD_RPM,    IO_IN_ENGINE },
     { "PALIWO",     IO_CMD_FUEL,   IO_IN_ENGINE },
@@ -145,8 +145,8 @@ static void cmd_help(void)
 {
     reply("Symulacja wejść (po resecie źródło = IO, fizyczne wejścia):");
     reply("  ZRODLO#<UART|IO>   przełączenie źródła wejść, ZRODLO? = stan wszystkich wejść");
-    reply("  STACYJKA#<0|1>  DRZWI_KIER#<0|1>  DRZWI_INNE#<0|1>  SWIATLA#<0|1>");
-    reply("  MASKA#<0|1>  AWARYJNE#<0|1>  HAMULEC#<0|1>        1 = aktywne");
+    reply("  STACYJKA#<0|1>  DRZWI_INNE#<0|1>  DRZWI_KIER#<0|1>  SWIATLA#<0|1>");
+    reply("  AWARYJNE#<0|1>  MASKA#<0|1>  HAMULEC#<0|1>        1 = aktywne");
     reply("  OBROTY#<0..%u>    RPM, tylko wielokrotność %u (w ramce RPM/%u, odbiornik mnoży x%u)",
           (unsigned)IO_RPM_MAX, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
     reply("  PALIWO#<0..%u>    poziom paliwa w %%", (unsigned)IO_FUEL_MAX);
@@ -164,12 +164,12 @@ static void cmd_status(void)
     io_sim_resolve(phys_btn, phys_fuel, &v);
 
 #define IO_CMD_BIT(input) ((unsigned)((v.btn >> (unsigned)(input)) & 1U))
-    reply("ZRODLO=%s STACYJKA=%u DRZWI_KIER=%u DRZWI_INNE=%u SWIATLA=%u ZAMKI=%u(fiz) MASKA=%u AWARYJNE=%u "
+    reply("ZRODLO=%s STACYJKA=%u DRZWI_INNE=%u DRZWI_KIER=%u SWIATLA=%u ZAMKI=%u(fiz) AWARYJNE=%u MASKA=%u "
           "HAMULEC=%u OBROTY=%u PALIWO=%u",
           (v.src == IO_SRC_UART) ? "UART" : "IO",
-          IO_CMD_BIT(IO_IN_ACC), IO_CMD_BIT(IO_IN_DOOR_DRV), IO_CMD_BIT(IO_IN_DOOR_OTHER),
-          IO_CMD_BIT(IO_IN_LIGHTS), IO_CMD_BIT(IO_IN_LOCKS), IO_CMD_BIT(IO_IN_HOOD),
-          IO_CMD_BIT(IO_IN_HAZARD), IO_CMD_BIT(IO_IN_HANDBRAKE),
+          IO_CMD_BIT(IO_IN_ACC), IO_CMD_BIT(IO_IN_DOOR_OTHER), IO_CMD_BIT(IO_IN_DOOR_DRV),
+          IO_CMD_BIT(IO_IN_LIGHTS), IO_CMD_BIT(IO_IN_LOCKS), IO_CMD_BIT(IO_IN_HAZARD),
+          IO_CMD_BIT(IO_IN_HOOD), IO_CMD_BIT(IO_IN_HANDBRAKE),
           (unsigned)v.rpm, (unsigned)v.fuel);
 #undef IO_CMD_BIT
 }

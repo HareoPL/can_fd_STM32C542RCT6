@@ -38,12 +38,12 @@ typedef enum
 typedef enum
 {
     IO_IN_ACC        = 0,  /**< ACC stacyjka (SW0) */
-    IO_IN_DOOR_DRV   = 1,  /**< Drzwi kierowcy (SW1) */
-    IO_IN_DOOR_OTHER = 2,  /**< Drzwi inne (SW2) */
+    IO_IN_DOOR_OTHER = 1,  /**< Drzwi inne (SW1) */
+    IO_IN_DOOR_DRV   = 2,  /**< Drzwi kierowcy (SW2) */
     IO_IN_LIGHTS     = 3,  /**< Światła (SW3) */
     IO_IN_LOCKS      = 4,  /**< Zamki zamknięte / relay feedback (SW4), read only */
-    IO_IN_HOOD       = 5,  /**< Maska (SW5) */
-    IO_IN_HAZARD     = 6,  /**< Awaryjne (SW6) */
+    IO_IN_HAZARD     = 5,  /**< Awaryjne (SW5) */
+    IO_IN_HOOD       = 6,  /**< Maska (SW6) */
     IO_IN_HANDBRAKE  = 7,  /**< Hamulec ręczny (SW7) */
     IO_IN_ENGINE     = 8   /**< Obroty silnika (SW8), set with io_sim_setRpm() */
 } io_input_t;

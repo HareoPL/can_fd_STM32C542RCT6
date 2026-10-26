@@ -111,11 +111,11 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | **PB8** | Alt (AF9) | High-Speed AF | **CN10 pin 35** | `D15` | **FDCAN1_RX** | CAN bus receive line. Connected to MCP2562FD transceiver RXD. |
 | **PB9** | Alt (AF9) | High-Speed AF | **CN10 pin 33** | `D14` | **FDCAN1_TX** | CAN bus transmit line. Connected to MCP2562FD transceiver TXD. |
 | **PB12** | Input | Input, Pull-Down | **CN10 pin 16** | - | **SW4 (Locks / Relay Feedback)** | Discrete input (Bit 4). Auxiliary contact feedback indicating actual physical relay state. |
-| **PB13** | Input | Input, Pull-Down | **CN10 pin 30** | - | **SW5 (Engine Hood)** | Discrete input (Bit 5). Hood limit switch / sensor. |
-| **PB14** | Input | Input, Pull-Down | **CN10 pin 28** | `D1` | **SW6 (Hazard Lights)** | Discrete input (Bit 6). Hazard switch status. |
+| **PB13** | Input | Input, Pull-Down | **CN10 pin 30** | - | **SW5 (Hazard Lights)** | Discrete input (Bit 5). Hazard switch status. |
+| **PB14** | Input | Input, Pull-Down | **CN10 pin 28** | `D1` | **SW6 (Engine Hood)** | Discrete input (Bit 6). Hood limit switch / sensor. |
 | **PB15** | Input | Input, Pull-Down | **CN10 pin 26** | `D0` | **SW7 (Handbrake)** | Discrete input (Bit 7). Parking brake engagement switch. |
-| **PC7** | Input | Input, Pull-Down | **CN10 pin 19** | `D8` | **SW2 (Other Doors)** | Discrete input (Bit 2). Passenger / rear doors switch. *(Reallocated to free CAN2)* |
-| **PC8** | Input | Input, Pull-Down | **CN10 pin 31** | `D2` | **SW1 (Driver Door)** | Discrete input (Bit 1). Driver door latch switch. *(Reallocated to free CAN2)* |
+| **PC7** | Input | Input, Pull-Down | **CN10 pin 19** | `D8` | **SW2 (Driver Door)** | Discrete input (Bit 2). Driver door latch switch. *(Reallocated to free CAN2)* |
+| **PC8** | Input | Input, Pull-Down | **CN10 pin 31** | `D2` | **SW1 (Other Doors)** | Discrete input (Bit 1). Passenger / rear doors switch. *(Reallocated to free CAN2)* |
 | **PE2** | Output | Push-Pull | **CN7 pin 21** | - | **FDCAN1_STBY** | Onboard CAN transceiver standby control. Driven LOW to enable transceiver. |
 | **PA5** | Output | Push-Pull | **CN10 pin 11** | `D13` | **Heartbeat LED (LD1)** | Onboard green LED toggling at 1 Hz from `heartbeat_task`. |
 | **PA2** | Alt (AF7) | High-Speed AF | **CN7 pin 9** | `D1 (TX)` | **USART2_TX (VCP Log)** | UART output to ST-LINK Virtual COM Port at 115200 baud. |
@@ -140,8 +140,8 @@ The NUCLEO-C542RC board exposes two 38-pin double-row ST-Morpho headers: **CN7**
 
            [Odd: Inner]                                            [Even: Outer]
            ------------                                            -------------
-                   [ 1] : SDIO_DAT1 / LINA_RX            [ 2] : PC8      : DRZWI KIER
-             PB6   [ 3] : FDCAN2_TX                      [ 4] : PC7      : DRZWI INNE
+                   [ 1] : SDIO_DAT1 / LINA_RX            [ 2] : PC8      : DRZWI INNE
+             PB6   [ 3] : FDCAN2_TX                      [ 4] : PC7      : DRZWI KIER
              PB7   [ 5] : swiatla                        [ 6] : PB5      : FDCAN2_RX
             AREF   [ 7] :                                [ 8] : 5V_STLK
              GND   [ 9] :                                [10] : NC
@@ -153,8 +153,8 @@ The NUCLEO-C542RC board exposes two 38-pin double-row ST-Morpho headers: **CN7**
              PA9   [21] : [wolny]                        [22] : PB2     : engine RPM
              PA8   [23] : Przekaznik                     [24] : NC
             PB10   [25] :                                [26] : PB15    : Hamulec reczny
-             PB4   [27] : stacyjka                       [28] : PB14    : Awaryjne
-             PC1   [29] :                                [30] : PB13    : Maska
+             PB4   [27] : stacyjka                       [28] : PB14    : Maska
+             PC1   [29] :                                [30] : PB13    : Awaryjne
              PB3   [31] :                                [32] : AGND
             PA10   [33] : [wolny]                        [34] : PC4
              PB9   [35] : FDCAN1_TX                      [36] : CN10_36_GPIO
@@ -251,12 +251,12 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
 * **Payload Format:**
   * `Byte [0]`: Discrete Inputs Low Byte (`SW0..SW7`):
     * Bit 0: ACC Stacyjka
-    * Bit 1: Drzwi Kierowcy (PC8)
-    * Bit 2: Drzwi Inne (PC7)
+    * Bit 1: Drzwi Inne (PC8)
+    * Bit 2: Drzwi Kierowcy (PC7)
     * Bit 3: Światła (PB7)
     * Bit 4: Zamki / Relay Feedback (PB12)
-    * Bit 5: Maska (PB13)
-    * Bit 6: Awaryjne (PB14)
+    * Bit 5: Awaryjne (PB13)
+    * Bit 6: Maska (PB14)
     * Bit 7: Hamulec Ręczny (PB15)
   * `Byte [1]`: ADC Mapped Percentage (0..100%) – fuel level.
   * `Byte [2]`: Engine RPM / 3 (`0..250` = `0..750` RPM, the receiver multiplies by 3). Physical SW8: `0xFA` (750 RPM) or `0`.

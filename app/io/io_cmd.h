@@ -3,7 +3,7 @@
  * @brief UART commands for input simulation (docs/io/io_uart_simulation.md).
  *
  *   ZRODLO#<UART|IO>, ZRODLO?, IO_HELP
- *   STACYJKA, DRZWI_KIER, DRZWI_INNE, SWIATLA, MASKA, AWARYJNE, HAMULEC  #<0|1>
+ *   STACYJKA, DRZWI_INNE, DRZWI_KIER, SWIATLA, AWARYJNE, MASKA, HAMULEC  #<0|1>
  *   OBROTY#<0..750> (multiple of 3), PALIWO#<0..100>
  * Every command gets one response: "[IO] OK ..." or "[IO] ERR: <reason>".
  *

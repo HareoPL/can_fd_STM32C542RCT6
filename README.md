@@ -276,11 +276,11 @@ The front panel controls and indicators simulate essential vehicle sensors, digi
 | **7** | **Centralny zamek – zamknięty** | Red LED | `PB12` (SW4 / Lock Status) | Illuminated red LED indicates that the vehicle central lock is in LOCKED state. |
 | **8** | **Symulacja braku odpowiedzi** | Toggle Switch (0/1) | Fault Simulation | Simulates no vehicle response: Lock/Unlock command is issued but not acknowledged by vehicle receiver. |
 | **9** | **Blokada analogowa** | Blue LED | `PA8` (Relay State) | Illuminated blue LED indicates that the analog immobilizer / cut-off lock is ACTIVE. |
-| **10**| **Maska** | Switch + Yellow LED | `PB13` (SW5 / Hood) | Engine hood status switch. Illuminated yellow LED simulates an open engine hood. |
-| **11**| **Drzwi kierowcy** | Switch + Yellow LED | `PC8` (SW1 / Driver Door) | Driver door switch. Illuminated yellow LED simulates open driver door. |
+| **10**| **Maska** | Switch + Yellow LED | `PB14` (SW6 / Hood) | Engine hood status switch. Illuminated yellow LED simulates an open engine hood. |
+| **11**| **Drzwi kierowcy** | Switch + Yellow LED | `PC7` (SW2 / Driver Door) | Driver door switch. Illuminated yellow LED simulates open driver door. |
 | **12**| **Światła mijania** | Switch + Blue LED | `PB7` (SW3 / Headlights) | Headlamps switch. Illuminated blue LED indicates low-beam headlights ON. |
-| **13**| **Pozostałe drzwi** | Switch + Yellow LED | `PC7` (SW2 / Other Doors) | Passenger & rear doors switch. Illuminated yellow LED simulates open passenger doors. |
-| **14**| **Światła awaryjne** | Switch + Blue LED | `PB14` (SW6 / Hazards) | Hazard warning lights switch. Illuminated blue LED indicates hazard flasher active. |
+| **13**| **Pozostałe drzwi** | Switch + Yellow LED | `PC8` (SW1 / Other Doors) | Passenger & rear doors switch. Illuminated yellow LED simulates open passenger doors. |
+| **14**| **Światła awaryjne** | Switch + Blue LED | `PB13` (SW5 / Hazards) | Hazard warning lights switch. Illuminated blue LED indicates hazard flasher active. |
 | **15**| **Hamulec ręczny** | Switch + Blue LED | `PB15` (SW7 / Handbrake) | Parking brake switch. Illuminated blue LED indicates handbrake engaged. |
 
 ---

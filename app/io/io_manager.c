@@ -2,12 +2,12 @@
  * @file io_manager.c
  * @brief I/O Manager module implementing button debouncing, ADC mapping, and UART status logging.
  *         ACC stacyjka    - SW0 -> bit 0 -> PB4  (CN10 pin 27)
- *         Drzwi KIER      - SW1 -> bit 1 -> PC8  (CN10 pin 31)
- *         Drzwi INNE      - SW2 -> bit 2 -> PC7  (CN10 pin 19)
+ *         Drzwi INNE      - SW1 -> bit 1 -> PC8  (CN10 pin 31)
+ *         Drzwi KIER      - SW2 -> bit 2 -> PC7  (CN10 pin 19)
  *         Światła         - SW3 -> bit 3 -> PB7  (CN10 pin 5)
  *         Zamki ZAMKNIĘTE - SW4 -> bit 4 -> PB12 (CN10 pin 16)
- *         Maska           - SW5 -> bit 5 -> PB13 (CN10 pin 30)
- *         Awaryjne        - SW6 -> bit 6 -> PB14 (CN10 pin 28)
+ *         Awaryjne        - SW5 -> bit 5 -> PB13 (CN10 pin 30)
+ *         Maska           - SW6 -> bit 6 -> PB14 (CN10 pin 28)
  *         Hamulec RĘCZNY  - SW7 -> bit 7 -> PB15 (CN10 pin 26)
  *         Obroty silnika  - SW8 -> bit 8 -> PB2  (CN10 pin 22)
  *

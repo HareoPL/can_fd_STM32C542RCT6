@@ -3,6 +3,9 @@
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-26]
+### Poprawione
+- **Nazewnictwo wejść:** SW1 (PC8) = Drzwi INNE, SW2 (PC7) = Drzwi KIER, SW5 (PB13) = Awaryjne, SW6 (PB14) = Maska, SW8 (PB2) = Obroty silnika – w kodzie, komendach UART (`DRZWI_INNE`/`DRZWI_KIER`, `AWARYJNE`/`MASKA` sterują teraz właściwymi bitami ramki `0x01F2F3F4`) i dokumentacji. Piny i bity bez zmian.
+
 ### Dodane
 - **Symulacja wejść przez UART (`app/io/io_sim.c`, `app/io/io_cmd.c`):** wszystkie wejścia ramki telemetrii `0x01F2F3F4` ustawiane komendami przez UART mostu (`STACYJKA`, `DRZWI_KIER`, `DRZWI_INNE`, `SWIATLA`, `MASKA`, `AWARYJNE`, `HAMULEC` `#<0|1>`, `OBROTY#<0..750>`, `PALIWO#<0..100>`), odpowiedź `[IO] OK` albo `[IO] ERR: <powód>`. Globalny przełącznik źródła `ZRODLO#<UART|IO>` (po resecie zawsze IO, przy przejściu na UART snapshot stanu fizycznego), `ZRODLO?`, `IO_HELP`. SW4 (zamki, sprzężenie przekaźnika) zawsze z wejścia fizycznego. Instrukcja: `docs/io/io_uart_simulation.md`, test hostowy: `tools/test_io_cmd_host.py`.
 
@@ -395,7 +398,7 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ### Zmienione
 - **Reallokacja wejść cyfrowych i rozszerzenie do 9 pinów (`app/port/bsp_io.h`, `app/port/stm32c5/bsp_io.c`):**
-  - Przeniesienie wejść krańcówek ze względu na konflikt z FDCAN2: Drzwi KIER na pin **PC8** (CN10 pin 31), Drzwi INNE na pin **PC7** (CN10 pin 19), a dodatkowego 9. wejścia na pin **PB2** (CN10 pin 22).
+  - Przeniesienie wejść krańcówek ze względu na konflikt z FDCAN2: Drzwi INNE na pin **PC8** (CN10 pin 31), Drzwi KIER na pin **PC7** (CN10 pin 19), a dodatkowego 9. wejścia na pin **PB2** (CN10 pin 22).
   - Piny **PB5** (`FDCAN2_RX` / CN10 pin 6) oraz **PB6** (`FDCAN2_TX` / CN10 pin 3) zostały całkowicie zwolnione w konfiguracji GPIO i zabezpieczone na potrzeby przyszłej magistrali FDCAN2.
   - Zmiana typu zwracanego przez `bsp_io_buttons_read()` z `uint8_t` na `uint16_t` oraz implementacja odczytu rejestrów `GPIOB->IDR` i `GPIOC->IDR` z mapowaniem 9 bitów (SW0..SW8).
 - **Rozszerzenie debouncingu i telemetrii I/O do 16 bitów (`app/io/io_manager.c`, `app/io/io_manager.h`):**

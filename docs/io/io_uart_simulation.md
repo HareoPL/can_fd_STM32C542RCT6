@@ -54,11 +54,11 @@ Format: `NAZWA#wartość`. Wielkość liter nie ma znaczenia, a spacje wokół `
 | `ZRODLO?` | stan wszystkich wejść (wartości wysyłane na CAN) | – | – |
 | `IO_HELP` | pomoc | – | – |
 | `STACYJKA#<0\|1>` | ACC stacyjka (SW0, PB4) | 1 = ACC wł. | `data[0]` bit 0 |
-| `DRZWI_KIER#<0\|1>` | Drzwi kierowcy (SW1, PC8) | 1 = otwarte | `data[0]` bit 1 |
-| `DRZWI_INNE#<0\|1>` | Drzwi inne (SW2, PC7) | 1 = otwarte | `data[0]` bit 2 |
+| `DRZWI_INNE#<0\|1>` | Drzwi inne (SW1, PC8) | 1 = otwarte | `data[0]` bit 1 |
+| `DRZWI_KIER#<0\|1>` | Drzwi kierowcy (SW2, PC7) | 1 = otwarte | `data[0]` bit 2 |
 | `SWIATLA#<0\|1>` | Światła (SW3, PB7) | 1 = włączone | `data[0]` bit 3 |
-| `MASKA#<0\|1>` | Maska (SW5, PB13) | 1 = otwarta | `data[0]` bit 5 |
-| `AWARYJNE#<0\|1>` | Awaryjne (SW6, PB14) | 1 = włączone | `data[0]` bit 6 |
+| `AWARYJNE#<0\|1>` | Awaryjne (SW5, PB13) | 1 = włączone | `data[0]` bit 5 |
+| `MASKA#<0\|1>` | Maska (SW6, PB14) | 1 = otwarta | `data[0]` bit 6 |
 | `HAMULEC#<0\|1>` | Hamulec ręczny (SW7, PB15) | 1 = zaciągnięty | `data[0]` bit 7 |
 | `OBROTY#<0..750>` | Obroty silnika (SW8, PB2) | RPM, **wielokrotność 3** | `data[2]` = RPM / 3 |
 | `PALIWO#<0..100>` | Poziom paliwa (potencjometr, PA0) | % | `data[1]` |

@@ -29,8 +29,8 @@ SRC_IO = "[IO] ERR: źródło IO, najpierw ZRODLO#UART"
 SCENARIO = [
     # --- Źródło IO (stan po resecie): ramka = wejścia fizyczne ---
     ("PHYS 1A9 42", "PHYS", "A9 2A FA"),
-    ("ZRODLO?", "[IO] ZRODLO=IO STACYJKA=1 DRZWI_KIER=0 DRZWI_INNE=0 SWIATLA=1 ZAMKI=0(fiz) MASKA=1 "
-                "AWARYJNE=0 HAMULEC=1 OBROTY=750 PALIWO=42", "A9 2A FA"),
+    ("ZRODLO?", "[IO] ZRODLO=IO STACYJKA=1 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=1 ZAMKI=0(fiz) AWARYJNE=1 "
+                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=42", "A9 2A FA"),
     ("DRZWI_KIER#1", SRC_IO, "A9 2A FA"),
     ("OBROTY#300", SRC_IO, "A9 2A FA"),
     ("PALIWO#10", SRC_IO, "A9 2A FA"),
@@ -42,7 +42,7 @@ SCENARIO = [
     ("zrodlo#uart", "[IO] OK ZRODLO=UART", "A9 2A FA"),
     ("PHYS 000 0", "PHYS", "A9 2A FA"),
     ("PHYS 010 0", "PHYS", "B9 2A FA"),                       # SW4 (zamki) zawsze fizyczne
-    ("DRZWI_KIER#1", "[IO] OK DRZWI_KIER=1", "BB 2A FA"),
+    ("DRZWI_KIER#1", "[IO] OK DRZWI_KIER=1", "BD 2A FA"),
     ("drzwi_kier # 0", "[IO] OK DRZWI_KIER=0", "B9 2A FA"),
     ("ZAMKI#0", "[IO] ERR: ZAMKI = sprzężenie przekaźnika, tylko odczyt", "B9 2A FA"),
     ("ZAMKI#1", "[IO] ERR: ZAMKI = sprzężenie przekaźnika, tylko odczyt", "B9 2A FA"),
@@ -70,8 +70,8 @@ SCENARIO = [
     ("PALIWO#abc", "[IO] ERR: składnia: PALIWO#<0..100>", "B9 2A FA"),
     ("PALIWO#100", "[IO] OK PALIWO=100%", "B9 64 FA"),
     ("PALIWO#0", "[IO] OK PALIWO=0%", "B9 00 FA"),
-    ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=1 DRZWI_KIER=0 DRZWI_INNE=0 SWIATLA=1 ZAMKI=1(fiz) MASKA=1 "
-                "AWARYJNE=0 HAMULEC=1 OBROTY=750 PALIWO=0", "B9 00 FA"),
+    ("ZRODLO?", "[IO] ZRODLO=UART STACYJKA=1 DRZWI_INNE=0 DRZWI_KIER=0 SWIATLA=1 ZAMKI=1(fiz) AWARYJNE=1 "
+                "MASKA=0 HAMULEC=1 OBROTY=750 PALIWO=0", "B9 00 FA"),
 
     # --- Ponowne ZRODLO#UART nie robi nowego snapshotu, powrót do IO = wejścia fizyczne ---
     ("ZRODLO#UART", "[IO] OK ZRODLO=UART", "B9 00 FA"),
@@ -82,11 +82,11 @@ SCENARIO = [
 
     # --- Wszystkie przełączniki -> właściwe bity data[0] ---
     ("STACYJKA#1", "[IO] OK STACYJKA=1", "11 00 00"),
-    ("DRZWI_INNE#1", "[IO] OK DRZWI_INNE=1", "15 00 00"),
-    ("SWIATLA#01", "[IO] OK SWIATLA=1", "1D 00 00"),
-    ("MASKA#1", "[IO] OK MASKA=1", "3D 00 00"),
-    ("AWARYJNE#1", "[IO] OK AWARYJNE=1", "7D 00 00"),
-    ("HAMULEC#1", "[IO] OK HAMULEC=1", "FD 00 00"),
+    ("DRZWI_INNE#1", "[IO] OK DRZWI_INNE=1", "13 00 00"),
+    ("SWIATLA#01", "[IO] OK SWIATLA=1", "1B 00 00"),
+    ("MASKA#1", "[IO] OK MASKA=1", "5B 00 00"),
+    ("AWARYJNE#1", "[IO] OK AWARYJNE=1", "7B 00 00"),
+    ("HAMULEC#1", "[IO] OK HAMULEC=1", "FB 00 00"),
     ("Drzwi_Kier#1", "[IO] OK DRZWI_KIER=1", "FF 00 00"),
     ("PHYS 000 0", "PHYS", "EF 00 00"),
     ("STACYJKA#0", "[IO] OK STACYJKA=0", "EE 00 00"),
