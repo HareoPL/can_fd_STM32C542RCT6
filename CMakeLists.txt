@@ -103,6 +103,7 @@ if(CAN_UART_BRIDGE)
     app/port/stm32c5/stm32c5_uart_adapter.c
     app/can_bus/can_uart_bridge/can_frame_text.c
     app/can_bus/can_uart_bridge/can_uart_bridge.c
+    app/io/io_cmd.c
   )
   target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
     app/can_bus/can_uart_bridge
