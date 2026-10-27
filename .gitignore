@@ -9,3 +9,6 @@ __pycache__/
 *.tar.gz
 
 
+
+# Device (LX) CAN parser sources used as reference for car simulators, not part of the repository
+app/temp_lx_parsers/
