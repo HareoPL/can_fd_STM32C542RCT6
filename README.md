@@ -15,6 +15,7 @@ Automotive controller firmware developed for the **STM32C542RCT6** microcontroll
 - **UART → CAN Bridge:** Send any Classic / CAN FD / RTR / TLV frame on CAN1 or CAN2 with one line of text over the ST-LINK VCP (USART2), using the same syntax as Serial Commander buttons (e.g. `321##1#01 02 03`), and reconfigure the bus mode and bit rates at runtime (`CFG#1#FD_BRS#500k#2M`). See [UART → CAN Bridge](#uart--can-bridge).
 - **Fault-Tolerant Bistable Relay Engine:** Edge-controlled latching relay with pre-charge pulse generation, closed-loop feedback verification (PB12), retry mechanism, power-cut recovery, and boot synchronization without audible clicking.
 - **Non-Blocking Asynchronous Workers:** Decoupled relay (`relay_worker_task`) and OTA (`ota_worker_task`) execution via dedicated FreeRTOS queues to guarantee sub-microsecond CAN RX callbacks and prevent hardware FIFO overflow.
+- **RS485 Link to the Telematics Device (USART1):** Periodic superStatus of the external device (LX, LX_micro, Roma, Viale) over RS485 at 57600 baud, decoding of the device parser number (`NNN.CAN` loaded in the device) and change detection, passive listening while the PC service tool is connected, pause during a device parser upload, console commands `RS485?` / `RS485#POLL`. See [docs/rs485/rs485_link.md](docs/rs485/rs485_link.md).
 - **Parallel 16-bit Input Debouncer:** 10 ms periodic sampling, 40 ms debouncing window for 9 discrete inputs (SW0..SW8) on GPIOB and GPIOC.
 - **12-bit Analog Voltage Sensing:** ADC1 sampling on PA0 linearly mapped to 0..100% vehicle voltage representation.
 - **Thread-Safe Logging:** Exclusive UART2 console logging at 115200 baud via `safe_printf` (shared across FreeRTOS Application and bare-metal Bootloader).
@@ -315,6 +316,9 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
 
 * 📖 **[docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)**  
   **UART → CAN Bridge:** Sending Classic / CAN FD / RTR / TLV frames on CAN1 or CAN2 over the ST-LINK VCP in Serial Commander syntax, runtime bus configuration (`CFG`), responses and errors, limitations, and the `uart_port.h` contract.
+
+* 📖 **[docs/rs485/rs485_link.md](docs/rs485/rs485_link.md)** · **[docs/rs485/rs485_protocol.md](docs/rs485/rs485_protocol.md)**  
+  **RS485 Link & Device Protocol:** superStatus polling, device parser change detection, bus access rules with the PC service tool, console commands, hardware test procedure (`tools/rs485_sniffer.py`), and the reverse-engineered frame / superStatus / parser upload specification.
 
 * 📖 **[docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)**  
   **UART Input Simulation:** Input source switch (physical IO / UART), commands for every input of the telemetry frame, engine RPM scaling (RPM / 3), responses, and the SW4 relay feedback restriction.

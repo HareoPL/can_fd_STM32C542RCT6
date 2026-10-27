@@ -17,6 +17,7 @@
 7. [FreeRTOS Concurrency & Real-Time Task Model](#7-freertos-concurrency--real-time-task-model)
 8. [Firmware & Hardware Versioning Subsystem](#8-firmware--hardware-versioning-subsystem)
 9. [CAN Bootloader & OTA Dual-Target Subsystem](#9-can-bootloader--ota-dual-target-subsystem)
+10. [RS485 Link to the External Telematics Device](#10-rs485-link-to-the-external-telematics-device)
 
 ---
 
@@ -89,6 +90,7 @@ can_manager_init(&can1_inst, stm32c5_can1_interfaceGet(), "CAN1");
 | **FDCAN** | `FDCAN2` | PLL1Q (144 MHz) | Secondary communication bus dedicated for Bootloader, ISO 15765-2 (ISO-TP), and OTA firmware updates. Configured for **Classic CAN 2.0B** at **500 kbps** (Prescaler 1, Seg1 251, Seg2 36, SJW 36). |
 | **ADC** | `ADC1` | HCLK / Synchronous (48 MHz) | Single-channel 12-bit analog input on pin **PA0**. Raw resolution: 0..4095. Linearly mapped in software to 0..100% vehicle fuel level representation. |
 | **USART** | `USART2` | PCLK1 (144 MHz) | Serial debug / logging console at **115200 baud, 8N1**. Connected to ST-LINK Virtual COM Port (`VCP_TX` on PA2, `VCP_RX` on PA3). Protected by FreeRTOS mutex `printf_mutex`. |
+| **USART** | `USART1` | PCLK2 (144 MHz) | RS485 link to the external telematics device (LX, LX_micro, Roma, Viale) at **57600 baud, 8N1** (PA6 TX / PA7 RX, transceiver with automatic DE/RE). Interrupt driven reception, blocking transmission from `rs485_link_task` only. See [Section 10](#10-rs485-link-to-the-external-telematics-device). |
 | **GPIO** | `GPIOA`, `GPIOB`, `GPIOC`, `GPIOE` | AHB4 (144 MHz) | 9 discrete inputs with internal pull-downs, 1 push-pull relay output, 1 heartbeat LED, 1 CAN transceiver standby output. |
 | **Cortex-M NVIC** | System | Core (144 MHz) | Preemption priority grouping configured with 4 bits for preemption priority (0..15). Syscall boundary: **priority 5**. Peripheral ISRs interacting with FreeRTOS (`FromISR`) have priority $\ge 5$. |
 | **SysTick** | System | Core (144 MHz) | FreeRTOS timebase (1000 Hz / 1 ms tick rate). |
@@ -193,7 +195,7 @@ The NUCLEO-C542RC board exposes two 38-pin double-row ST-Morpho headers: **CN7**
 ```
 
 * **Legend:** `in, PD` = digital input with internal pull-down (active HIGH, +3.3 V); `out, PP` = push-pull output; `[free]` = not used by the application or by Nucleo on-board peripherals.
-* **USART1 (PA6 / PA7):** 57600 baud, 8N1, AF7 — reserved for the binary RS485 protocol and its parser. PA6 drives the RS485 transceiver DI input, PA7 reads its RO output. The transceiver switches DE/RE automatically, so no direction pin is needed.
+* **USART1 (PA6 / PA7):** 57600 baud, 8N1, AF7 — binary RS485 protocol of the external telematics device (`app/rs485/`, [Section 10](#10-rs485-link-to-the-external-telematics-device)). PA6 drives the RS485 transceiver DI input, PA7 reads its RO output. The transceiver switches DE/RE automatically, so no direction pin is needed.
 * **FDCAN1 (PB8 / PB9):** not routed to the ST-Morpho headers; both lines go directly to the on-board MCP2562FD transceiver (U7, SB36 / SB34). Its standby input is PE2 (CN7 pin 21).
 * **(1)** PB14 / PB15 also appear on CN10 pins 35 / 37 when SB48 / SB49 are ON. They are already used as SW6 / SW7 on CN10 pins 28 / 26, so pins 35 / 37 must not be connected.
 
@@ -343,6 +345,7 @@ The problem is resolved using an **asynchronous event-driven worker**:
 | **`relay_worker`**| `tskIDLE_PRIORITY + 2` (2) | 256 words (1024 B) | Event-Driven (Blocked on `s_relay_cmd_queue`) | Executes long-duration bistable relay edge actuation, timeout delays, and retries in background. |
 | **`main_task`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Periodic (1200 ms) | System supervisory task. |
 | **`heartbeat`** | `tskIDLE_PRIORITY + 1` (1) | 128 words (512 B) | Periodic (1000 ms) | Toggles onboard green LED (LD1 on PA5) to verify OS kernel liveness. |
+| **`rs485`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Event-Driven (task notification from the USART1 ISR) + timed superStatus polling (5 s) | Decodes RS485 frames of the external device, requests superStatus, detects device parser changes. Only with CMake option `RS485_LINK` (default `ON`). |
 
 ### 7.2. Inter-Task Communication & Synchronization Objects
 
@@ -362,6 +365,7 @@ The problem is resolved using an **asynchronous event-driven worker**:
 * **`s_relay_cmd_queue` (Queue):** Decouples CAN RX callbacks from relay hardware actuation (depth: 4 items, `uint8_t`).
 * **`s_relay_mutex` (Mutex):** Prevents concurrent access to relay actuation hardware across multiple threads.
 * **`printf_mutex` (Mutex):** Ensures atomic, thread-safe transmission of UART log strings in `safe_printf()`, preventing interleaved character output.
+* **RS485 RX ring buffer (`rs485_link.c`):** lock-free single producer (USART1 ISR) / single consumer (`rs485_link_task`) buffer of 1024 B; the ISR wakes the task with `vTaskNotifyGiveFromISR()`. The last superStatus is copied under a critical section for the console command (`RS485?`).
 
 ### 7.3. NVIC Interrupt Priority Governance
 To adhere strictly to ARM Cortex-M and FreeRTOS kernel rules:
@@ -372,6 +376,7 @@ To adhere strictly to ARM Cortex-M and FreeRTOS kernel rules:
   ```c
   HAL_CORTEX_NVIC_SetPriority(FDCAN1_IT0_IRQn, HAL_CORTEX_NVIC_PREEMP_PRIORITY_5, 0);
   ```
+* The UART adapters set the same limit: `USART2_IRQn` (`stm32c5_uart_adapter.c`) and `USART1_IRQn` (`stm32c5_uart1_adapter.c`) use `HAL_CORTEX_NVIC_PREEMP_PRIORITY_5`.
 
 ---
 
@@ -470,4 +475,20 @@ To prevent bricking the microcontroller in case of CAN bus disconnection or powe
 4. **Atomic Installation:** In a critical section (`taskENTER_CRITICAL()`), the Main Application erases `0x08000000`, copies the verified image from Staging, confirms byte-by-byte with `memcmp`, erases the Staging Slot, and sends positive `ACK`.
 5. **Reboot:** On `CMD_GO_EXECUTE`, `NVIC_SystemReset()` executes the newly installed Bootloader.
 
+---
+
+## 10. RS485 Link to the External Telematics Device
+
+V-BOX reads the **superStatus** of the external telematics device (LX, LX_micro, Roma, Viale) over RS485 (USART1) and reports when the **device parser** (CAN parser file `NNN.CAN` loaded in the device) changes. The device parser is not a V-BOX CAN parser profile (`can_parser_*`, `cp_*`): RS485 code uses the name `dev_parser_no`.
+
+| Module | File | Role |
+| :--- | :--- | :--- |
+| Frame codec | `app/rs485/rs485_frame.c/.h` | Frames `AA 55` + CRC16 + LEN + payload, CRC-16/MODBUS, stream decoder with resynchronization (pure C, host tested). |
+| superStatus | `app/rs485/superstatus.c/.h` | Request builder, 152 B response decoder (`superstatus_t`, `can1_dev_parser_no` / `can2_dev_parser_no`), wrong password detection (pure C, host tested). |
+| Link task | `app/rs485/rs485_link.c/.h` | `rs485_link_task`: superStatus every 5 s on a silent bus, passive listening while the PC service tool is connected, pause during a device parser upload, parser change callback, console commands `RS485?` / `RS485#POLL` / `RS485_HELP`. |
+| Configuration | `app/rs485/rs485_link_config.h` | Source address `0x90`, tool version `0x0F45`, password `"9999"`, timings (all overridable from CMake). |
+
+* **Initialization (`main.c`):** `rs485_link_set_parser_change_cb(on_dev_parser_change)` and `rs485_link_init(stm32c5_uart1_interfaceGet())`. The callback currently only logs `[RS485] ZMIANA parsera urządzenia CAN1: 260 -> 195`.
+* **Port contract:** `uart_interface_t::transmit` (optional, `NULL` for USART2) is implemented by the USART1 adapter with `HAL_UART_Transmit()`.
+* **Documentation:** protocol specification [docs/rs485/rs485_protocol.md](rs485/rs485_protocol.md), module and test procedure [docs/rs485/rs485_link.md](rs485/rs485_link.md). Host test: `python tools/test_rs485_host.py`.
 

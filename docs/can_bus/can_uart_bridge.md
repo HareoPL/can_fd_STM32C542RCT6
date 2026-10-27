@@ -84,6 +84,7 @@ Reguły (jak w `can_support.py`):
 | `MODE#fd_no_brs` / `MODE?` | Wymuszony standard ramki: `auto`, `classic`, `fd_brs`, `fd_no_brs`, `tlv` (jak *can_mode* w Serial Commanderze) |
 | `HELP` | Skrócona składnia |
 | `IO_HELP`, `ZRODLO#UART`, `OBROTY#750`, ... | Symulacja wejść ramki telemetrii `0x01F2F3F4` (tag `[IO]`): [io_uart_simulation.md](../io/io_uart_simulation.md) |
+| `RS485?`, `RS485#POLL`, `RS485_HELP` | Łącze RS485 z urządzeniem telematycznym: superStatus i parser urządzenia (tag `[RS485]`, opcja CMake `RS485_LINK`): [rs485_link.md](../rs485/rs485_link.md) |
 
 Prędkości: bit/s (`500000`), z sufiksem `k` (`500k`) albo `M` (`2M`), dozwolony ułamek (`83.3k`), o ile
 daje całkowitą liczbę bit/s. Tryb: `CLASSIC`, `FD`, `FD_BRS` (wielkość liter dowolna).

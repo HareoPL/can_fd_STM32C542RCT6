@@ -90,7 +90,7 @@ Wejścia skonfigurowane w trybie `INPUT` z wewnętrznymi rezystorami pull-down (
 | **ADC_IN** | **PA0** | A0 | **CN7 pin 28** | Poziom paliwa: pomiar napięcia potencjometru przez 12-bitowy przetwornik ADC1 (`bsp_adc`). |
 
 ### 4.4. Port szeregowy USART1
-USART1 w trybie asynchronicznym, 57600 baud, 8N1, bez kontroli przepływu (funkcja alternatywna AF7). Odbiór przerwaniowy przez adapter `stm32c5_uart1_adapter` (interfejs `uart_port.h`). Port obsługuje binarny protokół RS485; transceiver przełącza DE/RE automatycznie, więc nie jest potrzebny dodatkowy pin kierunku. Piny idą bezpośrednio na złącza, bez mostków lutowniczych:
+USART1 w trybie asynchronicznym, 57600 baud, 8N1, bez kontroli przepływu (funkcja alternatywna AF7). Odbiór przerwaniowy i nadawanie blokujące przez adapter `stm32c5_uart1_adapter` (interfejs `uart_port.h`), używany przez łącze RS485 z urządzeniem telematycznym (`app/rs485/`, [rs485_link.md](rs485/rs485_link.md)). Port obsługuje binarny protokół RS485; transceiver przełącza DE/RE automatycznie, więc nie jest potrzebny dodatkowy pin kierunku. Piny idą bezpośrednio na złącza, bez mostków lutowniczych:
 
 | Sygnał | Pin MCU | Złącze Arduino | Złącze ST-Morpho | Funkcja / Opis |
 | :--- | :---: | :---: | :---: | :--- |
