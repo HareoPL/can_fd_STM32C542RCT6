@@ -74,6 +74,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/car_sim/car_sim_codec.c
   app/car_sim/car_sim_registry.c
   app/car_sim/sims/sim_none.c
+  app/car_sim/sims/sim_renault_arkana.c
   app/car_sim/sims/sim_v_box.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c

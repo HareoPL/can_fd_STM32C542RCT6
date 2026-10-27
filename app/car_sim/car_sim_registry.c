@@ -9,6 +9,7 @@
 #include "car_sim_registry.h"
 #include "car_sim_codec.h"
 #include "sim_none.h"
+#include "sim_renault_arkana.h"
 #include "sim_v_box.h"
 #include <stdio.h>
 
@@ -17,8 +18,9 @@ typedef const car_sim_profile_t *(*car_sim_getter_fn)(void);
 
 /** @brief Registry of the car simulator profile getters. */
 static const car_sim_getter_fn s_sims[CAR_SIM_COUNT] = {
-    [CAR_SIM_ID_V_BOX] = sim_v_box_profile_get,
-    [CAR_SIM_ID_NONE]  = sim_none_profile_get,
+    [CAR_SIM_ID_V_BOX]  = sim_v_box_profile_get,
+    [CAR_SIM_ID_ARKANA] = sim_renault_arkana_profile_get,
+    [CAR_SIM_ID_NONE]   = sim_none_profile_get,
 };
 
 const car_sim_profile_t *car_sim_get(car_sim_id_t id)

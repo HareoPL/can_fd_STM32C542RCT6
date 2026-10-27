@@ -21,6 +21,7 @@
 typedef enum
 {
     CAR_SIM_ID_V_BOX = 0, /**< V_BOX: v-box telemetry frame, device parser 192, default after reset */
+    CAR_SIM_ID_ARKANA,    /**< ARKANA: Renault Arkana, device parser 196 */
     CAR_SIM_ID_NONE,      /**< BRAK: marker frame for a device parser number without a simulator */
 
     CAR_SIM_COUNT         /**< Number of simulators, also "not found" */

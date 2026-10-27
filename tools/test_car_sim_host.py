@@ -22,8 +22,8 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCES = ["tools/host/car_sim_cli.c", "app/car_sim/car_sim_codec.c", "app/car_sim/car_sim_registry.c",
-           "app/car_sim/car_sim_cmd.c", "app/car_sim/sims/sim_none.c", "app/car_sim/sims/sim_v_box.c",
-           "app/io/io_sim.c"]
+           "app/car_sim/car_sim_cmd.c", "app/car_sim/sims/sim_none.c", "app/car_sim/sims/sim_renault_arkana.c",
+           "app/car_sim/sims/sim_v_box.c", "app/io/io_sim.c"]
 INCLUDES = ["app/car_sim", "app/car_sim/sims", "app/io", "app/can_bus", "app/port"]
 CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1", "-DIO_SIM_HOST", "-DCAR_SIM_HOST"]
 
@@ -43,6 +43,7 @@ SCENARIO = [
     # --- Rejestr i mapa parserów urządzenia (D4: numer bez symulatora i 0 -> BRAK) ---
     ("CHECK", "OK"),
     ("MAP 192", "V_BOX"),                                       # D1: parser domyślny
+    ("MAP 196", "ARKANA"),
     ("MAP 0", "BRAK"),
     ("MAP 197", "BRAK"),
     ("MAP 65535", "BRAK"),
@@ -50,6 +51,7 @@ SCENARIO = [
     ("KEY Brak", "BRAK"),
     ("KEY NOPE", "NOT_FOUND"),
     ("KEY v_box", "V_BOX"),
+    ("KEY arkana", "ARKANA"),
 
     # --- BRAK: jedyna ramka 0x01F2F3FF ext, DLC 6, CA FE 00 BA BE 00 co 1000 ms ---
     ("SIM brak", 'SIM BRAK "brak symulatora" tx=1 rx=0 fob=0 rpm=750/3/750 vsig=0'),
@@ -242,6 +244,45 @@ SCENARIO = [
     ("CMD SIMX#1", "NOT_CMD"),
     ("CMD SIM_PIN?", "NOT_CMD"),
     ("CMD IO_HELP", "NOT_CMD"),
+
+    # --- Renault Arkana (parser urządzenia 196): profil, komendy LX z PIN-em, pilot (T8, D8) ---
+    ("SIM ARKANA", 'SIM ARKANA "Renault Arkana" tx=13 rx=2 fob=1 rpm=8000/1/800 vsig=1'),
+    ("CHECKP", "OK"),
+    ("RX 46F 32 12 34 18 04 84 07 30", "MATCH act=UNLOCK pin=1234"),   # cmd_open
+    ("RX 46F 32 12 34 10 04 84 07 30", "MATCH act=LOCK pin=1234"),     # cmd_close
+    ("RX 46F 32 F1 5C 18 04 84 07 30", "MATCH act=NONE pin=F15C MISMATCH"),
+    ("RX 46F 32 F1 5C 10 04 84 07 30", "MATCH act=NONE pin=F15C MISMATCH"),
+    ("PIN F15C", "PIN"),                                                # SIM_PIN#F15C
+    ("RX 46F 32 F1 5C 18 04 84 07 30", "MATCH act=UNLOCK pin=F15C"),
+    ("RX 46F 32 12 34 18 04 84 07 30", "MATCH act=NONE pin=1234 MISMATCH"),
+    ("PIN 1234", "PIN"),
+    ("RX 46F 11 11 11 00 00 00 00 00", "NO_MATCH"),                     # budzenie magistrali
+    ("RX 46F 32 12 34 18 04 84 07", "NO_MATCH"),                        # za krótka
+    ("RX 46F 33 12 34 18 04 84 07 30", "NO_MATCH"),
+    ("RX 46F 32 12 34 18 04 84 07 31", "NO_MATCH"),
+    ("RX 46F 32 12 34 11 04 84 07 30", "NO_MATCH"),
+    ("RX 0000046F 32 12 34 18 04 84 07 30", "NO_MATCH"),                # to samo ID jako extended
+    ("RX 01F2F3F0 00 00 01", "NO_MATCH"),                               # przekaźnik V_BOX nie dotyczy Arkany
+    ("RX 418 00 00 00 50 00 00 00 00", "NO_MATCH"),                     # klakson: etap 2
+    ("FOB OTWORZ 1234", "46F#3212341804840730"),
+    ("FOB ZAMKNIJ 1234", "46F#3212341004840730"),
+    ("FOB OTWORZ F15C", "46F#32F15C1804840730"),
+    ("SCHEDSTAT 1000", "frames=13 max_per_tick=2 counts=10,10,10,10,10,10,10,10,10,10,10,10,10"),
+    # Komendy UART z autem z pilotem
+    ("ENGINE dev=196", "ENGINE"),
+    ("CMD SIM#AUTO", "[SIM] OK tryb AUTO: parser urządzenia 196 -> SIM=ARKANA >> mode AUTO"),
+    ("CMD SIM?", '[SIM] SIM=ARKANA "Renault Arkana", tryb AUTO, parser urządzenia CAN1: 196'
+                 " | [SIM] CAN1 500k, ramek TX: 13, komend LX: 2, pilot: tak | [SIM] PIN: 1234 (domyślny)"
+                 " | [SIM] liczniki: TX nadane 1234, odrzucone 2; komendy LX odebrane 3, odrzucone przez PIN 1"),
+    ("CMD SIM_LIST", "~[SIM] |*ARKANA   | Renault Arkana       | 196       | 500k     | 13 | tak   |"),
+    ("CMD SIM_LIST", "~[SIM] | V_BOX    | telemetria v-box     | 192       | 500k     |  1 | nie   |"),
+    ("CMD PILOT#OTWORZ", "[SIM] OK PILOT#OTWORZ: ramka 0x46F z PIN-em 1234 i przekaźnik >> fob OTWORZ"),
+    ("CMD SIM_PIN#F15C", "[SIM] OK SIM_PIN=F15C >> pin F15C"),
+    ("CMD SIM?", "~[SIM] PIN: F15C (SIM_PIN#, nadpisany)"),
+    ("CMD PILOT#ZAMKNIJ", "[SIM] OK PILOT#ZAMKNIJ: ramka 0x46F z PIN-em F15C i przekaźnik >> fob ZAMKNIJ"),
+    ("CMD SIM_PIN#DOMYSLNY", "[SIM] OK SIM_PIN=DOMYSLNY (1234) >> pin reset"),
+    ("CMD SIM#v_box", "[SIM] OK SIM=V_BOX, tryb RECZNY >> select V_BOX"),
+    ("CMD SIM#196", "[SIM] OK SIM=ARKANA, tryb RECZNY >> select ARKANA"),
 ]
 
 
