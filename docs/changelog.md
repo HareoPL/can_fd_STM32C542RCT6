@@ -2,6 +2,13 @@
 
 Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
+## [2026-10-27]
+### Dodane
+- **Sygnały auta w symulacji wejść (`io_sim.c`, `io_cmd.c`):** komendy `PREDKOSC#<0..250>`, `PRZEBIEG#<0..999999>` (km, domyślnie 10000), `DROGOWE#<0|1>`, `HAMULEC_NOZNY#<0|1>`, `TEMP_SILNIKA#<-40..150>` (domyślnie 90) – tylko przy `ZRODLO=UART`; przy `ZRODLO=IO`, po przejęciu przez UART i po `IO_RESET` wartości domyślne. `io_sim_advanceOdometer()` dla przebiegu rosnącego z prędkością.
+
+### Zmienione
+- **Limity obrotów z aktywnego symulatora auta (`io_sim_setRpmLimits()`):** zakres i krok `OBROTY#` oraz obroty SW8 (bieg jałowy) ustawiane z profilu; domyślnie wartości `V_BOX` (0..750, krok 3, SW8 = 750), więc komunikaty i ramka `0x01F2F3F4` bez zmian. Przy zmianie limitów obroty z UART są przycinane do maksimum i zaokrąglane w dół do kroku. `ZRODLO?`, `IO_HELP`, `IO_RESET` i odpowiedź `OBROTY#` pokazują sygnały auta tylko dla symulatora, który je nadaje (`io_sim_setVehicleSignalsUsed()`); dla `V_BOX` i `BRAK` teksty bez zmian.
+
 ## [2026-10-26]
 ### Poprawione
 - **Nazewnictwo wejść:** SW1 (PC8) = Drzwi INNE, SW2 (PC7) = Drzwi KIER, SW5 (PB13) = Awaryjne, SW6 (PB14) = Maska, SW8 (PB2) = Obroty silnika – w kodzie, komendach UART (`DRZWI_INNE`/`DRZWI_KIER`, `AWARYJNE`/`MASKA` sterują teraz właściwymi bitami ramki `0x01F2F3F4`) i dokumentacji. Piny i bity bez zmian.

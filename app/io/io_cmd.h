@@ -4,8 +4,10 @@
  *
  *   ZRODLO#<UART|IO>, ZRODLO?, IO_HELP, IO_RESET
  *   STACYJKA, DRZWI_INNE, DRZWI_KIER, SWIATLA, AWARYJNE, MASKA, HAMULEC  #<0|1>
- *   OBROTY#<0..750> (multiple of 3), PALIWO#<0..100>, AWARIA_ZAMKA#<0|1>
- * Every command gets one response: "[IO] OK ..." or "[IO] ERR: <reason>".
+ *   OBROTY#<0..max> (range and step of the active car simulator, V_BOX: 0..750, multiple of 3),
+ *   PALIWO#<0..100>, AWARIA_ZAMKA#<0|1>
+ *   PREDKOSC#<0..250>, PRZEBIEG#<km>, DROGOWE#<0|1>, HAMULEC_NOZNY#<0|1>, TEMP_SILNIKA#<-40..150>
+ * Every setting command gets one response: "[IO] OK ..." or "[IO] ERR: <reason>".
  *
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-26

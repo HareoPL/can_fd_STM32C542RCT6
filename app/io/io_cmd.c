@@ -5,6 +5,10 @@
  * Command names contain characters outside hex digits, so they never collide with the
  * CAN frame syntax of the UART bridge (e.g. "ACC#01" stays a frame with ID 0xACC).
  *
+ * The RPM range and step come from the active car simulator (io_sim_getRpmLimits()). While the
+ * active simulator does not send the vehicle signals (V_BOX, BRAK), every response is identical
+ * to the V_BOX texts; otherwise ZRODLO?, IO_HELP and IO_RESET also list the vehicle signals.
+ *
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-26
  */
@@ -19,8 +23,8 @@
 
 #define IO_CMD_TAG      "[IO] "
 #define IO_CMD_OUT_MAX  256U
-#define IO_CMD_NUM_MAX  99999U
-#define IO_CMD_NAME_MAX 15U    /**< Longest command name ("AWARIA_ZAMKA") with margin */
+#define IO_CMD_NUM_MAX  9999999U
+#define IO_CMD_NAME_MAX 15U    /**< Longest command name ("HAMULEC_NOZNY") with margin */
 
 /** @brief Command kinds. */
 typedef enum
@@ -30,7 +34,12 @@ typedef enum
     IO_CMD_LOCKS,
     IO_CMD_RPM,
     IO_CMD_FUEL,
-    IO_CMD_LOCK_FAULT
+    IO_CMD_LOCK_FAULT,
+    IO_CMD_SPEED,
+    IO_CMD_ODOMETER,
+    IO_CMD_HIGH_BEAM,
+    IO_CMD_BRAKE_PEDAL,
+    IO_CMD_ENGINE_TEMP
 } io_cmd_kind_t;
 
 /** @brief Command table entry. */
@@ -54,6 +63,11 @@ static const io_cmd_entry_t s_cmds[] = {
     { "OBROTY",       IO_CMD_RPM,        IO_IN_ENGINE },
     { "PALIWO",       IO_CMD_FUEL,       IO_IN_ENGINE },
     { "AWARIA_ZAMKA", IO_CMD_LOCK_FAULT, IO_IN_LOCKS },
+    { "PREDKOSC",      IO_CMD_SPEED,       IO_IN_ENGINE },
+    { "PRZEBIEG",      IO_CMD_ODOMETER,    IO_IN_ENGINE },
+    { "DROGOWE",       IO_CMD_HIGH_BEAM,   IO_IN_LIGHTS },
+    { "HAMULEC_NOZNY", IO_CMD_BRAKE_PEDAL, IO_IN_ENGINE },
+    { "TEMP_SILNIKA",  IO_CMD_ENGINE_TEMP, IO_IN_ENGINE },
 };
 
 static io_cmd_out_fn s_out = NULL;
@@ -141,6 +155,20 @@ static bool parse_uint(const char *s, uint32_t *value)
     return true;
 }
 
+/** @brief Parses a decimal number with an optional leading '-' (see parse_uint()). */
+static bool parse_int(const char *s, int32_t *value)
+{
+    bool negative = (*s == '-');
+    uint32_t v = 0U;
+
+    if (!parse_uint(negative ? (s + 1) : s, &v))
+    {
+        return false;
+    }
+    *value = negative ? -(int32_t)v : (int32_t)v;
+    return true;
+}
+
 /* --- Commands --- */
 
 #define IO_HELP_SEP "+--------------------+-----------+------------------------------------------------+"
@@ -156,13 +184,29 @@ static void cmd_help(void)
     char rpm_range[16];
     char fuel_range[16];
     char rpm_note[48];
+    const io_sim_rpm_limits_t limits = io_sim_getRpmLimits();
+    const bool vehicle = io_sim_areVehicleSignalsUsed();
 
-    (void)snprintf(rpm_range, sizeof(rpm_range), "0..%u", (unsigned)IO_RPM_MAX);
+    (void)snprintf(rpm_range, sizeof(rpm_range), "0..%u", (unsigned)limits.max);
     (void)snprintf(fuel_range, sizeof(fuel_range), "0..%u", (unsigned)IO_FUEL_MAX);
-    (void)snprintf(rpm_note, sizeof(rpm_note), "obroty silnika [RPM], wielokrotnosc %u",
-                   (unsigned)IO_RPM_PER_BIT);
+    if (limits.step > 1U)
+    {
+        (void)snprintf(rpm_note, sizeof(rpm_note), "obroty silnika [RPM], wielokrotnosc %u",
+                       (unsigned)limits.step);
+    }
+    else
+    {
+        (void)snprintf(rpm_note, sizeof(rpm_note), "obroty silnika [RPM]");
+    }
 
-    reply("Symulacja wejsc ramki 0x01F2F3F4 (po resecie MCU zrodlo = IO, fizyczne wejscia)");
+    if (vehicle)
+    {
+        reply("Symulacja wejsc auta (po resecie MCU zrodlo = IO, fizyczne wejscia)");
+    }
+    else
+    {
+        reply("Symulacja wejsc ramki 0x01F2F3F4 (po resecie MCU zrodlo = IO, fizyczne wejscia)");
+    }
     reply(IO_HELP_SEP);
     help_row("Komenda", "Wartosci", "Opis");
     reply(IO_HELP_SEP);
@@ -173,7 +217,8 @@ static void cmd_help(void)
     help_row("STACYJKA#<v>", "0 / 1", "ACC stacyjka (SW0), 1 = wlaczona");
     help_row("DRZWI_INNE#<v>", "0 / 1", "drzwi inne (SW1), 1 = otwarte");
     help_row("DRZWI_KIER#<v>", "0 / 1", "drzwi kierowcy (SW2), 1 = otwarte");
-    help_row("SWIATLA#<v>", "0 / 1", "swiatla (SW3), 1 = wlaczone");
+    help_row("SWIATLA#<v>", "0 / 1", vehicle ? "swiatla wg symulatora (SW3), 1 = wlaczone"
+                                            : "swiatla (SW3), 1 = wlaczone");
     help_row("AWARYJNE#<v>", "0 / 1", "swiatla awaryjne (SW5), 1 = wlaczone");
     help_row("MASKA#<v>", "0 / 1", "maska (SW6), 1 = otwarta");
     help_row("HAMULEC#<v>", "0 / 1", "hamulec reczny (SW7), 1 = zaciagniety");
@@ -181,9 +226,39 @@ static void cmd_help(void)
     help_row("PALIWO#<v>", fuel_range, "poziom paliwa [%]");
     help_row("AWARIA_ZAMKA#<v>", "0 / 1", "1 = uszkodzony zamek, przekaznik nie reaguje");
     reply(IO_HELP_SEP);
+    if (vehicle)
+    {
+        char speed_range[16];
+        char odo_range[16];
+        char temp_range[16];
+        char odo_note[48];
+        char temp_note[48];
+
+        (void)snprintf(odo_note, sizeof(odo_note), "przebieg [km], domyslnie %lu",
+                       (unsigned long)IO_ODOMETER_DEFAULT_KM);
+        (void)snprintf(temp_note, sizeof(temp_note), "temperatura silnika [C], domyslnie %d",
+                       IO_ENGINE_TEMP_DEFAULT);
+        (void)snprintf(speed_range, sizeof(speed_range), "0..%u", (unsigned)IO_SPEED_MAX);
+        (void)snprintf(odo_range, sizeof(odo_range), "0..%lu", (unsigned long)IO_ODOMETER_MAX_KM);
+        (void)snprintf(temp_range, sizeof(temp_range), "%d..%d", IO_ENGINE_TEMP_MIN, IO_ENGINE_TEMP_MAX);
+        help_row("PREDKOSC#<v>", speed_range, "predkosc [km/h], przebieg rosnie z predkoscia");
+        help_row("PRZEBIEG#<v>", odo_range, odo_note);
+        help_row("DROGOWE#<v>", "0 / 1", "swiatla drogowe, 1 = wlaczone");
+        help_row("HAMULEC_NOZNY#<v>", "0 / 1", "pedal hamulca, 1 = wcisniety");
+        help_row("TEMP_SILNIKA#<v>", temp_range, temp_note);
+        reply(IO_HELP_SEP);
+    }
     reply("Komendy ustawiajace (bez ZRODLO) dzialaja tylko przy ZRODLO=UART.");
-    reply("OBROTY: w ramce data[2] = RPM/%u, odbiornik mnozy x%u.",
-          (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
+    if (vehicle)
+    {
+        reply("OBROTY: SW8 = %u RPM, przy STACYJKA=0 auto nadaje 0 RPM.", (unsigned)limits.engine_on);
+        reply("PREDKOSC..TEMP_SILNIKA: tylko UART, przy ZRODLO=IO wartosci domyslne.");
+    }
+    else
+    {
+        reply("OBROTY: w ramce data[2] = RPM/%u, odbiornik mnozy x%u.",
+              (unsigned)IO_RPM_PER_BIT, (unsigned)IO_RPM_PER_BIT);
+    }
     reply("ZAMKI (SW4) = sprzezenie przekaznika, tylko odczyt.");
 }
 
@@ -205,6 +280,12 @@ static void cmd_status(void)
           IO_CMD_BIT(IO_IN_HOOD), IO_CMD_BIT(IO_IN_HANDBRAKE),
           (unsigned)v.rpm, (unsigned)v.fuel, v.lock_fault ? 1U : 0U);
 #undef IO_CMD_BIT
+    if (io_sim_areVehicleSignalsUsed())
+    {
+        reply("PREDKOSC=%u PRZEBIEG=%lu DROGOWE=%u HAMULEC_NOZNY=%u TEMP_SILNIKA=%d",
+              (unsigned)v.speed_kmh, (unsigned long)(v.odometer_m / 1000U), v.high_beam ? 1U : 0U,
+              v.brake_pedal ? 1U : 0U, (int)v.engine_temp_c);
+    }
 }
 
 static void cmd_source(const char *arg)
@@ -232,6 +313,23 @@ static void cmd_source(const char *arg)
     reply("OK ZRODLO=%s", (src == IO_SRC_UART) ? "UART" : "IO");
 }
 
+/** @brief Returns the upper limit of a numeric command with the range 0..max. */
+static uint32_t range_max(io_cmd_kind_t kind)
+{
+    switch (kind)
+    {
+        case IO_CMD_RPM:
+            return io_sim_getRpmLimits().max;
+        case IO_CMD_SPEED:
+            return IO_SPEED_MAX;
+        case IO_CMD_ODOMETER:
+            return IO_ODOMETER_MAX_KM;
+        case IO_CMD_FUEL:
+        default:
+            return IO_FUEL_MAX;
+    }
+}
+
 /** @brief Prints the error for a setter result other than IO_SIM_OK. */
 static void reply_error(const io_cmd_entry_t *cmd, io_sim_result_t res, uint32_t value)
 {
@@ -244,22 +342,29 @@ static void reply_error(const io_cmd_entry_t *cmd, io_sim_result_t res, uint32_t
             reply("ERR: %s = sprzężenie przekaźnika, tylko odczyt", cmd->name);
             break;
         case IO_SIM_ERR_RANGE:
-            reply("ERR: %s poza zakresem 0..%u", cmd->name,
-                  (unsigned)((cmd->kind == IO_CMD_RPM) ? IO_RPM_MAX : IO_FUEL_MAX));
+            if (cmd->kind == IO_CMD_ENGINE_TEMP)
+            {
+                reply("ERR: %s poza zakresem %d..%d", cmd->name, IO_ENGINE_TEMP_MIN, IO_ENGINE_TEMP_MAX);
+            }
+            else
+            {
+                reply("ERR: %s poza zakresem 0..%lu", cmd->name, (unsigned long)range_max(cmd->kind));
+            }
             break;
         case IO_SIM_ERR_RPM_STEP:
         {
-            uint32_t lower = (value / IO_RPM_PER_BIT) * IO_RPM_PER_BIT;
-            uint32_t upper = lower + IO_RPM_PER_BIT;
-            if (upper > IO_RPM_MAX)
+            const io_sim_rpm_limits_t limits = io_sim_getRpmLimits();
+            uint32_t lower = (value / limits.step) * limits.step;
+            uint32_t upper = lower + limits.step;
+            if (upper > limits.max)
             {
                 reply("ERR: %s musi być wielokrotnością %u (np. %lu)", cmd->name,
-                      (unsigned)IO_RPM_PER_BIT, (unsigned long)lower);
+                      (unsigned)limits.step, (unsigned long)lower);
             }
             else
             {
                 reply("ERR: %s musi być wielokrotnością %u (np. %lu lub %lu)", cmd->name,
-                      (unsigned)IO_RPM_PER_BIT, (unsigned long)lower, (unsigned long)upper);
+                      (unsigned)limits.step, (unsigned long)lower, (unsigned long)upper);
             }
             break;
         }
@@ -298,6 +403,60 @@ static void cmd_set(const io_cmd_entry_t *cmd, const char *arg)
             }
             break;
 
+        case IO_CMD_HIGH_BEAM:
+        case IO_CMD_BRAKE_PEDAL:
+            if (!number)
+            {
+                reply("ERR: składnia: %s#<0|1>", cmd->name);
+                return;
+            }
+            if (value > 1U)
+            {
+                reply("ERR: %s: wartość musi być 0 lub 1", cmd->name);
+                return;
+            }
+            res = (cmd->kind == IO_CMD_HIGH_BEAM) ? io_sim_setHighBeam(value != 0U)
+                                                  : io_sim_setBrakePedal(value != 0U);
+            if (res == IO_SIM_OK)
+            {
+                reply("OK %s=%lu", cmd->name, (unsigned long)value);
+                return;
+            }
+            break;
+
+        case IO_CMD_SPEED:
+        case IO_CMD_ODOMETER:
+            if (!number)
+            {
+                reply("ERR: składnia: %s#<0..%lu>", cmd->name, (unsigned long)range_max(cmd->kind));
+                return;
+            }
+            res = (cmd->kind == IO_CMD_SPEED) ? io_sim_setSpeed(value) : io_sim_setOdometer(value);
+            if (res == IO_SIM_OK)
+            {
+                reply("OK %s=%lu %s", cmd->name, (unsigned long)value,
+                      (cmd->kind == IO_CMD_SPEED) ? "km/h" : "km");
+                return;
+            }
+            break;
+
+        case IO_CMD_ENGINE_TEMP:
+        {
+            int32_t temp = 0;
+            if (!parse_int(arg, &temp))
+            {
+                reply("ERR: składnia: %s#<%d..%d>", cmd->name, IO_ENGINE_TEMP_MIN, IO_ENGINE_TEMP_MAX);
+                return;
+            }
+            res = io_sim_setEngineTemp(temp);
+            if (res == IO_SIM_OK)
+            {
+                reply("OK %s=%ld C", cmd->name, (long)temp);
+                return;
+            }
+            break;
+        }
+
         case IO_CMD_SWITCH:
         case IO_CMD_LOCKS:
             if (!number)
@@ -321,14 +480,21 @@ static void cmd_set(const io_cmd_entry_t *cmd, const char *arg)
         case IO_CMD_RPM:
             if (!number)
             {
-                reply("ERR: składnia: %s#<0..%u>", cmd->name, (unsigned)IO_RPM_MAX);
+                reply("ERR: składnia: %s#<0..%lu>", cmd->name, (unsigned long)range_max(cmd->kind));
                 return;
             }
             res = io_sim_setRpm(value);
             if (res == IO_SIM_OK)
             {
-                reply("OK %s=%lu RPM (data[2]=0x%02X)", cmd->name, (unsigned long)value,
-                      (unsigned)io_sim_rpmToByte((uint16_t)value));
+                if (io_sim_areVehicleSignalsUsed())
+                {
+                    reply("OK %s=%lu RPM", cmd->name, (unsigned long)value);
+                }
+                else
+                {
+                    reply("OK %s=%lu RPM (data[2]=0x%02X)", cmd->name, (unsigned long)value,
+                          (unsigned)io_sim_rpmToByte((uint16_t)value));
+                }
                 return;
             }
             break;
@@ -374,7 +540,16 @@ bool io_cmd_process(char *line, io_cmd_out_fn out)
     {
         if (io_sim_reset() == IO_SIM_OK)
         {
-            reply("OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0");
+            if (io_sim_areVehicleSignalsUsed())
+            {
+                reply("OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0, PREDKOSC=0, PRZEBIEG=%lu, "
+                      "DROGOWE=0, HAMULEC_NOZNY=0, TEMP_SILNIKA=%d",
+                      (unsigned long)IO_ODOMETER_DEFAULT_KM, IO_ENGINE_TEMP_DEFAULT);
+            }
+            else
+            {
+                reply("OK IO_RESET: wejścia=0, OBROTY=0, PALIWO=0, AWARIA_ZAMKA=0");
+            }
         }
         else
         {

@@ -3,8 +3,11 @@
  * @brief Host harness for app/io/io_cmd.c + app/io/io_sim.c (tools/test_io_cmd_host.py).
  *
  * stdin:  one line per step:
- *           "PHYS <btn_hex> <fuel>"  sets the physical inputs returned by the io_manager stub
- *           anything else            passed to io_cmd_process()
+ *           "PHYS <btn_hex> <fuel>"           sets the physical inputs returned by the io_manager stub
+ *           "LIMITS <max> <step> <engine_on>"  io_sim_setRpmLimits() (RPM limits of a car simulator)
+ *           "VSIG <0|1>"                       io_sim_setVehicleSignalsUsed()
+ *           "ODO+ <metres>"                    io_sim_advanceOdometer()
+ *           anything else                      passed to io_cmd_process()
  * stdout: one line per step: "<responses joined with ' | '>\t<data0> <data1> <data2>"
  *         where the responses are "NOT_IO <line>" if io_cmd_process() returned false,
  *         and data0..2 are the telemetry frame bytes built from the effective inputs.
@@ -19,7 +22,7 @@
 
 static uint16_t s_phys_btn = 0U;
 static uint8_t s_phys_fuel = 0U;
-static char s_resp[2048];
+static char s_resp[4096];
 
 /* io_manager stub */
 void io_manager_getPhysInputs(uint16_t *btn_state, uint8_t *fuel)
@@ -52,6 +55,24 @@ int main(void)
             s_phys_btn = (uint16_t)strtoul(line + 5, &end, 16);
             s_phys_fuel = (uint8_t)strtoul(end, NULL, 10);
             out("PHYS");
+        }
+        else if (strncmp(line, "LIMITS ", 7) == 0)
+        {
+            char *end;
+            const uint16_t max = (uint16_t)strtoul(line + 7, &end, 10);
+            const uint16_t step = (uint16_t)strtoul(end, &end, 10);
+            io_sim_setRpmLimits(max, step, (uint16_t)strtoul(end, NULL, 10));
+            out("LIMITS");
+        }
+        else if (strncmp(line, "VSIG ", 5) == 0)
+        {
+            io_sim_setVehicleSignalsUsed(strtoul(line + 5, NULL, 10) != 0U);
+            out("VSIG");
+        }
+        else if (strncmp(line, "ODO+ ", 5) == 0)
+        {
+            io_sim_advanceOdometer((uint32_t)strtoul(line + 5, NULL, 10));
+            out("ODO+");
         }
         else
         {
