@@ -29,13 +29,18 @@ flowchart TD
 Wszystkie nowe parsery muszą być umieszczane w dedykowanym podkatalogu parserów magistrali CAN:
 ```text
 app/can_bus/can_parser/parsers/
-├── cp_v_box.h / .c          # Profil produkcyjny: Telemetria i przekaźnik V-Box
-├── cp_example.h / .c        # Profil demonstracyjny: Diagnostyka UDS/OBD2 i kalibracja
+├── cp_car_sim.h / .c        # Profil CAN1: magistrala i filtry komend aktywnego symulatora auta (zmienny)
+├── cp_v_box.h / .c          # Dawny profil CAN1 (telemetria i przekaźnik v-box, dziś symulator V_BOX), nieużywany
+├── cp_boot_ota.h / .c       # Filtry BOOT_OTA dołączane do profilu CAN1
+├── cp_example.h / .c        # Profil demonstracyjny CAN2: Diagnostyka UDS/OBD2 i kalibracja
 └── cp_<nazwa>.h / .c        # Nowy parser (konwencja cp_*.h / cp_*.c)
 ```
 
 * **Lokalizacja:** `app/can_bus/can_parser/parsers/`
 * **Prefiks pliku:** `cp_` (skrót od *CAN Parser*), np. `cp_battery.c`, `cp_j1939.c`.
+* **CAN1 = symulator auta:** profil CAN1 wybiera moduł `car_sim` (`CAN_PARSER_ID_CAR_SIM`). Ramki i komendy
+  auta dodaje się jako symulator (`app/car_sim/sims/`, [adding_a_car.md](../car_sim/adding_a_car.md)), nie jako
+  profil `cp_*`.
 
 ---
 

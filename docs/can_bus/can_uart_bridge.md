@@ -84,6 +84,7 @@ Reguły (jak w `can_support.py`):
 | `MODE#fd_no_brs` / `MODE?` | Wymuszony standard ramki: `auto`, `classic`, `fd_brs`, `fd_no_brs`, `tlv` (jak *can_mode* w Serial Commanderze) |
 | `HELP` | Skrócona składnia |
 | `IO_HELP`, `ZRODLO#UART`, `OBROTY#750`, ... | Symulacja wejść ramki telemetrii `0x01F2F3F4` (tag `[IO]`): [io_uart_simulation.md](../io/io_uart_simulation.md) |
+| `SIM?`, `SIM_LIST`, `SIM#ARKANA`, `SIM#AUTO`, `SIM_PIN#F15C`, `PILOT#OTWORZ`, `SIM_HELP` | Symulator auta na CAN1: aktywny symulator, wybór ręczny i automatyczny, PIN v-box, pilot (tag `[SIM]`): [car_sim.md](../car_sim/car_sim.md#5-komendy-uart) |
 | `RS485?`, `RS485#POLL`, `RS485_HELP` | Łącze RS485 z urządzeniem telematycznym: superStatus i parser urządzenia (tag `[RS485]`, opcja CMake `RS485_LINK`): [rs485_link.md](../rs485/rs485_link.md) |
 
 Prędkości: bit/s (`500000`), z sufiksem `k` (`500k`) albo `M` (`2M`), dozwolony ułamek (`83.3k`), o ile
@@ -92,7 +93,8 @@ daje całkowitą liczbę bit/s. Tryb: `CLASSIC`, `FD`, `FD_BRS` (wielkość lite
 `CFG` czeka na opróżnienie kolejki TX (maks. 200 ms) i przełącza magistralę przez
 `can_manager_setBusConfig()`. Konfiguracja nieosiągalna przy zegarze FDCAN 144 MHz (np. dane 5 Mbps)
 zwraca `ERR` i **zostawia poprzednią konfigurację**. Ustawienie z UART obowiązuje do następnego wyboru
-profilu parsera (`can_parser_select()`) albo do resetu. Filtry profilu się nie zmieniają.
+profilu parsera (`can_parser_select()`) albo do resetu. Filtry profilu się nie zmieniają. Na CAN1 profil
+wybiera symulator auta, więc zmiana symulatora (RS485 albo `SIM#...`) przywraca prędkość auta.
 
 Obsługiwane tryby i prędkości: [README – CAN / CAN FD Support](../../README.md#can--can-fd-support).
 

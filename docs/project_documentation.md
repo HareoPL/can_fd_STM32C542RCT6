@@ -18,6 +18,7 @@
 8. [Firmware & Hardware Versioning Subsystem](#8-firmware--hardware-versioning-subsystem)
 9. [CAN Bootloader & OTA Dual-Target Subsystem](#9-can-bootloader--ota-dual-target-subsystem)
 10. [RS485 Link to the External Telematics Device](#10-rs485-link-to-the-external-telematics-device)
+11. [Car Simulators](#11-car-simulators)
 
 ---
 
@@ -31,9 +32,12 @@ The software architecture strictly decouples **application business logic** from
 |                                                                               |
 |   +-----------------------+   +-------------------+   +-------------------+   |
 |   |   CAN Manager         |   |   CAN Parsers     |   |   I/O Manager     |   |
-|   |   (can_manager.c/h)   |   |   (cp_v_box.c/h)  |   |   (io_manager.c/h)|   |
+|   |   (can_manager.c/h)   |   |   (cp_*.c/h)      |   |   (io_manager.c/h)|   |
 |   +-----------+-----------+   +---------+---------+   +---------+---------+   |
 |               |                         |                       |             |
+|   +-----------------------------------------------------------------------+   |
+|   |   Car Simulators (app/car_sim/: engine, codec, registry, sim_*.c)     |   |
+|   +-----------------------------------------------------------------------+   |
 +---------------+-------------------------+-----------------------+-------------+
 |                     HARDWARE ABSTRACTION LAYER (PORT CONTRACTS)               |
 |                                                                               |
@@ -240,11 +244,14 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
   ```
 * **Runtime Dynamic Switching & Composite Boot/OTA Attachment:** Profiles can be activated or swapped on the fly without stopping tasks, and `CAN_PARSER_ID_BOOT_OTA` can be attached alongside the primary profile on `CAN1`:
   ```c
-  can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX);
+  can_parser_select(&can1_inst, CAN_PARSER_ID_CAR_SIM);
   can_parser_attach_boot_ota(&can1_inst);
   ```
+* **CAN1 belongs to the car simulator:** `car_sim_init(&can1_inst, true)` in `main.c` selects `CAN_PARSER_ID_CAR_SIM`, a variable profile rebuilt from the active car (`cp_car_sim`: bus configuration of the car, one exact filter per command ID, callback `car_sim_on_rx()`), and re-attaches BOOT_OTA after every simulator change ([section 11](#11-car-simulators)). `cp_v_box` stays registered but is no longer selected.
 
-### 5.3. Active CAN Messages in V-BOX Profile (`cp_v_box`)
+### 5.3. CAN Messages of the `V_BOX` Car Simulator (default, device parser 192)
+
+The frames below are sent and handled by the car simulator `V_BOX` (`app/car_sim/sims/sim_v_box.c`), byte for byte as the former `cp_v_box` profile and `io_manager` telemetry. Other simulators send the frames of their car instead ([docs/car_sim/car_sim.md](car_sim/car_sim.md)).
 
 #### 1. Inbound Command: Relay Control (`0x01F2F3F0`, Extended 29-bit ID)
 * **DLC:** 8 bytes (minimum validated length: 3 bytes)
@@ -252,10 +259,10 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
   * `Byte [0..1]`: Reserved / Command prefix.
   * `Byte [2]`: Control byte $\rightarrow$ **Bit 0**: `1` = CLOSE (ZAMKNIJ), `0` = OPEN (OTWÓRZ).
   * `Byte [3..7]`: Unused.
-* **Behavior:** Callback extracts target state and calls `io_manager_setRelayStateAsync()`. Execution time is under 1 microsecond.
+* **Behavior:** `car_sim_on_rx()` matches the command of the active simulator and calls `io_manager_setRelayStateAsync()`. Log: `[CAR_SIM] RELAY CMD (ID=0x01F2F3F0, len=8): target=1, QUEUED`.
 
 #### 2. Outbound Telemetry: Discrete Inputs & ADC Status (`0x01F2F3F4`, Extended 29-bit ID)
-* **Transmission Interval:** 100 ms periodic (broadcast from `io_manager_task`).
+* **Transmission Interval:** 100 ms periodic (frame scheduler of `car_sim_task`).
 * **DLC:** 8 bytes.
 * **Payload Format:**
   * `Byte [0]`: Discrete Inputs Low Byte (`SW0..SW7`):
@@ -268,10 +275,10 @@ Each parser profile is completely self-contained in `app/can_bus/can_parser/pars
     * Bit 6: Maska (PB14)
     * Bit 7: Hamulec Ręczny (PB15)
   * `Byte [1]`: ADC Mapped Percentage (0..100%) – fuel level.
-  * `Byte [2]`: Engine RPM / 3 (`0..250` = `0..750` RPM, the receiver multiplies by 3). Physical SW8: `0xFA` (750 RPM) or `0`.
+  * `Byte [2]`: Engine RPM / 3 (`0..250` = `0..750` RPM, the receiver multiplies by 3). Physical SW8: `0xFA` (750 RPM) or `0`. Raw input RPM: unlike the car simulators, `V_BOX` does not force 0 RPM with the ignition off.
   * All inputs can be simulated over UART instead of the physical IO: [io_uart_simulation.md](io/io_uart_simulation.md).
   * `Byte [3]`: Reserved (`0x00`).
-  * `Byte [4..7]`: Big-Endian 32-bit Transmission Rolling Counter.
+  * `Byte [4..7]`: Big-Endian 32-bit Transmission Rolling Counter (reset when `V_BOX` is selected).
 
 ---
 
@@ -341,7 +348,8 @@ The problem is resolved using an **asynchronous event-driven worker**:
 | :--- | :---: | :---: | :--- | :--- |
 | **`can_rx_task`** | `configMAX_PRIORITIES - 1` (15) | 512 words (2048 B) | Event-Driven (Blocked on `rx_sem`) | Drains FDCAN1 hardware FIFO 0 immediately upon interrupt notification and dispatches to parser profile callbacks. |
 | **`can_tx_task`** | `configMAX_PRIORITIES - 2` (14) | 256 words (1024 B) | Event-Driven (Blocked on `tx_queue`) | Dequeues outgoing CAN frames and writes them to FDCAN1 transmission mailboxes. |
-| **`io_manager`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Periodic (10 ms tick rate) | Samples 9 inputs, executes 16-bit parallel debouncing (40 ms window), reads ADC1, broadcasts CAN telemetry (100 ms), logs UART (500 ms). |
+| **`io_manager`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Periodic (10 ms tick rate) | Samples 9 inputs, executes 16-bit parallel debouncing (40 ms window), reads ADC1 (100 ms), logs UART (500 ms). |
+| **`car_sim`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Periodic (10 ms, `vTaskDelayUntil`) | Car simulator: selection requests (RS485, UART), vehicle state from the effective inputs, odometer, scheduled CAN1 frames of the active simulator, key fob. Logs the free FreeRTOS heap at start. |
 | **`relay_worker`**| `tskIDLE_PRIORITY + 2` (2) | 256 words (1024 B) | Event-Driven (Blocked on `s_relay_cmd_queue`) | Executes long-duration bistable relay edge actuation, timeout delays, and retries in background. |
 | **`main_task`** | `tskIDLE_PRIORITY + 2` (2) | 512 words (2048 B) | Periodic (1200 ms) | System supervisory task. |
 | **`heartbeat`** | `tskIDLE_PRIORITY + 1` (1) | 128 words (512 B) | Periodic (1000 ms) | Toggles onboard green LED (LD1 on PA5) to verify OS kernel liveness. |
@@ -357,7 +365,8 @@ The problem is resolved using an **asynchronous event-driven worker**:
                                                                                          ▼
 [ Any Task ] ──────────► (Lock / Unlock) ────► [ printf_mutex: Mutex ] ────────► [ UART2 safe_printf ]
 [ relay_worker ] ──────► (Lock / Unlock) ────► [ s_relay_mutex: Mutex ] ────────► [ HW Actuation PA8 ]
-[ io_manager_task ] ───► (Send) ─────────────► [ tx_queue: Queue ] ────────────► (Receive) ──► [ can_tx_task ]
+[ car_sim_task ] ──────► (Send) ─────────────► [ tx_queue: Queue ] ────────────► (Receive) ──► [ can_tx_task ]
+[ rs485 / can_uart ] ──► (volatile request) ─► [ car_sim_task ] (simulator selection, key fob)
 ```
 
 * **`rx_sem` (Binary Semaphore):** Synchronizes hardware FDCAN interrupt with `can_rx_task`. Released in `FromISR` context.
@@ -365,6 +374,7 @@ The problem is resolved using an **asynchronous event-driven worker**:
 * **`s_relay_cmd_queue` (Queue):** Decouples CAN RX callbacks from relay hardware actuation (depth: 4 items, `uint8_t`).
 * **`s_relay_mutex` (Mutex):** Prevents concurrent access to relay actuation hardware across multiple threads.
 * **`printf_mutex` (Mutex):** Ensures atomic, thread-safe transmission of UART log strings in `safe_printf()`, preventing interleaved character output.
+* **Car simulator requests (`car_sim.c`):** the RS485 callback and the UART commands only store requests (selection, device parser number, mode, key fob) in variables taken under a critical section by `car_sim_task` in its next 10 ms tick. The active profile is a `volatile` pointer to `static const` data, read by `car_sim_on_rx()` in `can_rx_task`.
 * **RS485 RX ring buffer (`rs485_link.c`):** lock-free single producer (USART1 ISR) / single consumer (`rs485_link_task`) buffer of 1024 B; the ISR wakes the task with `vTaskNotifyGiveFromISR()`. The last superStatus is copied under a critical section for the console command (`RS485?`).
 
 ### 7.3. NVIC Interrupt Priority Governance
@@ -488,7 +498,33 @@ V-BOX reads the **superStatus** of the external telematics device (LX, LX_micro,
 | Link task | `app/rs485/rs485_link.c/.h` | `rs485_link_task`: superStatus every 5 s on a silent bus, passive listening while the PC service tool is connected, pause during a device parser upload, parser change callback, console commands `RS485?` / `RS485#POLL` / `RS485_HELP`. |
 | Configuration | `app/rs485/rs485_link_config.h` | Source address `0x90`, tool version `0x0F45`, password `"9999"`, timings (all overridable from CMake). |
 
-* **Initialization (`main.c`):** `rs485_link_set_parser_change_cb(on_dev_parser_change)` and `rs485_link_init(stm32c5_uart1_interfaceGet())`. The callback currently only logs `[RS485] ZMIANA parsera urządzenia CAN1: 260 -> 195`.
+* **Initialization (`main.c`):** `rs485_link_set_parser_change_cb(on_dev_parser_change)` and `rs485_link_init(stm32c5_uart1_interfaceGet())`. The callback logs `[RS485] ZMIANA parsera urządzenia CAN1: 192 -> 196` and passes the CAN1 number to the car simulator (`car_sim_request_dev_parser()`, [section 11](#11-car-simulators)); CAN2 numbers are only logged.
 * **Port contract:** `uart_interface_t::transmit` (optional, `NULL` for USART2) is implemented by the USART1 adapter with `HAL_UART_Transmit()`.
 * **Documentation:** protocol specification [docs/rs485/rs485_protocol.md](rs485/rs485_protocol.md), module and test procedure [docs/rs485/rs485_link.md](rs485/rs485_link.md). Host test: `python tools/test_rs485_host.py`.
 
+---
+
+## 11. Car Simulators
+
+V-BOX behaves like the **car** whose parser is loaded in the telematics device. The CAN1 device parser number read over RS485 selects a car simulator: V-BOX sends the frames of that car on CAN1 and reacts to the device commands like the car (carsharing open / close with the PIN → lock relay). A device parser number without a simulator selects `BRAK`, which sends only the marker frame `0x01F2F3FF CA FE 00 BA BE 00` (1 s), so a parser test never succeeds with the data of another car. Full description: [docs/car_sim/car_sim.md](car_sim/car_sim.md), adding a car: [docs/car_sim/adding_a_car.md](car_sim/adding_a_car.md), plan and decisions: [docs/car_sim/car_sim_tasks.md](car_sim/car_sim_tasks.md).
+
+| Simulator | Device parser | CAN1 frames | Device commands |
+| :--- | :--- | :--- | :--- |
+| `V_BOX` (default after reset) | 192 | telemetry `0x01F2F3F4` ([section 5.3](#53-can-messages-of-the-v_box-car-simulator-default-device-parser-192)) | relay `0x01F2F3F0` |
+| `ARKANA` (Renault Arkana) | 196 | 13 standard frames every 100 ms (ignition, RPM, speed, doors, lights, locks, fuel, handbrake, hood, brake pedal, odometer, engine temperature) | `0x46F` open / close with the v-box PIN, key fob `0x46F` |
+| `BRAK` | 0 and any number without a simulator | `0x01F2F3FF` `CA FE 00 BA BE 00`, 1000 ms | – |
+
+| Module | File | Role |
+| :--- | :--- | :--- |
+| Types, codec | `app/car_sim/car_sim_types.h`, `car_sim_codec.c/.h` | Vehicle state from the effective inputs (no RPM with the ignition off), declarative frames and signals (`BIT`, `UINT` BE / LE), command matching with a strict PIN check, key fob frame, frame scheduler, profile validation (pure C, host tested). |
+| Registry | `app/car_sim/car_sim_registry.c/.h` | Simulator getters `s_sims[]`, device parser map, key lookup, consistency check (pure C). |
+| Profiles | `app/car_sim/sims/sim_*.c/.h` | Car profiles as `static const` data without FreeRTOS, HAL or `io_manager`. |
+| Engine | `app/car_sim/car_sim.c/.h` | `car_sim_task`, simulator selection (CAN1 reconfiguration + BOOT_OTA), `car_sim_on_rx()` in `can_rx_task` (non-blocking), PIN, key fob, counters. |
+| UART commands | `app/car_sim/car_sim_cmd.c/.h` | `SIM?`, `SIM_LIST`, `SIM#<key\|number>`, `SIM#AUTO`, `SIM_PIN#<hex4>`, `SIM_PIN#DOMYSLNY`, `PILOT#<OTWORZ\|ZAMKNIJ>`, `SIM_HELP` (routed by the UART bridge). |
+| CAN parser profile | `app/can_bus/can_parser/parsers/cp_car_sim.c/.h` | `CAN_PARSER_ID_CAR_SIM`: bus configuration of the active car and its command filters. |
+| Tools | `tools/create_car_sim.py`, `tools/test_car_sim_host.py` | Skeleton generator from a device parser source (read at runtime only), host test with reference decoders. |
+
+* **Selection:** `AUTO` mode (after reset) follows the CAN1 device parser number at once; `SIM#<key>` switches to `RECZNY` (numbers only stored), `SIM#AUTO` applies the last number. Losing the RS485 link keeps the simulator. Only `car_sim_task` changes the simulator and the CAN1 configuration.
+* **CAN1 filters:** at start every simulator must fit its command filters together with the BOOT_OTA filters into `CAN_MAX_FILTERS` (16), otherwise `car_sim_init()` fails (no silent loss of OTA).
+* **`CAN_FD_TEST` build:** CAN1 belongs to the CAN FD test; `car_sim_init(&can1_inst, false)` only sends the `V_BOX` telemetry and the simulator selection is disabled.
+* **Input simulation:** the RPM range and step of `OBROTY#` and the SW8 idle RPM come from the active simulator (`io_sim_setRpmLimits()`); vehicle signals without a physical input (speed, odometer, high beam, brake pedal, engine temperature) are set over UART ([docs/io/io_uart_simulation.md](io/io_uart_simulation.md)).

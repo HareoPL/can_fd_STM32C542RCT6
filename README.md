@@ -16,6 +16,7 @@ Automotive controller firmware developed for the **STM32C542RCT6** microcontroll
 - **Fault-Tolerant Bistable Relay Engine:** Edge-controlled latching relay with pre-charge pulse generation, closed-loop feedback verification (PB12), retry mechanism, power-cut recovery, and boot synchronization without audible clicking.
 - **Non-Blocking Asynchronous Workers:** Decoupled relay (`relay_worker_task`) and OTA (`ota_worker_task`) execution via dedicated FreeRTOS queues to guarantee sub-microsecond CAN RX callbacks and prevent hardware FIFO overflow.
 - **RS485 Link to the Telematics Device (USART1):** Periodic superStatus of the external device (LX, LX_micro, Roma, Viale) over RS485 at 57600 baud, decoding of the device parser number (`NNN.CAN` loaded in the device) and change detection, passive listening while the PC service tool is connected, pause during a device parser upload, console commands `RS485?` / `RS485#POLL`. See [docs/rs485/rs485_link.md](docs/rs485/rs485_link.md).
+- **Car Simulators on CAN1:** V-BOX behaves like the car whose parser is loaded in the telematics device. The CAN1 device parser number read over RS485 selects a simulator (`V_BOX` = 192, default; `ARKANA` = Renault Arkana, 196; `BRAK` marker frame `0x01F2F3FF CA FE 00 BA BE 00` for a number without a simulator), which sends the frames of that car and answers its carsharing open / close commands with a strict PIN check (lock relay) and a key fob. Manual selection, PIN and key fob over UART (`SIM?`, `SIM#ARKANA`, `SIM#AUTO`, `SIM_PIN#F15C`, `PILOT#OTWORZ`). Declarative car profiles in pure C (`app/car_sim/sims/`), a skeleton generator from a device parser source (`tools/create_car_sim.py`) and a host test with reference decoders. See [docs/car_sim/car_sim.md](docs/car_sim/car_sim.md).
 - **Parallel 16-bit Input Debouncer:** 10 ms periodic sampling, 40 ms debouncing window for 9 discrete inputs (SW0..SW8) on GPIOB and GPIOC.
 - **12-bit Analog Voltage Sensing:** ADC1 sampling on PA0 linearly mapped to 0..100% vehicle voltage representation.
 - **Thread-Safe Logging:** Exclusive UART2 console logging at 115200 baud via `safe_printf` (shared across FreeRTOS Application and bare-metal Bootloader).
@@ -57,7 +58,9 @@ The node answers with the decoded frame (`[CAN_UART] Ramka: 321 [11] [FD+BRS] 11
 
 👉 **Full description** (syntax, commands, responses, limitations, architecture): [docs/can_bus/can_uart_bridge.md](docs/can_bus/can_uart_bridge.md)
 
-**Input simulation:** the same UART can take over all inputs of the telemetry frame `0x01F2F3F4` (`ZRODLO#UART`, `DRZWI_KIER#1`, `OBROTY#750`, `PALIWO#42`, …; after reset the physical IO is always active): [docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)
+**Input simulation:** the same UART can take over all inputs of the simulated car (`ZRODLO#UART`, `DRZWI_KIER#1`, `OBROTY#750`, `PALIWO#42`, `PREDKOSC#50`, …; after reset the physical IO is always active), encoded by the active car simulator (after reset `V_BOX`: telemetry frame `0x01F2F3F4`): [docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)
+
+**Car simulator:** `SIM?` shows the active simulator, `SIM_LIST` all simulators, `SIM#<key|number>` selects one manually and `SIM#AUTO` follows the device parser number again (`SIM_HELP` lists all commands): [docs/car_sim/car_sim.md](docs/car_sim/car_sim.md)
 
 ---
 
@@ -107,7 +110,7 @@ The Docker container provides an identical, bit-for-bit reproducible build envir
 
 2. **Download Pre-built Docker Image Archive:**
    * Download the complete, pre-configured image archive `vbox-builder_stm32c542.tar` from corporate storage:  
-     👉 **[v-box-tester (SharePoint Archive)](https://lincorspzoo-my.sharepoint.com/:f:/g/personal/j_lukaszewicz_lincor_pl/IgBjV5wdDW81QqDHNNTQZr4GARtXaX-XTG5QeiUvk5Fbme8?e=RkfN9G)**
+     👉 **[v-box-tester (google drive)](https://drive.google.com/file/d/1E4GGGY02-r35GM9ZOmHPkuVYJKt2Dg3B/view?usp=sharing)**
    * Place the downloaded file `vbox-builder_stm32c542.tar` directly in the project root directory (`c:\WORK\5_v-box\`).
 
 3. **Import the Image into Docker:**
@@ -239,53 +242,6 @@ python tools/test_ota_suite.py
 
 ---
 
-## Hardware Interface & Front Panel Description
-
-### 1. V-BOX Communication Connector Pinout
-
-V-BOX uses a dedicated 8-pin circular industrial connector for automotive bus communication, diagnostic signals, output control, and main power delivery:
-
-![V-BOX Communication Connector Pinout](docs/img/pinout.jpg)
-
-| Pin # | Signal Name | Type | Description |
-| :---: | :--- | :---: | :--- |
-| **1** | **RS485 A** | Bi-dir (Diff +) | RS-485 non-inverting communication line A |
-| **2** | **RS485 B** | Bi-dir (Diff -) | RS-485 inverting communication line B |
-| **3** | **CAN H** | Bi-dir (Diff +) | High-speed CAN High bus line (`FDCAN1` / `PB9`) |
-| **4** | **CAN L** | Bi-dir (Diff -) | High-speed CAN Low bus line (`FDCAN1` / `PB8`) |
-| **5** | **1-wire** | Bi-dir | 1-Wire Dallas / iButton communication interface |
-| **6** | **Blokada OUT** | Open-Drain Output | Immobilizer / analog cut-off relay output (switched to ground / masa) |
-| **7** | **Zasilanie MASA** | Power | System Ground (GND / 0 V) |
-| **8** | **Zasilanie PLUS** | Power | Main Vehicle Supply Power (+12 V / +24 V DC) |
-
----
-
-### 2. Vehicle Simulator Front Panel Description
-
-The front panel controls and indicators simulate essential vehicle sensors, digital switches, ignition stages, analog levels, and lock status:
-
-![Vehicle Simulator Front Panel Controls & Indicators](docs/img/panel_description.png)
-
-| # | Element Name | Type / Color | Firmware Mapping | Function & Operational Description |
-| :-: | :--- | :---: | :---: | :--- |
-| **1** | **Poziom paliwa** | Potentiometer | `PA0` (ADC1 Channel 0) | Sets the simulated fuel level in range 0–100% (transmitted in telemetry frame `0x01F2F3F4`). |
-| **2** | **Zasilanie główne** | Switch + Red LED | Main Power Switch | Main power toggle for the simulator. Red illuminated LED indicates simulator power ON. |
-| **3** | **Stacyjka (ACC)** | Switch + Green LED | `PB4` (SW0 / ACC) | Ignition switch (ACC). Green LED indicates ACC active. *(In carsharing mode, engine RPM #4 is also required for ignition)*. |
-| **4** | **Obroty silnika** | Toggle Switch | `PB2` (SW8 / Engine RPM) | Engine RPM switch: Down = fixed 750 RPM transmitted; Center = 0 RPM (engine stopped). |
-| **5** | **Czytnik pastylek Dallas**| Probe Ring | 1-Wire Reader | Dallas iButton touch reader ring for driver/user RFID identification pastille. |
-| **6** | **Centralny zamek – otwarty** | Green LED | Central Lock Open | Illuminated green LED indicates that the vehicle central lock is in UNLOCKED state. |
-| **7** | **Centralny zamek – zamknięty** | Red LED | `PB12` (SW4 / Lock Status) | Illuminated red LED indicates that the vehicle central lock is in LOCKED state. |
-| **8** | **Symulacja braku odpowiedzi** | Toggle Switch (0/1) | Fault Simulation | Simulates no vehicle response: Lock/Unlock command is issued but not acknowledged by vehicle receiver. |
-| **9** | **Blokada analogowa** | Blue LED | `PA8` (Relay State) | Illuminated blue LED indicates that the analog immobilizer / cut-off lock is ACTIVE. |
-| **10**| **Maska** | Switch + Yellow LED | `PB14` (SW6 / Hood) | Engine hood status switch. Illuminated yellow LED simulates an open engine hood. |
-| **11**| **Drzwi kierowcy** | Switch + Yellow LED | `PC7` (SW2 / Driver Door) | Driver door switch. Illuminated yellow LED simulates open driver door. |
-| **12**| **Światła mijania** | Switch + Blue LED | `PB7` (SW3 / Headlights) | Headlamps switch. Illuminated blue LED indicates low-beam headlights ON. |
-| **13**| **Pozostałe drzwi** | Switch + Yellow LED | `PC8` (SW1 / Other Doors) | Passenger & rear doors switch. Illuminated yellow LED simulates open passenger doors. |
-| **14**| **Światła awaryjne** | Switch + Blue LED | `PB13` (SW5 / Hazards) | Hazard warning lights switch. Illuminated blue LED indicates hazard flasher active. |
-| **15**| **Hamulec ręczny** | Switch + Blue LED | `PB15` (SW7 / Handbrake) | Parking brake switch. Illuminated blue LED indicates handbrake engaged. |
-
----
-
 ## Detailed Documentation Directory (`docs/`)
 
 Comprehensive technical and developer documentation is organized in the `docs/` folder:
@@ -306,7 +262,7 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
   **Complete Build, Docker, Debugging, and Tooling Manual:** Step-by-step instructions for Windows and Docker builds, ST-Link V3 GDB debug profiles (`Debug Full System`, `Debug Application`, `Debug Bootloader`, `Hotplug`), Docker image archiving, memory footprint reporter, and QA tools.
 
 * 📖 **[docs/project_documentation.md](docs/project_documentation.md)**  
-  **Hardware & Software Technical Specification:** Detailed hardware peripherals (FDCAN1, FDCAN2, ADC1, USART2, GPIO, NVIC), full 64-pin Nucleo pinout table, ASCII board diagram, CAN frame definitions (`0x01F2F3F0`, `0x01F2F3F4`), bistable relay state machine, FreeRTOS task table, IPC concurrency diagram, and NVIC priority rules.
+  **Hardware & Software Technical Specification:** Detailed hardware peripherals (FDCAN1, FDCAN2, ADC1, USART2, GPIO, NVIC), full 64-pin Nucleo pinout table, ASCII board diagram, CAN frame definitions (`0x01F2F3F0`, `0x01F2F3F4`), bistable relay state machine, FreeRTOS task table, IPC concurrency diagram, NVIC priority rules, and car simulators overview.
 
 * 📖 **[docs/can_bus/can_parser_guide.md](docs/can_bus/can_parser_guide.md)**  
   **CAN Parser Profile Guide & Generator:** Architecture of the modular CAN dispatcher, zero-extern getter pattern, and instructions for the automated Python generator (`tools/create_parser.py <name>`).
@@ -322,6 +278,9 @@ Comprehensive technical and developer documentation is organized in the `docs/` 
 
 * 📖 **[docs/io/io_uart_simulation.md](docs/io/io_uart_simulation.md)**  
   **UART Input Simulation:** Input source switch (physical IO / UART), commands for every input of the telemetry frame, engine RPM scaling (RPM / 3), responses, and the SW4 relay feedback restriction.
+
+* 📖 **[docs/car_sim/car_sim.md](docs/car_sim/car_sim.md)** · **[docs/car_sim/adding_a_car.md](docs/car_sim/adding_a_car.md)**
+  **Car Simulators:** Simulators on CAN1 (`V_BOX`, `ARKANA`, `BRAK`), automatic selection from the device parser number (RS485) and manual selection, device commands with the PIN and key fob, UART commands, architecture, CAN1 filters with OTA, host test and hardware test procedure; adding a new car with the skeleton generator `tools/create_car_sim.py`, frame and signal encodings, profile rules.
 
 * 📖 **[docs/can_bus/can_fd_test_guide.md](docs/can_bus/can_fd_test_guide.md)**  
   **CAN FD Bus Test Guide:** Test firmware (`CAN_FD_TEST`), the automated test matrix of all CAN / CAN FD modes on CAN1 or CAN2 (`tools/can_fd_test.py --bus`), and interpretation of the reports.

@@ -1,8 +1,11 @@
 # Symulacja wejść przez UART (`io_cmd`, `io_sim`)
 
-Wszystkie wejścia ramki telemetrii `0x01F2F3F4` (przełączniki, obroty silnika, poziom paliwa) można
-ustawiać komendami tekstowymi przez UART, zamiast fizycznymi przyciskami i potencjometrem. Można też
-zasymulować uszkodzony zamek, czyli przekaźnik, który nie reaguje na ramki CAN. Komendy
+Wszystkie wejścia symulowanego auta (przełączniki, obroty silnika, poziom paliwa) można ustawiać
+komendami tekstowymi przez UART, zamiast fizycznymi przyciskami i potencjometrem. Dla symulatorów aut,
+które je nadają (np. Arkana), dochodzą sygnały bez fizycznego wejścia: prędkość, przebieg, światła drogowe,
+pedał hamulca i temperatura silnika. Można też zasymulować uszkodzony zamek, czyli przekaźnik, który nie
+reaguje na komendy CAN. Wejścia koduje do ramek CAN1 aktywny
+[symulator auta](../car_sim/car_sim.md) (po resecie `V_BOX`: ramka telemetrii `0x01F2F3F4`). Komendy
 przyjmuje ten sam UART i task co [most UART → CAN](../can_bus/can_uart_bridge.md) (USART2, ST-LINK VCP,
 115200 8N1, linia zakończona CR, LF albo CRLF).
 
@@ -66,6 +69,19 @@ Format: `NAZWA#wartość`. Wielkość liter nie ma znaczenia, a spacje wokół `
 | `OBROTY#<0..750>` | Obroty silnika (SW8, PB2) | RPM, **wielokrotność 3** | `data[2]` = RPM / 3 |
 | `PALIWO#<0..100>` | Poziom paliwa (potencjometr, PA0) | % | `data[1]` |
 | `AWARIA_ZAMKA#<0\|1>` | Uszkodzony zamek | 1 = przekaźnik nie reaguje na ramki CAN | – (bit 4 dalej z feedbacku) |
+| `PREDKOSC#<0..250>` | Prędkość auta | km/h | – (np. Arkana `0x41C`) |
+| `PRZEBIEG#<0..999999>` | Przebieg | km, domyślnie 10000; rośnie z prędkością | – (np. Arkana `0x438`) |
+| `DROGOWE#<0\|1>` | Światła drogowe | 1 = włączone | – (np. Arkana `0x46A`) |
+| `HAMULEC_NOZNY#<0\|1>` | Pedał hamulca | 1 = wciśnięty | – (np. Arkana `0x206`) |
+| `TEMP_SILNIKA#<-40..150>` | Temperatura silnika | °C, domyślnie 90 | – (np. Arkana `0x417`) |
+
+Kolumna „Ramka” podaje bajty symulatora `V_BOX`. Inne symulatory kodują te same wejścia w ramkach auta,
+np. SW3 (`SWIATLA`) to światła, które czyta parser urządzenia (Arkana: mijania), tabela sygnałów:
+[car_sim.md](../car_sim/car_sim.md#22-arkana-renault-arkana-parser-urządzenia-196). Sygnały auta (`PREDKOSC` ...
+`TEMP_SILNIKA`) są przyjmowane zawsze w trybie UART, ale `ZRODLO?`, `IO_HELP` i `IO_RESET` pokazują je tylko
+przy symulatorze, który je nadaje; dla `V_BOX` i `BRAK` teksty są takie jak przed wprowadzeniem symulatorów.
+W trybie IO i po `IO_RESET` mają wartości domyślne (prędkość 0, przebieg 10000 km, drogowe i pedał wyłączone,
+90 °C).
 
 Komendy ustawiające (także `AWARIA_ZAMKA` i `IO_RESET`) działają tylko przy `ZRODLO=UART`. `ZRODLO?`, `ZRODLO#...` i `IO_HELP` działają
 w obu trybach. Zmiana trafia do najbliższej ramki telemetrii (okres 100 ms).
@@ -75,8 +91,19 @@ komendę `STACYJKA`. Linie, które nie są komendami IO, trafiają bez zmian do 
 
 ## 3. Obroty silnika
 
-Bajt `data[2]` przenosi obroty ze skalą **3 RPM/bit**: firmware wysyła `RPM / 3`, a parser odbiornika
-mnoży wartość przez 3.
+Zakres i krok `OBROTY#` oraz obroty przełącznika SW8 (bieg jałowy) ustawia aktywny symulator auta:
+
+| Symulator | `OBROTY#` | Krok | SW8 |
+|---|---|---|---|
+| `V_BOX`, `BRAK` | 0..750 | 3 | 750 |
+| `ARKANA` | 0..8000 | 1 | 800 |
+
+Przy zmianie symulatora obroty z UART są przycinane do maksimum i zaokrąglane w dół do kroku. Symulatory aut
+nadają 0 obr/min przy wyłączonej stacyjce (D13); `V_BOX` nadaje surowe obroty z wejść, jak dotychczas.
+
+Dla `V_BOX` bajt `data[2]` przenosi obroty ze skalą **3 RPM/bit**: firmware wysyła `RPM / 3`, a parser
+odbiornika mnoży wartość przez 3. Przy symulatorze, który nadaje sygnały auta, odpowiedź `OBROTY#` nie podaje
+`data[2]` (np. `[IO] OK OBROTY=2500 RPM`).
 
 | RPM | `data[2]` |
 |---|---|
@@ -140,19 +167,22 @@ UART ISR -> can_uart (task mostu) -> process_line()
                                       |-- HELP / CFG / BUS / MODE
                                       |-- io_cmd_process()  -> io_sim_set*()     (sekcja krytyczna)
                                       `-- ramka CAN
-io_manager task (10 ms) -> debounce + ADC -> io_sim_resolve() -> io_manager_canCreateFrame() -> CAN1
+io_manager task (10 ms) -> debounce + ADC (100 ms) -> io_manager_getPhysInputs()
+car_sim task (10 ms)    -> io_sim_resolve() -> vehicle_state_build() -> ramki aktywnego symulatora -> CAN1
 ```
 
 | Plik | Rola |
 |---|---|
-| `app/io/io_sim.c/.h` | Przełącznik źródła, wartości symulowane, flaga uszkodzonego zamka, reset ustawień, walidacja (zakresy, krok RPM, SW4), wartości wypadkowe. Bez zależności od HAL, a od FreeRTOS tylko przez sekcję krytyczną (`IO_SIM_HOST` dla testu hostowego) |
+| `app/io/io_sim.c/.h` | Przełącznik źródła, wartości symulowane (także sygnały auta), flaga uszkodzonego zamka, reset ustawień, walidacja (zakresy, limity RPM z symulatora `io_sim_setRpmLimits()`, SW4), wartości wypadkowe. Bez zależności od HAL, a od FreeRTOS tylko przez sekcję krytyczną (`IO_SIM_HOST` dla testu hostowego) |
 | `app/io/io_cmd.c/.h` | Parser komend i teksty odpowiedzi. Zwraca `false` dla linii, które nie są komendami IO, i zostawia je bez zmian |
-| `app/io/io_manager.c` | Odczyt fizyczny (debounce, ADC co 100 ms), `io_manager_getPhysInputs()`, budowa ramki z wartości wypadkowych, log statusu, blokada przekaźnika przy `AWARIA_ZAMKA` |
+| `app/io/io_manager.c` | Odczyt fizyczny (debounce, ADC co 100 ms), `io_manager_getPhysInputs()`, log statusu, blokada przekaźnika przy `AWARIA_ZAMKA` |
+| `app/car_sim/` | Symulator auta: kodowanie wartości wypadkowych do ramek CAN1 ([car_sim.md](../car_sim/car_sim.md)) |
 | `app/can_bus/can_uart_bridge/can_uart_bridge.c` | Wywołanie `io_cmd_process()` przed parserem ramek, linia `IO_HELP` w `HELP` |
 
 Log `IO_MGR` co 500 ms (i przy zmianie):
 `SRC: UART | BTN: 0x1BB [...] | PHYS: 0x010 | PA8: HIGH | ADC: 1720 ( 42%) | FUEL:  42% | RPM: 750`.
-Pola `BTN`, `FUEL` i `RPM` to wartości wysyłane na CAN, a `PHYS` i `ADC` to wejścia fizyczne.
+Pola `BTN`, `FUEL` i `RPM` to wartości wypadkowe (kodowane przez symulator auta), a `PHYS` i `ADC` to wejścia
+fizyczne.
 
 ## 7. Build i testy
 
@@ -160,11 +190,12 @@ Komendy wymagają mostu UART (`CAN_UART_BRIDGE=ON`, domyślnie), bo `io_cmd.c` j
 `io_sim.c` jest zawsze w buildzie. Bez mostu źródło pozostaje IO.
 
 **Test hostowy** (bez sprzętu) kompiluje `io_cmd.c` + `io_sim.c` lokalnym `gcc` albo w obrazie
-Dockera `vbox-builder`. Przechodzi scenariusz 79 kroków i sprawdza każdą odpowiedź oraz bajty
+Dockera `vbox-builder`. Przechodzi scenariusz 142 kroków i sprawdza każdą odpowiedź oraz bajty
 `data[0..2]` ramki: snapshot przy przełączeniu, SW4 z wejścia fizycznego, wszystkie przełączniki,
 zakresy, krok RPM, `AWARIA_ZAMKA` (włączenie, kasowanie przez `ZRODLO#IO`), `IO_RESET`, błędy składni
 tabelę `IO_HELP` (tylko ASCII, równa szerokość wierszy, wszystkie komendy) i linie przekazywane do
-parsera ramek (`ACC#01`, `CAN1:...`). Blokady przekaźnika (`io_manager.c`)
+parsera ramek (`ACC#01`, `CAN1:...`), limity RPM z symulatora i sygnały auta (teksty z flagą sygnałów auta
+i bez niej). Blokady przekaźnika (`io_manager.c`)
 test hostowy nie obejmuje, sprawdza ją test na płytce (punkt 5).
 
 ```bash
