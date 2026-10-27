@@ -68,6 +68,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/bootloader/boot_version_record.c
   app/io/io_manager.c
   app/io/io_sim.c
+  app/car_sim/car_sim_codec.c
   app/port/stm32c5/bsp_adc.c
   app/port/stm32c5/bsp_io.c
   app/port/stm32c5/stm32c5_can_adapter.c
@@ -91,6 +92,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
   app/port
   app/port/stm32c5
   app/io
+  app/car_sim
 )
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC

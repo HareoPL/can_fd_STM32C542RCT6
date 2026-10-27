@@ -4,6 +4,7 @@ Wszystkie znaczące zmiany w projekcie będą dokumentowane w tym pliku.
 
 ## [2026-10-27]
 ### Dodane
+- **Model stanu auta, koder sygnałów i harmonogram ramek (`app/car_sim/car_sim_types.h`, `app/car_sim/car_sim_codec.c`):** deklaratywne profile aut w czystym C (ramki i sygnały jak w pliku DBC, komendy LX z PIN-em, pilot), `vehicle_state_build()` z regułą D13 (bez stacyjki obroty 0, surowe `rpm_in` dla `V_BOX`), kodowanie `BIT` / `UINT` BE / LE z `mul` / `div` / `offset` / `shift` i nasyceniem do `max` (np. bez kodu „brak danych”), hook `encode`, dopasowanie komend z maską bajtów i ścisłą kontrolą PIN-u (D8), ramka pilota z PIN-em, harmonogram rozkładający fazy ramek co 10 ms, walidacja profilu (`car_sim_profile_check()`).
 - **Sygnały auta w symulacji wejść (`io_sim.c`, `io_cmd.c`):** komendy `PREDKOSC#<0..250>`, `PRZEBIEG#<0..999999>` (km, domyślnie 10000), `DROGOWE#<0|1>`, `HAMULEC_NOZNY#<0|1>`, `TEMP_SILNIKA#<-40..150>` (domyślnie 90) – tylko przy `ZRODLO=UART`; przy `ZRODLO=IO`, po przejęciu przez UART i po `IO_RESET` wartości domyślne. `io_sim_advanceOdometer()` dla przebiegu rosnącego z prędkością.
 
 ### Zmienione
