@@ -1,6 +1,6 @@
 /**
  * @file stm32c5_uart1_adapter.c
- * @brief STM32C5 hardware adapter for interrupt driven UART reception (USART1, PA6 TX / PA7 RX, 57600 baud).
+ * @brief STM32C5 hardware adapter for USART1 (RS485): interrupt driven reception and blocking transmission (PA6 TX / PA7 RX, 57600 baud).
  *
  * USART1 is initialized by mx_usart1_uart_init() (STM32CubeMX2, called from mx_system_init()).
  * Arduino D12 (PA6) is TX and D11 (PA7) is RX, both on CN10 (pins 13 / 15).
@@ -107,6 +107,19 @@ static uint32_t stm32c5_uart1_get_rx_errors(void)
 }
 
 /**
+ * @brief Blocking transmission on USART1 (polling mode, runs next to the interrupt driven reception).
+ *        The RS485 transceiver switches DE/RE automatically, no direction pin is driven here.
+ */
+static bool stm32c5_uart1_transmit(const uint8_t *data, uint16_t len, uint32_t timeout_ms)
+{
+    if (data == NULL || len == 0U)
+    {
+        return false;
+    }
+    return (HAL_UART_Transmit(mx_usart1_uart_gethandle(), data, len, timeout_ms) == HAL_OK);
+}
+
+/**
  * @brief USART1 global interrupt (overrides the weak alias from the startup file).
  */
 void USART1_IRQHandler(void)
@@ -115,12 +128,13 @@ void USART1_IRQHandler(void)
 }
 
 /**
- * @brief USART1 reception interface instance.
+ * @brief USART1 reception / transmission interface instance.
  */
 static const uart_interface_t s_uart1_interface = {
     .start_rx = stm32c5_uart1_start_rx,
     .attach_rx_callback = stm32c5_uart1_attach_rx_callback,
-    .get_rx_errors = stm32c5_uart1_get_rx_errors
+    .get_rx_errors = stm32c5_uart1_get_rx_errors,
+    .transmit = stm32c5_uart1_transmit
 };
 
 const uart_interface_t *stm32c5_uart1_interfaceGet(void)
