@@ -9,6 +9,10 @@ niego scenariusz krok po kroku (stan wejść i wybrany profil są zachowywane mi
 i porównuje wyjście każdego kroku. Profile TEST, SCHED13 i BAD_* są zdefiniowane w harnessie
 (wszystkie kodowania, harmonogram 13 ramek, błędne profile), pozostałe pochodzą z rejestru.
 
+Ramki symulatorów Arkana i V_BOX sprawdzają dekodery referencyjne (arkana_decode(), v_box_decode()):
+te same ID, maski i wzory co parser urządzenia 196 i dotychczasowa telemetria v-box, wpisane na stałe
+(test nie czyta źródeł parsera urządzenia). Dla serii stanów auta dekoder ma odtworzyć stan wejść.
+
 Użycie:
     python tools/test_car_sim_host.py [--docker-image vbox-builder:latest] [-v]
 Kod wyjścia 0 = wszystkie kroki zgodne.
@@ -36,7 +40,7 @@ def state(acc=0, door_drv=0, door_other=0, lights=0, locked=0, hazard=0, hood=0,
             f"rpm_in={rpm_in} speed={speed} fuel={fuel} odo={odo} temp={temp} btn={btn:03X}")
 
 
-# (krok, oczekiwane wyjście); "~" = wystarczy, że wyjście zawiera tekst
+# (krok, oczekiwane wyjście); "~" = wystarczy, że wyjście zawiera tekst; funkcja = dekoder referencyjny
 SCENARIO = [
     ("ENCODE", "NO_SIM"),
 
@@ -286,6 +290,167 @@ SCENARIO = [
 ]
 
 
+# --- Dekodery referencyjne ---------------------------------------------------------------------------
+
+def parse_frames(line):
+    """'ID#HEX | ID#HEX ...' -> {ID: bajty}."""
+    frames = {}
+    for item in line.split(" | "):
+        ident, _, data = item.partition("#")
+        frames[int(ident, 16)] = bytes.fromhex(data)
+    return frames
+
+
+def signed_char(v):
+    """Rzutowanie na signed char jak w parserze urządzenia."""
+    v &= 0xFF
+    return v - 256 if v > 127 else v
+
+
+ARKANA_IDS = {0x46C, 0x0A1, 0x41C, 0x46A, 0x5BB, 0x418, 0x46B, 0x47F, 0x47C, 0x206, 0x438, 0x417, 0x3AA}
+
+
+def arkana_decode(fr):
+    """Odczyt ramek Arkany tak jak w parserze urządzenia 196 (sekcje 3.1 i 3.3 planu)."""
+    d46a, d5bb, d206, d438 = fr[0x46A], fr[0x5BB], fr[0x206], fr[0x438]
+    out = {
+        "acc": bool(fr[0x46C][6] & 0x80),
+        "rpm": int(((fr[0x0A1][5] << 8) | fr[0x0A1][6]) * 0.125) & 0xFFFF,
+        "speed": (int(((fr[0x41C][0] << 8) | fr[0x41C][1]) * 0.00625) & 0xFF) if fr[0x41C][0] != 0xFF else None,
+        "door_drv": bool(d46a[1] & 0x04),
+        "door_other": bool((d46a[1] & 0x01) or (d46a[2] & 0x10) or (d46a[2] & 0x01) or (d46a[1] & 0x40)),
+        "high": bool(d46a[3] & 0x40),
+        "both_lights_bits": bool(d5bb[4] & 0x08) and bool(d5bb[4] & 0x10),
+        "locked": bool(fr[0x418][2] & 0x04) and bool(fr[0x46B][2] & 0x01) and bool(fr[0x46B][2] & 0x02)
+                  and bool(fr[0x46B][7] & 0x80),
+        "handbrake": bool(fr[0x47F][4] & 0x02),
+        "fuel": fr[0x47F][3],
+        "hood": bool(fr[0x47C][4] & 0x40),
+        "brake": ((d206[6] << 8) | d206[7]) > 5,
+        "esp_event": not (d206[4] & 0x04),
+        "odo_m": None if d438[:4] == bytes([0xFF, 0xFF, 0xFF, 0xF0])
+                 else ((d438[0] << 20) | (d438[1] << 12) | (d438[2] << 4) | (d438[3] >> 4)) * 10,
+        "temp": signed_char(signed_char(fr[0x417][0]) - 40),
+        "temp_data": signed_char(signed_char(fr[0x417][0]) - 40) & 0xFF,
+        "warnings": bool(fr[0x3AA][2] & 0x10) or bool(fr[0x3AA][3] & 0x40) or bool(fr[0x3AA][2] & 0x02),
+    }
+    if out["both_lights_bits"]:
+        out["low"] = False
+    else:
+        out["low"] = bool(d5bb[4] & 0x10)
+    return out
+
+
+def btn_bits(btn):
+    """SW0..SW8 -> sygnały (bity jak w io_sim)."""
+    return {name: bool(btn & (1 << bit)) for bit, name in enumerate(
+        ("acc", "door_other", "door_drv", "lights", "locked", "hazard", "hood", "handbrake", "engine"))}
+
+
+def expect_arkana(btn, fuel, rpm, speed, odo, high, brake, temp):
+    """Sprawdzenie wyjścia ENCODE Arkany względem stanu wejść."""
+    sw = btn_bits(btn)
+
+    def check(line):
+        fr = parse_frames(line)
+        if set(fr) != ARKANA_IDS or any(len(d) != 8 for d in fr.values()):
+            return f"ramki: {sorted(hex(i) for i in fr)}"
+        dec = arkana_decode(fr)
+        want = {
+            "acc": sw["acc"], "rpm": rpm if sw["acc"] else 0, "speed": speed, "door_drv": sw["door_drv"],
+            "door_other": sw["door_other"], "high": bool(high), "both_lights_bits": False, "low": sw["lights"],
+            "locked": sw["locked"], "handbrake": sw["handbrake"], "fuel": fuel, "hood": sw["hood"],
+            "brake": bool(brake), "esp_event": False, "odo_m": odo // 10 * 10, "temp_data": temp & 0xFF,
+            "warnings": False,
+        }
+        if -40 <= temp <= 127:
+            want["temp"] = temp
+        bad = [f"{k}={dec[k]} (oczekiwane {v})" for k, v in want.items() if dec[k] != v]
+        return "; ".join(bad) if bad else None
+
+    return check
+
+
+def expect_v_box(btn, fuel, rpm_in, counter):
+    """Telemetria 0x01F2F3F4 jak dotychczas: SW0..SW7, paliwo, RPM / 3 (bez D13), licznik BE."""
+    def check(line):
+        fr = parse_frames(line)
+        d = fr.get(0x01F2F3F4)
+        if set(fr) != {0x01F2F3F4} or d is None or len(d) != 8:
+            return f"ramki: {line}"
+        want = bytes([btn & 0xFF, fuel, rpm_in // 3, 0]) + counter.to_bytes(4, "big")
+        return None if d == want else f"{d.hex().upper()} != {want.hex().upper()}"
+
+    return check
+
+
+def expect_fob_pin(pin):
+    """Nauka PIN-u z ramki pilota jak w parserze urządzenia: 0x46F, [3] == 0x18 -> PIN = [1..2]."""
+    def check(line):
+        fr = parse_frames(line)
+        d = fr.get(0x46F)
+        if d is None or d[3] != 0x18:
+            return f"brak ramki nauki PIN-u: {line}"
+        learned = (d[1] << 8) | d[2]
+        return None if learned == pin else f"PIN {learned:04X} != {pin:04X}"
+
+    return check
+
+
+def eff_step(btn, fuel, rpm, speed=0, odo=10000000, high=0, brake=0, temp=90):
+    return f"EFF btn={btn:03X} fuel={fuel} rpm={rpm} speed={speed} odo={odo} high={high} brake={brake} temp={temp}"
+
+
+# (btn, paliwo, obroty, prędkość, przebieg [m], drogowe, pedał hamulca, temperatura)
+ARKANA_STATES = [
+    (0x000, 0, 0, 0, 0, 0, 0, -40),                 # wszystko wyłączone, minima
+    (0x001, 0, 0, 0, 10000000, 0, 0, 90),           # stacyjka
+    (0x002, 0, 0, 0, 10000000, 0, 0, 90),           # drzwi inne
+    (0x004, 0, 0, 0, 10000000, 0, 0, 90),           # drzwi kierowcy
+    (0x008, 0, 0, 0, 10000000, 0, 0, 90),           # mijania (SW3)
+    (0x010, 0, 0, 0, 10000000, 0, 0, 90),           # zamek zamknięty (SW4)
+    (0x020, 0, 0, 0, 10000000, 0, 0, 90),           # awaryjne: parser 196 ich nie czyta
+    (0x040, 0, 0, 0, 10000000, 0, 0, 90),           # maska
+    (0x080, 0, 0, 0, 10000000, 0, 0, 90),           # ręczny
+    (0x100, 0, 800, 0, 10000000, 0, 0, 90),         # D13: SW8 bez stacyjki -> 0 obr/min
+    (0x101, 0, 800, 0, 10000000, 0, 0, 90),         # bieg jałowy
+    (0x101, 0, 1, 0, 10000000, 0, 0, 90),
+    (0x101, 0, 8000, 0, 10000000, 0, 0, 90),        # maksimum obrotów
+    (0x101, 0, 3333, 1, 10000000, 0, 0, 90),
+    (0x101, 42, 2500, 123, 10000000, 0, 0, 90),
+    (0x101, 100, 2500, 250, 10000000, 0, 0, 90),    # maksimum prędkości i paliwa
+    (0x000, 0, 0, 0, 10000000, 1, 0, 90),           # drogowe
+    (0x000, 0, 0, 0, 10000000, 0, 1, 90),           # pedał hamulca
+    (0x000, 0, 0, 0, 12345, 0, 0, 90),              # przebieg w 10 m, w dół
+    (0x000, 0, 0, 0, 999999000, 0, 0, 90),          # maksimum przebiegu (999999 km)
+    (0x000, 0, 0, 0, 10000000, 0, 0, 0),
+    (0x000, 0, 0, 0, 10000000, 0, 0, 127),
+    (0x000, 0, 0, 0, 10000000, 0, 0, 150),          # > 127: parser czyta ujemną (patrz raport)
+    (0x0DF, 77, 0, 0, 10000000, 1, 1, 105),         # wszystko bez SW8 i SW5
+    (0x1FF, 100, 8000, 250, 999999000, 1, 1, 150),  # wszystko naraz
+    (0x1E9, 15, 900, 0, 5000, 0, 0, 20),            # zamknięte auto po jeździe: carsharing "otwórz"
+    (0x080, 15, 0, 0, 5000, 0, 0, 20),              # warunki "zamknij": stacyjka off, ręczny, drzwi, światła
+]
+
+
+def reference_steps():
+    """Kroki z dekoderami referencyjnymi (T9)."""
+    steps = [("SIM ARKANA", 'SIM ARKANA "Renault Arkana" tx=13 rx=2 fob=1 rpm=8000/1/800 vsig=1')]
+    for st in ARKANA_STATES:
+        steps.append((eff_step(*st), "~btn="))
+        steps.append(("ENCODE", expect_arkana(*st)))
+    steps += [
+        ("FOB OTWORZ 1234", expect_fob_pin(0x1234)),
+        ("FOB OTWORZ F15C", expect_fob_pin(0xF15C)),
+        ("SIM V_BOX", 'SIM V_BOX "telemetria v-box" tx=1 rx=2 fob=0 rpm=750/3/750 vsig=0'),
+    ]
+    for counter, (btn, fuel, rpm) in enumerate([(0x1A9, 42, 750), (0x1B9, 10, 300), (0x1B8, 42, 750),
+                                                (0x000, 0, 0), (0x1FF, 100, 750), (0x0FF, 100, 3)]):
+        steps.append((eff_step(btn, fuel, rpm), "~btn="))
+        steps.append(("ENCODE", expect_v_box(btn, fuel, rpm, counter)))
+    return steps
+
+
 def gcc_command(root, output):
     cmd = ["gcc", *CFLAGS]
     cmd += [f"-I{root}/{inc}" for inc in INCLUDES]
@@ -319,13 +484,19 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    lines = run_harness("".join(step + "\n" for step, _ in SCENARIO), args.docker_image)
-    if len(lines) != len(SCENARIO):
-        raise SystemExit(f"harness zwrócił {len(lines)} linii, oczekiwano {len(SCENARIO)}")
+    scenario = SCENARIO + reference_steps()
+    lines = run_harness("".join(step + "\n" for step, _ in scenario), args.docker_image)
+    if len(lines) != len(scenario):
+        raise SystemExit(f"harness zwrócił {len(lines)} linii, oczekiwano {len(scenario)}")
 
     failed = 0
-    for i, ((step, expected), line) in enumerate(zip(SCENARIO, lines), 1):
-        ok = (expected[1:] in line) if expected.startswith("~") else (line == expected)
+    for i, ((step, expected), line) in enumerate(zip(scenario, lines), 1):
+        if callable(expected):
+            error = expected(line)
+            ok = error is None
+            expected = f"dekoder referencyjny: {error}"
+        else:
+            ok = (expected[1:] in line) if expected.startswith("~") else (line == expected)
         if not ok:
             failed += 1
         if not ok or args.verbose:
@@ -333,7 +504,7 @@ def main():
             if not ok:
                 print(f"      oczekiwane: {expected}\n      jest:       {line}")
 
-    print(f"\n{len(SCENARIO) - failed}/{len(SCENARIO)} kroków zgodnych")
+    print(f"\n{len(scenario) - failed}/{len(scenario)} kroków zgodnych")
     return 0 if failed == 0 else 1
 
 
