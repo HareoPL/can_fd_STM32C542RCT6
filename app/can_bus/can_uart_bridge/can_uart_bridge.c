@@ -11,6 +11,9 @@
 #include "can_uart_bridge.h"
 #include "can_frame_text.h"
 #include "io_cmd.h"
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+#include "rs485_link.h"
+#endif
 #include "safe_printf.h"
 #include "tasks_config.h"
 #include "ota_protocol.h"
@@ -330,6 +333,9 @@ static void cmd_help(void)
     out_line("  BUS#<1|2>           magistrala domyślna");
     out_line("  MODE#<auto|classic|fd_brs|fd_no_brs|tlv>  wymuszony standard ramki");
     out_line("  IO_HELP             symulacja wejść (stacyjka, drzwi, obroty, paliwo...)");
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+    out_line("  RS485_HELP          łącze RS485 z urządzeniem (superStatus, parser urządzenia)");
+#endif
 }
 
 static void cmd_cfg_query(void)
@@ -620,6 +626,12 @@ static void process_line(char *line)
     {
         /* Input simulation command (io_cmd.c), response already collected */
     }
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+    else if (rs485_link_cmd_process(line, out_io_line))
+    {
+        /* RS485 link command (rs485_link.c), response already collected */
+    }
+#endif
     else
     {
         cmd_frame(line);
