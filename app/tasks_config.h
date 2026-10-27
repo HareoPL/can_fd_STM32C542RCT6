@@ -47,4 +47,8 @@
 #define TASK_PRIO_RS485         (tskIDLE_PRIORITY + 2U)
 #define TASK_STACK_RS485        512U   // * 4 = 2048 bytes
 
+// CAR SIMULATOR TASK (cyclic CAN1 frames of the active car simulator, every 10 ms)
+#define TASK_PRIO_CAR_SIM       (tskIDLE_PRIORITY + 2U)
+#define TASK_STACK_CAR_SIM      512U   // * 4 = 2048 bytes
+
 #endif /* TASKS_CONFIG_H */

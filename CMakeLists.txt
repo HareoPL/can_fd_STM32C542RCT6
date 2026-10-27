@@ -57,6 +57,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/can_bus/can_manager.c
   app/can_bus/can_parser/can_parser.c
   app/can_bus/can_parser/parsers/cp_v_box.c
+  app/can_bus/can_parser/parsers/cp_car_sim.c
   app/can_bus/can_parser/parsers/cp_example.c
   app/can_bus/can_parser/parsers/cp_boot_ota.c
   app/can_bus/isotp/isotp.c
@@ -68,6 +69,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/bootloader/boot_version_record.c
   app/io/io_manager.c
   app/io/io_sim.c
+  app/car_sim/car_sim.c
   app/car_sim/car_sim_codec.c
   app/car_sim/car_sim_registry.c
   app/car_sim/sims/sim_none.c

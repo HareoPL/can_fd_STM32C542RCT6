@@ -27,6 +27,7 @@
 #include "can_parser.h"
 #include "stm32c5_can_adapter.h"
 #include "io_manager.h"
+#include "car_sim.h"
 #include "ota_manager.h"
 #include "version.h"
 #include "safe_printf.h"
@@ -54,7 +55,8 @@ can_instance_t can2_inst;
 #if defined(RS485_LINK) && (RS485_LINK == 1)
 /**
  * @brief Device parser change on the external telematics device (RS485 task context).
- *        For now only logged; later: selection of the matching v-box CAN parser profile.
+ *        CAN1: the number is passed to the car simulator (AUTO mode selects the matching simulator,
+ *        executed by the car_sim task, non-blocking). CAN2: logged only.
  */
 static void on_dev_parser_change(uint8_t can_bus, uint16_t old_no, uint16_t new_no)
 {
@@ -66,6 +68,11 @@ static void on_dev_parser_change(uint8_t can_bus, uint16_t old_no, uint16_t new_
   {
     safe_printf(NULL, "[RS485] ZMIANA parsera urządzenia CAN%u: %u -> %u\r\n", (unsigned)can_bus,
                 (unsigned)old_no, (unsigned)new_no);
+  }
+
+  if (can_bus == 1U)
+  {
+    car_sim_request_dev_parser(new_no);
   }
 }
 #endif
@@ -130,17 +137,18 @@ int main(void)
     safe_printf(NULL, "[MAIN] ERROR: CAN1 FD test init failed!\r\n");
     return (-1);
   }
-#else
-  if (!can_parser_select(&can1_inst, CAN_PARSER_ID_V_BOX))
+
+  /* CAN1 belongs to the FD test: the car simulator only sends the V_BOX telemetry, no profile changes */
+  if (!car_sim_init(&can1_inst, false))
   {
-    safe_printf(NULL, "[MAIN] ERROR: CAN1 parser select failed!\r\n");
+    safe_printf(NULL, "[MAIN] ERROR: car simulator init failed!\r\n");
     return (-1);
   }
-
-  /* Attach Bootloader/OTA listener to CAN1 alongside V_BOX parser (dual-bus support) */
-  if (!can_parser_attach_boot_ota(&can1_inst))
+#else
+  /* Car simulator: selects V_BOX (AUTO mode) on CAN1 with the BOOT_OTA filters attached (D9) */
+  if (!car_sim_init(&can1_inst, true))
   {
-    safe_printf(NULL, "[MAIN] ERROR: CAN1 attach BOOT_OTA parser failed!\r\n");
+    safe_printf(NULL, "[MAIN] ERROR: car simulator init failed!\r\n");
     return (-1);
   }
 #endif

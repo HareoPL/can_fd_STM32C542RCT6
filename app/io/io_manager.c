@@ -16,15 +16,13 @@
  * @author Jan Lukaszewicz <brak@email.com>
  * @date 2026-10-12
  * @LastEditors Jan Lukaszewicz
- * @LastEditTime 2026-10-14
+ * @LastEditTime 2026-10-27
  */
 
 #include "io_manager.h"
 #include "io_sim.h"
 #include "bsp_io.h"
 #include "bsp_adc.h"
-#include "can_manager.h"
-#include "can_msg_types.h"
 #include "tasks_config.h"
 #include "safe_printf.h"
 #include "main.h"
@@ -76,17 +74,11 @@ static bool s_relay_confirmed = false;
 /** @brief Periodic UART status print interval in milliseconds. */
 #define IO_PRINT_PERIOD_MS      (50U * IO_SAMPLE_PERIOD_MS) // 500ms
 
-/** @brief Periodic CAN BUS send message interval in milliseconds. */
-#define IO_CAN_MSG_PERIOD_MS    (10U * IO_SAMPLE_PERIOD_MS) // 100ms
-
-/** @brief Can ID*/
-#define IO_CAN_ID (0x01F2F3F4)
+/** @brief Fuel level (ADC) refresh interval in milliseconds. The telemetry frame is sent by the car simulator V_BOX. */
+#define IO_ADC_PERIOD_MS        (10U * IO_SAMPLE_PERIOD_MS) // 100ms
 
 /** @brief FreeRTOS task handle for the io_manager task. */
 static TaskHandle_t io_manager_task_handle = NULL;
-
-/** @brief Can message*/
-static CAN_msg_t can_msg = {0};
 
 static uint16_t btn = 0;
 
@@ -360,36 +352,6 @@ static uint8_t io_manager_adc_read_mapped(void)
 
 
 /**
- * @brief Builds the telemetry frame IO_CAN_ID.
- * @param[in] btnLow SW0..SW7.
- * @param[in] fuel Fuel level 0..100 %.
- * @param[in] rpm Engine RPM 0..750, sent as RPM / IO_RPM_PER_BIT.
- * @return Pointer to the static frame.
- */
-static CAN_msg_t *io_manager_canCreateFrame(uint8_t btnLow, uint8_t fuel, uint16_t rpm)
-{
-    static uint32_t canCnt = 0;
-
-    memset(&can_msg, 0, sizeof(CAN_msg_t));
-
-    can_msg.format = CAN_MSG_FRAME_FORMAT_CAN;
-    can_msg.ident = CAN_msg_set_extended_id(IO_CAN_ID); // extended ID
-    can_msg.len = 8;
-
-    can_msg.data[0] = btnLow;
-    can_msg.data[1] = fuel;
-    can_msg.data[2] = io_sim_rpmToByte(rpm);
-    can_msg.data[3] = 0U;    
-    can_msg.data[4] = (uint8_t)(canCnt >> 24);
-    can_msg.data[5] = (uint8_t)(canCnt >> 16);
-    can_msg.data[6] = (uint8_t)(canCnt >> 8);
-    can_msg.data[7] = (uint8_t)(canCnt & 0xFF);
-    
-    canCnt ++;
-
-    return &can_msg;
-}
-/**
  * @brief FreeRTOS task function for periodic I/O sampling, button debouncing, and UART logging.
  * @param[in] pvParameters Unused task parameter.
  */
@@ -405,7 +367,7 @@ static void io_manager_task(void *pvParameters)
     uint16_t prev_eff_btn = initial_btn;
     io_sim_values_t eff;
     uint32_t elapsed_ms = 0U;
-    uint32_t elapsed_can_ms = 0U;
+    uint32_t elapsed_adc_ms = 0U;
 
     for (;;)
     {
@@ -415,24 +377,19 @@ static void io_manager_task(void *pvParameters)
         io_sim_resolve(btn, s_fuel_phys, &eff);
 
         elapsed_ms += IO_SAMPLE_PERIOD_MS;
-        elapsed_can_ms += IO_SAMPLE_PERIOD_MS;
+        elapsed_adc_ms += IO_SAMPLE_PERIOD_MS;
 
-        /* send data to can bus */
-        if(elapsed_can_ms >= IO_CAN_MSG_PERIOD_MS)
+        /* Refresh the physical fuel level (the telemetry frame is sent by the car_sim task) */
+        if (elapsed_adc_ms >= IO_ADC_PERIOD_MS)
         {
-            elapsed_can_ms = 0U;
+            elapsed_adc_ms = 0U;
 
             s_fuel_phys = io_manager_adc_read_mapped();
             io_sim_resolve(btn, s_fuel_phys, &eff);
-
-            if (!can_manager_send(&can1_inst, io_manager_canCreateFrame((uint8_t)(eff.btn & 0xFFU), eff.fuel, eff.rpm)))
-            {
-                safe_printf(TAG, "Failed to enqueue CAN message! Queue full?\r\n");
-            }
         }
 
         /* Print status immediately on physical or effective button change, or periodically.
-         * BTN / FUEL / RPM = effective values (sent on CAN), PHYS / ADC = physical inputs. */
+         * BTN / FUEL / RPM = effective values (encoded by the car simulator), PHYS / ADC = physical inputs. */
         if ((btn != prev_btn_state) || (eff.btn != prev_eff_btn) || (elapsed_ms >= IO_PRINT_PERIOD_MS))
         {
             bool btn_changed = (btn != prev_btn_state) || (eff.btn != prev_eff_btn);

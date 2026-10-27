@@ -23,7 +23,7 @@ uint16_t io_manager_getAllBtnState(void);
 /**
  * @brief Gets the physical inputs regardless of the input source (io_sim.h).
  * @param[out] btn_state Debounced SW0..SW8.
- * @param[out] fuel Fuel level 0..100 % (potentiometer, refreshed every CAN period).
+ * @param[out] fuel Fuel level 0..100 % (potentiometer, refreshed every 100 ms).
  */
 void io_manager_getPhysInputs(uint16_t *btn_state, uint8_t *fuel);
 

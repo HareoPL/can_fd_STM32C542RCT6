@@ -9,6 +9,7 @@
 #include "cp_v_box.h"
 #include "cp_example.h"
 #include "cp_boot_ota.h"
+#include "cp_car_sim.h"
 #if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
 #include "cp_fd_test.h"
 #endif
@@ -32,8 +33,9 @@ static const can_profile_getter_fn s_parsers[CAN_PARSER_COUNT] = {
     [CAN_PARSER_ID_EXAMPLE] = cp_example_profile_get,
     [CAN_PARSER_ID_BOOT_OTA] = cp_boot_ota_profile_get,
 #if defined(CAN_FD_TEST) && (CAN_FD_TEST == 1)
-    [CAN_PARSER_ID_FD_TEST] = cp_fd_test_profile_get
+    [CAN_PARSER_ID_FD_TEST] = cp_fd_test_profile_get,
 #endif
+    [CAN_PARSER_ID_CAR_SIM] = cp_car_sim_profile_get
 };
 
 /** @brief Active parser profile ID. */
