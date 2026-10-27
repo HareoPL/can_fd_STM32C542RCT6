@@ -11,6 +11,7 @@
 #include "can_uart_bridge.h"
 #include "can_frame_text.h"
 #include "io_cmd.h"
+#include "car_sim_cmd.h"
 #if defined(RS485_LINK) && (RS485_LINK == 1)
 #include "rs485_link.h"
 #endif
@@ -332,6 +333,7 @@ static void cmd_help(void)
     out_line("  CFG?                konfiguracja i liczniki magistral");
     out_line("  BUS#<1|2>           magistrala domyślna");
     out_line("  MODE#<auto|classic|fd_brs|fd_no_brs|tlv>  wymuszony standard ramki");
+    out_line("  SIM_HELP            symulator auta (SIM?, SIM_LIST, SIM#, SIM_PIN#, PILOT#)");
     out_line("  IO_HELP             symulacja wejść (stacyjka, drzwi, obroty, paliwo...)");
 #if defined(RS485_LINK) && (RS485_LINK == 1)
     out_line("  RS485_HELP          łącze RS485 z urządzeniem (superStatus, parser urządzenia)");
@@ -625,6 +627,10 @@ static void process_line(char *line)
     else if (io_cmd_process(line, out_io_line))
     {
         /* Input simulation command (io_cmd.c), response already collected */
+    }
+    else if (car_sim_cmd_process(line, out_io_line))
+    {
+        /* Car simulator command (car_sim_cmd.c), response already collected */
     }
 #if defined(RS485_LINK) && (RS485_LINK == 1)
     else if (rs485_link_cmd_process(line, out_io_line))

@@ -15,10 +15,16 @@
  *           "MAP <no>"           device parser number -> simulator key
  *           "KEY <key>"          simulator key lookup
  *           "CHECK"              validates the registry; "CHECKP" validates the selected profile
+ *           "CMD <line>"         UART command (car_sim_cmd.c) against the engine stub below; the responses are
+ *                                followed by " >> " and the engine requests it made (select, mode, pin, fob)
+ *           "ENGINE key=value"   engine stub state: dev (device parser number, "-" = not read yet), own (CAN1
+ *                                owned), tx, drop, rx, rej (counters)
  * stdout: one line per step, items joined with " | ". Frames: "<ID>#<hex bytes>", ID with 3 hex digits
  *         (standard) or 8 hex digits (extended).
  */
 
+#include "car_sim.h"
+#include "car_sim_cmd.h"
 #include "car_sim_codec.h"
 #include "car_sim_registry.h"
 #include <stdio.h>
@@ -38,6 +44,137 @@ static void out(const char *text)
         strncat(s_out, " | ", sizeof(s_out) - strlen(s_out) - 1U);
     }
     strncat(s_out, text, sizeof(s_out) - strlen(s_out) - 1U);
+}
+
+/* --- Engine stub (car_sim.c API used by car_sim_cmd.c; requests are applied at once) ------------- */
+
+static car_sim_id_t s_eng_id = CAR_SIM_ID_V_BOX;
+static car_sim_mode_t s_eng_mode = CAR_SIM_MODE_AUTO;
+static uint16_t s_eng_dev = CAR_SIM_DEV_PARSER_UNKNOWN;
+static bool s_eng_pin_set = false;
+static uint16_t s_eng_pin = 0U;
+static bool s_eng_own = true;
+static uint32_t s_eng_cnt[4];
+static char s_calls[256];
+
+static void call(const char *fmt, const char *arg)
+{
+    char text[64];
+    snprintf(text, sizeof(text), fmt, arg);
+    if (s_calls[0] != '\0')
+    {
+        strncat(s_calls, ", ", sizeof(s_calls) - strlen(s_calls) - 1U);
+    }
+    strncat(s_calls, text, sizeof(s_calls) - strlen(s_calls) - 1U);
+}
+
+void car_sim_request_select(car_sim_id_t id)
+{
+    s_eng_id = id;
+    s_eng_mode = CAR_SIM_MODE_MANUAL;
+    call("select %s", car_sim_get(id)->key);
+}
+
+void car_sim_request_dev_parser(uint16_t no)
+{
+    s_eng_dev = no;
+}
+
+void car_sim_request_fob(bool unlock)
+{
+    call("fob %s", unlock ? "OTWORZ" : "ZAMKNIJ");
+}
+
+void car_sim_set_mode(car_sim_mode_t mode)
+{
+    s_eng_mode = mode;
+    if (mode == CAR_SIM_MODE_AUTO && s_eng_dev != CAR_SIM_DEV_PARSER_UNKNOWN)
+    {
+        s_eng_id = car_sim_find_by_dev_parser(s_eng_dev);
+    }
+    call("mode %s", (mode == CAR_SIM_MODE_AUTO) ? "AUTO" : "MANUAL");
+}
+
+void car_sim_set_pin(uint16_t pin)
+{
+    char text[8];
+    snprintf(text, sizeof(text), "%04X", (unsigned)pin);
+    s_eng_pin_set = true;
+    s_eng_pin = pin;
+    call("pin %s", text);
+}
+
+void car_sim_reset_pin(void)
+{
+    s_eng_pin_set = false;
+    call("pin %s", "reset");
+}
+
+void car_sim_get_info(car_sim_info_t *info)
+{
+    memset(info, 0, sizeof(*info));
+    info->id = s_eng_id;
+    info->profile = car_sim_get(s_eng_id);
+    info->mode = s_eng_mode;
+    info->last_dev_parser = s_eng_dev;
+    info->pin_overridden = s_eng_pin_set;
+    info->pin = s_eng_pin_set ? s_eng_pin : ((info->profile->fob != NULL) ? info->profile->fob->default_pin : 0U);
+    info->owns_can1 = s_eng_own;
+    info->tx_sent = s_eng_cnt[0];
+    info->tx_dropped = s_eng_cnt[1];
+    info->rx_cmds = s_eng_cnt[2];
+    info->rx_pin_rejected = s_eng_cnt[3];
+}
+
+void car_sim_on_rx(const CAN_msg_t *msg)
+{
+    (void)msg;
+}
+
+static void step_cmd(const char *line)
+{
+    s_calls[0] = '\0';
+    if (!car_sim_cmd_process(line, out))
+    {
+        out("NOT_CMD");
+    }
+    if (s_calls[0] != '\0')
+    {
+        strncat(s_out, " >> ", sizeof(s_out) - strlen(s_out) - 1U);
+        strncat(s_out, s_calls, sizeof(s_out) - strlen(s_out) - 1U);
+    }
+}
+
+static void step_engine(char *args)
+{
+    static const char *const counters[] = { "tx", "drop", "rx", "rej" };
+
+    for (char *tok = strtok(args, " "); tok != NULL; tok = strtok(NULL, " "))
+    {
+        char *eq = strchr(tok, '=');
+        if (eq == NULL)
+        {
+            continue;
+        }
+        *eq = '\0';
+        const char *v = eq + 1;
+        if (strcmp(tok, "dev") == 0)
+        {
+            s_eng_dev = (strcmp(v, "-") == 0) ? CAR_SIM_DEV_PARSER_UNKNOWN : (uint16_t)strtoul(v, NULL, 10);
+        }
+        else if (strcmp(tok, "own") == 0)
+        {
+            s_eng_own = strtoul(v, NULL, 10) != 0U;
+        }
+        for (unsigned i = 0U; i < 4U; i++)
+        {
+            if (strcmp(tok, counters[i]) == 0)
+            {
+                s_eng_cnt[i] = (uint32_t)strtoul(v, NULL, 10);
+            }
+        }
+    }
+    out("ENGINE");
 }
 
 /* --- Harness profiles ---------------------------------------------------------------------------- */
@@ -411,6 +548,14 @@ int main(void)
         {
             const car_sim_profile_t *p = car_sim_get(car_sim_find_by_key(line + 4));
             out(p != NULL ? p->key : "NOT_FOUND");
+        }
+        else if (strncmp(line, "CMD ", 4) == 0)
+        {
+            step_cmd(line + 4);
+        }
+        else if (strncmp(line, "ENGINE", 6) == 0)
+        {
+            step_engine(line + 6);
         }
         else if (s_sim == NULL)
         {

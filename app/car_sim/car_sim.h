@@ -18,8 +18,11 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "can_manager.h"
+#include "can_msg_types.h"
 #include "car_sim_registry.h"
+#ifndef CAR_SIM_HOST
+#include "can_manager.h"
+#endif
 
 /** @brief Device parser number not received yet (car_sim_info_t::last_dev_parser). */
 #define CAR_SIM_DEV_PARSER_UNKNOWN 0xFFFFU
@@ -47,6 +50,7 @@ typedef struct
     uint32_t rx_pin_rejected;   /**< LX commands ignored because of a wrong PIN */
 } car_sim_info_t;
 
+#ifndef CAR_SIM_HOST
 /**
  * @brief Validates the simulator registry, selects V_BOX in AUTO mode and creates the car_sim task.
  *        Call before vTaskStartScheduler(), after can_manager_init() of CAN1.
@@ -57,6 +61,7 @@ typedef struct
  *         with the BOOT_OTA filters, the CAN1 configuration fails or the task cannot be created.
  */
 bool car_sim_init(can_instance_t *can1, bool own_can1);
+#endif /* CAR_SIM_HOST: the host test of the UART commands stubs the request API below */
 
 /**
  * @brief Requests a manual selection (mode MANUAL), executed by the car_sim task.

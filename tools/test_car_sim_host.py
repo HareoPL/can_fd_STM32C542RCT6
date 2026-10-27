@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Test hostowy symulatorów aut: app/car_sim (koder sygnałów, dopasowanie komend z PIN-em, pilot,
-harmonogram ramek, rejestr i mapa parserów urządzenia, profile aut).
+harmonogram ramek, rejestr i mapa parserów urządzenia, profile aut, komendy UART SIM* / PILOT#
+na zaślepce silnika).
 
 Kompiluje tools/host/car_sim_cli.c (lokalny gcc albo obraz Dockera vbox-builder), przepuszcza przez
 niego scenariusz krok po kroku (stan wejść i wybrany profil są zachowywane między krokami)
@@ -21,9 +22,10 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCES = ["tools/host/car_sim_cli.c", "app/car_sim/car_sim_codec.c", "app/car_sim/car_sim_registry.c",
-           "app/car_sim/sims/sim_none.c", "app/car_sim/sims/sim_v_box.c", "app/io/io_sim.c"]
+           "app/car_sim/car_sim_cmd.c", "app/car_sim/sims/sim_none.c", "app/car_sim/sims/sim_v_box.c",
+           "app/io/io_sim.c"]
 INCLUDES = ["app/car_sim", "app/car_sim/sims", "app/io", "app/can_bus", "app/port"]
-CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1", "-DIO_SIM_HOST"]
+CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1", "-DIO_SIM_HOST", "-DCAR_SIM_HOST"]
 
 
 def state(acc=0, door_drv=0, door_other=0, lights=0, locked=0, hazard=0, hood=0, handbrake=0, high=0, brake=0,
@@ -180,6 +182,66 @@ SCENARIO = [
     ("SCHED 50", "-"),
     ("SCHED 100", "01F2F3F4"),
     ("SCHEDSTAT 1000", "frames=1 max_per_tick=1 counts=10"),
+
+    # --- Komendy UART (car_sim_cmd.c) na zaślepce silnika: start V_BOX, tryb AUTO, parser nieodczytany ---
+    ("CMD SIM_HELP", "~[SIM] PILOT#<OTWORZ|ZAMKNIJ>   ramka pilota z PIN-em (auto z pilotem) i przekaznik zamka"),
+    ("CMD sim?", '[SIM] SIM=V_BOX "telemetria v-box", tryb AUTO, parser urządzenia CAN1: nieodczytany'
+                 " | [SIM] CAN1 500k, ramek TX: 1, komend LX: 2, pilot: nie | [SIM] PIN: - (symulator bez pilota)"
+                 " | [SIM] liczniki: TX nadane 0, odrzucone 0; komendy LX odebrane 0, odrzucone przez PIN 0"),
+    ("CMD SIM_LIST", "~[SIM] +----------+----------------------+-----------+----------+----+-------+"
+                     " | [SIM] | Klucz    | Nazwa                | Parsery   | CAN1     | TX | Pilot |"),
+    ("CMD SIM_LIST", "~[SIM] |*V_BOX    | telemetria v-box     | 192       | 500k     |  1 | nie   |"),
+    ("CMD SIM_LIST", "~[SIM] | BRAK     | brak symulatora      | 0 + inne  | 500k     |  1 | nie   |"),
+    ("CMD SIM_LIST", "~[SIM] * = aktywny, tryb AUTO"),
+    # Wybór ręczny: klucz bez rozróżniania wielkości liter, spacje przy '#', numer parsera urządzenia
+    ("CMD SIM#BRAK", "[SIM] OK SIM=BRAK, tryb RECZNY >> select BRAK"),
+    ("CMD SIM?", '~[SIM] SIM=BRAK "brak symulatora", tryb RECZNY'),
+    ("CMD sim # v_box", "[SIM] OK SIM=V_BOX, tryb RECZNY >> select V_BOX"),
+    ("CMD SIM#0", "[SIM] OK SIM=BRAK, tryb RECZNY >> select BRAK"),                 # D4: 0 = BRAK
+    ("CMD SIM#192", "[SIM] OK SIM=V_BOX, tryb RECZNY >> select V_BOX"),
+    ("CMD SIM_LIST", "~[SIM] * = aktywny, tryb RECZNY"),
+    ("CMD SIM#197", "[SIM] ERR: brak symulatora dla parsera urządzenia 197 (SIM_LIST)"),
+    ("CMD SIM#65536", "[SIM] ERR: numer parsera urządzenia poza zakresem 0..65535"),
+    ("CMD SIM#NOPE", "[SIM] ERR: nieznany symulator NOPE (SIM_LIST)"),
+    ("CMD SIM#", "[SIM] ERR: składnia: SIM#<KLUCZ|numer parsera urządzenia> albo SIM#AUTO (SIM_LIST)"),
+    ("CMD SIM", "[SIM] ERR: składnia: SIM#<KLUCZ|numer parsera urządzenia> albo SIM#AUTO"),
+    ("CMD SIM#BARDZO_DLUGI_KLUCZ", "[SIM] ERR: składnia: SIM#<KLUCZ|numer parsera urządzenia> albo SIM#AUTO"),
+    # SIM#AUTO: natychmiast ostatni numer parsera urządzenia
+    ("CMD SIM#AUTO", "[SIM] OK tryb AUTO: parser urządzenia CAN1 jeszcze nieodczytany, symulator bez zmian"
+                     " >> mode AUTO"),
+    ("ENGINE dev=197", "ENGINE"),
+    ("CMD SIM#auto", "[SIM] OK tryb AUTO: parser urządzenia 197 -> SIM=BRAK >> mode AUTO"),
+    ("CMD SIM?", '~[SIM] SIM=BRAK "brak symulatora", tryb AUTO, parser urządzenia CAN1: 197'),
+    ("ENGINE dev=192", "ENGINE"),
+    ("CMD SIM#AUTO", "[SIM] OK tryb AUTO: parser urządzenia 192 -> SIM=V_BOX >> mode AUTO"),
+    # PIN v-box w RAM (D8)
+    ("CMD SIM_PIN#f15c", "[SIM] OK SIM_PIN=F15C >> pin F15C"),
+    ("CMD SIM?", "~[SIM] PIN: F15C (SIM_PIN#, symulator bez pilota)"),
+    ("CMD SIM_PIN#12345", "[SIM] ERR: składnia: SIM_PIN#<4 cyfry hex> albo SIM_PIN#DOMYSLNY"),
+    ("CMD SIM_PIN#12G4", "[SIM] ERR: składnia: SIM_PIN#<4 cyfry hex> albo SIM_PIN#DOMYSLNY"),
+    ("CMD SIM_PIN#123", "[SIM] ERR: składnia: SIM_PIN#<4 cyfry hex> albo SIM_PIN#DOMYSLNY"),
+    ("CMD SIM_PIN", "[SIM] ERR: składnia: SIM_PIN#<4 cyfry hex> albo SIM_PIN#DOMYSLNY"),
+    ("CMD SIM_PIN#domyslny", "[SIM] OK SIM_PIN=DOMYSLNY (symulator bez pilota) >> pin reset"),
+    ("CMD SIM?", "~[SIM] PIN: - (symulator bez pilota)"),
+    # Pilot: bez pilota w profilu tylko przekaźnik
+    ("CMD PILOT#OTWORZ", "[SIM] OK PILOT#OTWORZ: symulator V_BOX bez pilota, tylko przekaźnik >> fob OTWORZ"),
+    ("CMD pilot # zamknij", "[SIM] OK PILOT#ZAMKNIJ: symulator V_BOX bez pilota, tylko przekaźnik >> fob ZAMKNIJ"),
+    ("CMD PILOT#X", "[SIM] ERR: składnia: PILOT#<OTWORZ|ZAMKNIJ>"),
+    ("CMD PILOT", "[SIM] ERR: składnia: PILOT#<OTWORZ|ZAMKNIJ>"),
+    # Liczniki silnika
+    ("ENGINE tx=1234 drop=2 rx=3 rej=1", "ENGINE"),
+    ("CMD SIM?", "~[SIM] liczniki: TX nadane 1234, odrzucone 2; komendy LX odebrane 3, odrzucone przez PIN 1"),
+    # Build CAN_FD_TEST: CAN1 należy do testu, wybór symulatora wyłączony
+    ("ENGINE own=0", "ENGINE"),
+    ("CMD SIM#BRAK", "[SIM] ERR: CAN1 zajęty przez test CAN FD, wybór symulatora wyłączony"),
+    ("CMD SIM#AUTO", "[SIM] ERR: CAN1 zajęty przez test CAN FD, wybór symulatora wyłączony"),
+    ("CMD SIM?", "~[SIM] CAN1 zajęty przez test CAN FD: nadawany tylko V_BOX, wybór symulatora wyłączony"),
+    ("ENGINE own=1", "ENGINE"),
+    # Linie, które nie są komendami symulatora (most traktuje je dalej, np. jako ramki CAN)
+    ("CMD 1F2#01", "NOT_CMD"),
+    ("CMD SIMX#1", "NOT_CMD"),
+    ("CMD SIM_PIN?", "NOT_CMD"),
+    ("CMD IO_HELP", "NOT_CMD"),
 ]
 
 

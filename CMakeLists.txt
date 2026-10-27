@@ -70,6 +70,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   app/io/io_manager.c
   app/io/io_sim.c
   app/car_sim/car_sim.c
+  app/car_sim/car_sim_cmd.c
   app/car_sim/car_sim_codec.c
   app/car_sim/car_sim_registry.c
   app/car_sim/sims/sim_none.c
