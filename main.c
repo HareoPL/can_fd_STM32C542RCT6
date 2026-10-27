@@ -37,6 +37,10 @@
 #include "can_uart_bridge.h"
 #include "stm32c5_uart_adapter.h"
 #endif
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+#include "rs485_link.h"
+#include "stm32c5_uart1_adapter.h"
+#endif
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -47,6 +51,24 @@ can_instance_t can1_inst;
 can_instance_t can2_inst;
 
 /* Private functions prototype -----------------------------------------------*/
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+/**
+ * @brief Device parser change on the external telematics device (RS485 task context).
+ *        For now only logged; later: selection of the matching v-box CAN parser profile.
+ */
+static void on_dev_parser_change(uint8_t can_bus, uint16_t old_no, uint16_t new_no)
+{
+  if (old_no == RS485_DEV_PARSER_NO_UNKNOWN)
+  {
+    safe_printf(NULL, "[RS485] parser urządzenia CAN%u: %u\r\n", (unsigned)can_bus, (unsigned)new_no);
+  }
+  else
+  {
+    safe_printf(NULL, "[RS485] ZMIANA parsera urządzenia CAN%u: %u -> %u\r\n", (unsigned)can_bus,
+                (unsigned)old_no, (unsigned)new_no);
+  }
+}
+#endif
 
 /**
   * brief:  The application entry point.
@@ -155,6 +177,16 @@ int main(void)
   if (!can_uart_bridge_init(stm32c5_uart2_interfaceGet(), &can1_inst, bridge_can2))
   {
     safe_printf(NULL, "[MAIN] ERROR: CAN UART bridge init failed!\r\n");
+    return (-1);
+  }
+#endif
+
+#if defined(RS485_LINK) && (RS485_LINK == 1)
+  /* 6. Łącze RS485 z urządzeniem telematycznym (USART1): superStatus i wykrywanie zmiany parsera urządzenia */
+  rs485_link_set_parser_change_cb(on_dev_parser_change);
+  if (!rs485_link_init(stm32c5_uart1_interfaceGet()))
+  {
+    safe_printf(NULL, "[MAIN] ERROR: RS485 link init failed!\r\n");
     return (-1);
   }
 #endif

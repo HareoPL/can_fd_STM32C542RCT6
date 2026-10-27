@@ -43,5 +43,8 @@
 // UART -> CAN BRIDGE TASK (only with CAN_UART_BRIDGE build option)
 #define TASK_PRIO_CAN_UART      (tskIDLE_PRIORITY + 2U)
 #define TASK_STACK_CAN_UART     512U   // * 4 = 2048 bytes
+// RS485 LINK TASK (only with RS485_LINK build option)
+#define TASK_PRIO_RS485         (tskIDLE_PRIORITY + 2U)
+#define TASK_STACK_RS485        512U   // * 4 = 2048 bytes
 
 #endif /* TASKS_CONFIG_H */

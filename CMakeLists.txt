@@ -114,6 +114,22 @@ if(CAN_UART_BRIDGE)
   )
 endif()
 
+# RS485 link to the external telematics device (USART1): superStatus and device parser change detection
+option(RS485_LINK "Build RS485 link (superStatus polling and device parser change detection over USART1)" ON)
+if(RS485_LINK)
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    app/rs485/rs485_frame.c
+    app/rs485/superstatus.c
+    app/rs485/rs485_link.c
+  )
+  target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
+    app/rs485
+  )
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC
+    RS485_LINK=1
+  )
+endif()
+
 # CAN FD bus test build (tools/can_fd_test.py). Never enable for production images.
 option(CAN_FD_TEST "Build CAN FD test module (CP_FD_TEST parser replaces V_BOX on CAN1)" OFF)
 if(CAN_FD_TEST)
