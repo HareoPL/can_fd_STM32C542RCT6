@@ -21,9 +21,9 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCES = ["tools/host/car_sim_cli.c", "app/car_sim/car_sim_codec.c", "app/car_sim/car_sim_registry.c",
-           "app/car_sim/sims/sim_none.c"]
+           "app/car_sim/sims/sim_none.c", "app/car_sim/sims/sim_v_box.c", "app/io/io_sim.c"]
 INCLUDES = ["app/car_sim", "app/car_sim/sims", "app/io", "app/can_bus", "app/port"]
-CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1"]
+CFLAGS = ["-std=gnu11", "-Wall", "-Wextra", "-Werror", "-O1", "-DIO_SIM_HOST"]
 
 
 def state(acc=0, door_drv=0, door_other=0, lights=0, locked=0, hazard=0, hood=0, handbrake=0, high=0, brake=0,
@@ -40,12 +40,14 @@ SCENARIO = [
 
     # --- Rejestr i mapa parserów urządzenia (D4: numer bez symulatora i 0 -> BRAK) ---
     ("CHECK", "OK"),
+    ("MAP 192", "V_BOX"),                                       # D1: parser domyślny
     ("MAP 0", "BRAK"),
     ("MAP 197", "BRAK"),
     ("MAP 65535", "BRAK"),
     ("KEY brak", "BRAK"),
     ("KEY Brak", "BRAK"),
     ("KEY NOPE", "NOT_FOUND"),
+    ("KEY v_box", "V_BOX"),
 
     # --- BRAK: jedyna ramka 0x01F2F3FF ext, DLC 6, CA FE 00 BA BE 00 co 1000 ms ---
     ("SIM brak", 'SIM BRAK "brak symulatora" tx=1 rx=0 fob=0 rpm=750/3/750 vsig=0'),
@@ -149,6 +151,35 @@ SCENARIO = [
     ("SIM BAD_BUS", "~SIM BAD_BUS"),
     ("CHECKP", "~ERR | BAD_BUS: brak konfiguracji magistrali"),
     ("SIM NOPE", "NOT_FOUND"),
+
+    # --- V_BOX: telemetria 0x01F2F3F4 bajt w bajt jak io_manager_canCreateFrame() (T4, D1) ---
+    ("SIM v_box", 'SIM V_BOX "telemetria v-box" tx=1 rx=2 fob=0 rpm=750/3/750 vsig=0'),
+    ("CHECKP", "OK"),
+    ("EFF btn=1A9 fuel=42 rpm=750", "~rpm=750 rpm_in=750"),     # scenariusz PHYS 1A9 42 z test_io_cmd_host
+    ("ENCODE", "01F2F3F4#A92AFA0000000000"),                    # licznik BE w [4..7] od 0
+    ("ENCODE", "01F2F3F4#A92AFA0000000001"),                    # +1 na ramkę
+    ("EFF btn=1B9 rpm=300 fuel=10", "~rpm=300 rpm_in=300"),
+    ("ENCODE", "01F2F3F4#B90A640000000002"),                    # 300 / 3 = 0x64
+    ("EFF btn=1B8 rpm=750 fuel=42", "~acc=0 "),                 # D13 nie dotyczy V_BOX: data[2] z rpm_in
+    ("EFF btn=1B8", "~rpm=0 rpm_in=750"),
+    ("ENCODE", "01F2F3F4#B82AFA0000000003"),
+    ("EFF btn=0FF rpm=0 fuel=0", "~rpm=0 rpm_in=0"),
+    ("ENCODE", "01F2F3F4#FF00000000000004"),
+    ("SIM V_BOX", 'SIM V_BOX "telemetria v-box" tx=1 rx=2 fob=0 rpm=750/3/750 vsig=0'),
+    ("ENCODE", "01F2F3F4#FF00000000000000"),                    # licznik zerowany przy wyborze
+    # Komenda przekaźnika 0x01F2F3F0 (logika cp_v_box: data[2] & 0x01, krótsza niż 3 B ignorowana)
+    ("RX 01F2F3F0 00 00 01", "MATCH act=LOCK"),
+    ("RX 01F2F3F0 00 00 00 00 00 00 00 00", "MATCH act=UNLOCK"),
+    ("RX 01F2F3F0 AA 55 03 00", "MATCH act=LOCK"),
+    ("RX 01F2F3F0 00 00", "NO_MATCH"),
+    ("RX 01F2F3F0", "NO_MATCH"),
+    ("RX 01F2F3F4 00 00 01", "NO_MATCH"),
+    ("RX 1F2 00 00 01", "NO_MATCH"),
+    ("FOB OTWORZ 1234", "NO_FOB"),
+    ("SCHED 0", "01F2F3F4"),
+    ("SCHED 50", "-"),
+    ("SCHED 100", "01F2F3F4"),
+    ("SCHEDSTAT 1000", "frames=1 max_per_tick=1 counts=10"),
 ]
 
 

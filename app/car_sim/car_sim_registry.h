@@ -20,9 +20,10 @@
 /** @brief Identifiers of the registered car simulators. */
 typedef enum
 {
-    CAR_SIM_ID_NONE = 0, /**< BRAK: marker frame for a device parser number without a simulator */
+    CAR_SIM_ID_V_BOX = 0, /**< V_BOX: v-box telemetry frame, device parser 192, default after reset */
+    CAR_SIM_ID_NONE,      /**< BRAK: marker frame for a device parser number without a simulator */
 
-    CAR_SIM_COUNT        /**< Number of simulators, also "not found" */
+    CAR_SIM_COUNT         /**< Number of simulators, also "not found" */
 } car_sim_id_t;
 
 /**
